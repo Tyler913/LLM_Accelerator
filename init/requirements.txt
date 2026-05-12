@@ -1,0 +1,8 @@
+torch
+transformers
+safetensors
+accelerate
+huggingface_hub
+tokenizers
+sentencepiece
+tiktoken

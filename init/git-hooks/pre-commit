@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Prevent accidental commits of model weights, generated FPGA artifacts, and
+# other large files. This hook checks only staged files.
+
+if [[ "${ALLOW_LARGE_GIT_FILES:-}" == "1" ]]; then
+  echo "Large-file Git safety hook bypassed because ALLOW_LARGE_GIT_FILES=1."
+  exit 0
+fi
+
+max_size_bytes=$((50 * 1024 * 1024))
+blocked_ext_regex='(\.safetensors|\.gguf|\.pt|\.pth|\.ckpt|\.onnx|\.npy|\.npz|\.bin|\.dat)$'
+
+failed=0
+
+while IFS= read -r -d '' path; do
+  # Skip deleted paths.
+  if ! git cat-file -e ":$path" 2>/dev/null; then
+    continue
+  fi
+
+  size_bytes="$(git cat-file -s ":$path")"
+  lower_path="$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')"
+
+  if [[ "$lower_path" =~ $blocked_ext_regex ]]; then
+    echo "Blocked staged artifact by extension: $path (${size_bytes} bytes)" >&2
+    failed=1
+    continue
+  fi
+
+  if (( size_bytes > max_size_bytes )); then
+    echo "Blocked staged large file: $path (${size_bytes} bytes)" >&2
+    failed=1
+  fi
+done < <(git diff --cached --name-only -z --diff-filter=ACMR)
+
+if (( failed != 0 )); then
+  cat >&2 <<'EOF'
+
+Commit blocked by the project Git safety hook.
+
+Large model weights and generated FPGA artifacts should not be committed to
+GitHub. Store them through the Hugging Face workflow or another artifact store,
+then track a small manifest in Git.
+
+If this is an intentional exceptional commit, rerun with:
+
+  ALLOW_LARGE_GIT_FILES=1 git commit ...
+
+EOF
+  exit 1
+fi

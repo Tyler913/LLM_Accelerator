@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "description": "Manifest for restoring local Qwen3-0.6B-Base assets on a fresh machine.",
+  "model": {
+    "repo_id": "Qwen/Qwen3-0.6B-Base",
+    "revision": "main",
+    "local_dir": "Qwen3-0.6B-Base"
+  },
+  "files": [
+    {
+      "path": "config.json",
+      "required": true,
+      "large": false,
+      "tracked_in_git": true,
+      "min_bytes": 100,
+      "reference_bytes": 727
+    },
+    {
+      "path": "generation_config.json",
+      "required": true,
+      "large": false,
+      "tracked_in_git": true,
+      "min_bytes": 50,
+      "reference_bytes": 138
+    },
+    {
+      "path": "tokenizer.json",
+      "required": true,
+      "large": false,
+      "tracked_in_git": true,
+      "min_bytes": 1000000,
+      "reference_bytes": 7031645
+    },
+    {
+      "path": "tokenizer_config.json",
+      "required": true,
+      "large": false,
+      "tracked_in_git": true,
+      "min_bytes": 1000,
+      "reference_bytes": 9678
+    },
+    {
+      "path": "vocab.json",
+      "required": true,
+      "large": false,
+      "tracked_in_git": true,
+      "min_bytes": 1000000,
+      "reference_bytes": 2776833
+    },
+    {
+      "path": "merges.txt",
+      "required": true,
+      "large": false,
+      "tracked_in_git": true,
+      "min_bytes": 1000000,
+      "reference_bytes": 1671853
+    },
+    {
+      "path": "model.safetensors",
+      "required": true,
+      "large": true,
+      "tracked_in_git": false,
+      "min_bytes": 1000000000,
+      "reference_bytes": 1192135096
+    },
+    {
+      "path": "README.md",
+      "required": false,
+      "large": false,
+      "tracked_in_git": true,
+      "min_bytes": 100,
+      "reference_bytes": 2973
+    },
+    {
+      "path": "LICENSE",
+      "required": false,
+      "large": false,
+      "tracked_in_git": true,
+      "min_bytes": 1000,
+      "reference_bytes": 11343
+    }
+  ]
+}

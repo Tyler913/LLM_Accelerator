@@ -1,0 +1,49 @@
+# OS and editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Hugging Face local cache inside model directories
+Qwen3-0.6B-Base/.cache/
+
+# Large model and generated weight artifacts
+*.safetensors
+*.gguf
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.npy
+*.npz
+*.bin
+*.dat
+
+# FPGA/generated build artifacts
+artifacts/
+generated/
+weights/
+fpga_artifacts/
+build/
+*.bit
+*.xsa
+*.hwh
+*.jou
+*.str
+*.wdb
+*.log
+
+# Keep source/config files tracked explicitly; large artifacts are restored via init/.
