@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-05-21
+Last updated: 2026-05-23
 
 This file is the short working-state handoff. For stable project context, read
 `PROJECT_CONTEXT.md` first. For workflow rules, read `AGENTS.md`.
@@ -19,6 +19,22 @@ Current target:
 - Prefill plan: serial prefill using the same one-token path as decode
 - First context length target: 128 or 256 tokens
 - First quantization direction: simple custom Q4 weight-only format later
+
+## Cloud Sync Status
+
+Cross-platform sync is split between GitHub and Hugging Face:
+
+- GitHub remote: `https://github.com/Tyler913/LLM_Accelerator.git`
+- Hugging Face model mirror:
+  `Tyler01/qwen3-0p6b-base-llm-accelerator`
+- Hugging Face model revision:
+  `d297782df3b18206f4b1caea202cf6272bae3aa9`
+- Mirror contents: model/tokenizer assets only, including
+  `model.safetensors`; project validation scripts remain in GitHub.
+
+Fresh machines should clone GitHub, create the `llm_fpga` conda environment,
+log in to Hugging Face if needed, run `init/download_model_assets.py`, then run
+`init/verify_assets.py`.
 
 The conceptual hardware function remains:
 

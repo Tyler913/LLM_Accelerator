@@ -56,12 +56,14 @@ def main() -> None:
     manifest = load_manifest(args.manifest)
     model_info = manifest["model"]
     repo_id = model_info["repo_id"]
+    repo_type = model_info.get("repo_type", "model")
     revision = args.revision or model_info.get("revision", "main")
     local_dir = args.local_dir or REPO_ROOT / model_info["local_dir"]
     local_dir = local_dir if local_dir.is_absolute() else REPO_ROOT / local_dir
     patterns = manifest_patterns(manifest, skip_large=args.skip_large)
 
     print(f"Repository: {repo_id}")
+    print(f"Repo type:  {repo_type}")
     print(f"Revision:   {revision}")
     print(f"Local dir:  {local_dir}")
     print("Files:")
@@ -70,6 +72,7 @@ def main() -> None:
 
     snapshot_download(
         repo_id=repo_id,
+        repo_type=repo_type,
         revision=revision,
         local_dir=str(local_dir),
         allow_patterns=patterns,

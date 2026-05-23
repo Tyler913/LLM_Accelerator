@@ -29,11 +29,18 @@ The first milestone prioritizes correctness and observability over speed:
 Local baseline:
 
 - Hugging Face repo: `Qwen/Qwen3-0.6B-Base`
+- Private project mirror: `Tyler01/qwen3-0p6b-base-llm-accelerator`
+- Mirror revision: `d297782df3b18206f4b1caea202cf6272bae3aa9`
 - Local directory: `Qwen3-0.6B-Base/`
 - Model type: dense decoder-only transformer
 - Architecture: `Qwen3ForCausalLM`
 - Weight file: `Qwen3-0.6B-Base/model.safetensors`
 - Stored weight dtype: `bfloat16`
+
+The private mirror is for cross-platform restore of the model/tokenizer assets.
+The source model remains `Qwen/Qwen3-0.6B-Base`; project validation scripts in
+`Qwen3-0.6B-Base/pc_testing/` and `Qwen3-0.6B-Base/python_each_module/` are
+tracked in GitHub, not in the Hugging Face model mirror.
 
 Important model facts:
 

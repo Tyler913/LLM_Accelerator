@@ -29,6 +29,16 @@ Large assets should be restored through this `init/` flow.
 For Hugging Face upload/download and versioning practice, read
 `init/HUGGINGFACE_WORKFLOW.md`.
 
+Current model restore source:
+
+- Hugging Face repo: `Tyler01/qwen3-0p6b-base-llm-accelerator`
+- Repo type: `model`
+- Revision: `d297782df3b18206f4b1caea202cf6272bae3aa9`
+- Source model: `Qwen/Qwen3-0.6B-Base`
+
+This repository is private. A fresh machine must be logged in to Hugging Face
+with a token that can read this repo before downloading model assets.
+
 ## Fresh Machine Checklist
 
 1. Clone the GitHub repository.
@@ -53,6 +63,13 @@ conda run -n llm_fpga python -m pip install -U -r init/requirements.txt
 ```
 
 3. Download the Qwen3 model assets.
+
+If this is a fresh machine, log in to Hugging Face first:
+
+```bash
+conda run -n llm_fpga hf auth login
+conda run -n llm_fpga hf auth whoami
+```
 
 ```bash
 conda run -n llm_fpga python init/download_model_assets.py
@@ -120,8 +137,11 @@ Qwen3-0.6B-Base/
 Check:
 
 - network access to Hugging Face
+- whether Hugging Face login can read
+  `Tyler01/qwen3-0p6b-base-llm-accelerator`
 - whether `huggingface_hub` is installed in `llm_fpga`
-- whether the Hugging Face repo ID is still `Qwen/Qwen3-0.6B-Base`
+- whether the Hugging Face repo ID and revision still match
+  `init/model_assets.json`
 - whether a proxy or login token is required on the target machine
 
 Retry:

@@ -2,8 +2,11 @@
   "schema_version": 1,
   "description": "Manifest for restoring local Qwen3-0.6B-Base assets on a fresh machine.",
   "model": {
-    "repo_id": "Qwen/Qwen3-0.6B-Base",
-    "revision": "main",
+    "repo_id": "Tyler01/qwen3-0p6b-base-llm-accelerator",
+    "repo_type": "model",
+    "revision": "d297782df3b18206f4b1caea202cf6272bae3aa9",
+    "source_repo_id": "Qwen/Qwen3-0.6B-Base",
+    "source_revision": "main",
     "local_dir": "Qwen3-0.6B-Base"
   },
   "files": [
@@ -69,7 +72,7 @@
       "large": false,
       "tracked_in_git": true,
       "min_bytes": 100,
-      "reference_bytes": 2973
+      "reference_bytes": 2968
     },
     {
       "path": "LICENSE",

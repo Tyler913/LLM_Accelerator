@@ -16,12 +16,33 @@ Use GitHub for:
 Use Hugging Face Hub for:
 
 - upstream model downloads
+- the private project mirror of the current Qwen3 baseline model
 - generated Q4/INT8 weight packs
 - future FPGA-specific binary artifacts
 - large operator test vectors, if they become too large for Git
 
 Do not upload Hugging Face tokens, local caches, or generated secrets to either
 GitHub or Hugging Face repositories.
+
+## Current Project Model Mirror
+
+The current private project mirror for cross-machine restore is:
+
+```text
+Tyler01/qwen3-0p6b-base-llm-accelerator
+```
+
+It contains the model and tokenizer files from `Qwen/Qwen3-0.6B-Base`, but not
+the project validation scripts under `Qwen3-0.6B-Base/pc_testing/` or
+`Qwen3-0.6B-Base/python_each_module/`. Those scripts live in GitHub.
+
+Current pinned revision:
+
+```text
+d297782df3b18206f4b1caea202cf6272bae3aa9
+```
+
+The exact restore source is recorded in `init/model_assets.json`.
 
 ## Mental Model
 
@@ -71,13 +92,21 @@ Do not commit `.env` files or shell history containing tokens.
 
 ## Download From Hugging Face
 
-The current upstream model is:
+The current project restore repo is:
 
 ```text
-Qwen/Qwen3-0.6B-Base
+Tyler01/qwen3-0p6b-base-llm-accelerator
 ```
 
-The project download script already wraps `huggingface_hub.snapshot_download`:
+It is a private model repo, so log in before downloading on a fresh machine:
+
+```bash
+conda run -n llm_fpga hf auth login
+conda run -n llm_fpga hf auth whoami
+```
+
+The project download script wraps `huggingface_hub.snapshot_download` and uses
+the pinned repo/revision from `init/model_assets.json`:
 
 ```bash
 conda run -n llm_fpga python init/download_model_assets.py
@@ -86,21 +115,26 @@ conda run -n llm_fpga python init/download_model_assets.py
 You can also use the CLI directly:
 
 ```bash
-conda run -n llm_fpga hf download Qwen/Qwen3-0.6B-Base --local-dir Qwen3-0.6B-Base
+conda run -n llm_fpga hf download Tyler01/qwen3-0p6b-base-llm-accelerator \
+  --repo-type model \
+  --local-dir Qwen3-0.6B-Base
 ```
 
 Download a pinned revision:
 
 ```bash
-conda run -n llm_fpga hf download Qwen/Qwen3-0.6B-Base \
-  --revision <branch-tag-or-commit> \
+conda run -n llm_fpga hf download Tyler01/qwen3-0p6b-base-llm-accelerator \
+  --repo-type model \
+  --revision d297782df3b18206f4b1caea202cf6272bae3aa9 \
   --local-dir Qwen3-0.6B-Base
 ```
 
 Preview a download without fetching files:
 
 ```bash
-conda run -n llm_fpga hf download Qwen/Qwen3-0.6B-Base --dry-run
+conda run -n llm_fpga hf download Tyler01/qwen3-0p6b-base-llm-accelerator \
+  --repo-type model \
+  --dry-run
 ```
 
 ## Create a Project Artifact Repository
@@ -108,6 +142,11 @@ conda run -n llm_fpga hf download Qwen/Qwen3-0.6B-Base --dry-run
 Do not re-upload the original official Qwen model unless there is a clear
 reason. The first useful private Hub repository for this project should be for
 derived artifacts, such as custom Q4 weights.
+
+The exception currently in use is the private baseline mirror
+`Tyler01/qwen3-0p6b-base-llm-accelerator`, created for cross-platform sync.
+Future generated Q4/FPGA artifacts should use separate repos or clearly
+separate subdirectories.
 
 Example model artifact repository:
 
