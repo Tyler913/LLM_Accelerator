@@ -98,6 +98,25 @@ next_token = run_one_token(input_token, position)
 Prompt prefill should reuse this same one-token path. This keeps the first FPGA
 target aligned with the validated software reference.
 
+## Hardware Target
+
+Current user-reported FPGA target:
+
+- Xilinx Zynq UltraScale+ MPSoC
+- Device: `XCZU2EG`
+- Vivado project part: `xczu2eg-sfvc784-2-i`
+- Vivado version: 2025.1
+- PS DDR: 2 GB
+- PL DDR4: 0.5 GB
+- First KV cache context target for memory-map planning: 256 tokens
+
+The first memory-map planning document is `FPGA_MEMORY_MAP.md`. The dual-memory
+target means the first hardware architecture should distinguish PS-owned
+runtime/staging memory from PL-side accelerator storage. The PL DDR4 is too
+small for the complete BF16 baseline weights, but it is a plausible target for
+future custom Q4 weight-only artifacts plus KV cache and activation buffers,
+subject to the detailed capacity budget in the memory-map document.
+
 ## KV Cache Facts
 
 Each decoder layer owns separate K and V caches:
@@ -203,13 +222,15 @@ cache simpler at first.
 
 ## Immediate Technical Direction
 
-The next phase is FPGA preparation:
+The current phase is FPGA bring-up:
 
-1. Export compact test vectors from the validated Python references.
-2. Draft the first memory map for weights, KV cache, activation buffers, RoPE
-   tables, logits, and argmax output.
-3. Bring up small FPGA/HLS kernels against those vectors, starting with
-   RMSNorm and GEMV.
+1. Run the PS-side AXI BRAM write/read smoke test at `0x8000_0000`.
+2. Add and map PL DDR4 only after the PS-to-PL AXI path is proven.
+3. Bring up small FPGA/HLS kernels against the exported FP32 vectors, starting
+   with RMSNorm and GEMV.
+
+Keep the exact next action in `CURRENT_STATE.md`; keep detailed address
+planning in `FPGA_MEMORY_MAP.md`.
 
 ## Python Environment Rule
 

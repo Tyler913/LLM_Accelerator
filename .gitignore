@@ -38,12 +38,32 @@ generated/
 weights/
 fpga_artifacts/
 build/
+.Xil/
+*.cache/
+*.hw/
+*.runs/
+*.sim/
+*.gen/
+*.ip_user_files/
 *.bit
 *.xsa
 *.hwh
+*.bda
+*.ui
+*.dcp
+*.rpt
+*.rpx
+*.pb
+*.ltx
+*.mcs
+*.mmi
+*.pdi
+dfx_runtime.txt
 *.jou
 *.str
 *.wdb
 *.log
 
 # Keep source/config files tracked explicitly; large artifacts are restored via init/.
+# Vivado source-bearing files that should remain visible include:
+# *.xpr, *.bd, *.xci, *.xdc, source .tcl, HDL, .coe, .mem, and .mif.

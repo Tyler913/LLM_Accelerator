@@ -24,4 +24,8 @@ Script map:
 - `08_validate_decoder_layer.py`: complete Layer 0 cached decoder layer
 - `09_validate_final_norm_lm_head_argmax.py`: final norm, tied LM head, argmax
 - `10_validate_full_run_one_token.py`: complete 28-layer cached run_one_token
+- `11_export_fpga_test_vectors.py`: exports compact FP32 golden vectors for
+  first FPGA/HLS bring-up
+- `12_verify_fpga_test_vectors.py`: verifies exported RMSNorm and Q/K/V GEMV
+  vectors without reloading the model
 - `run_all_module_validations.py`: runs every script above in order

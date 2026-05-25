@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-05-23
+Last updated: 2026-05-26
 
 This file is the short working-state handoff. For stable project context, read
 `PROJECT_CONTEXT.md` first. For workflow rules, read `AGENTS.md`.
@@ -47,22 +47,11 @@ calls it once per generated token.
 
 ## Python Validation Status
 
-The Python validation phase is complete for the current FP32 reference.
+The FP32 Python reference is complete for the current first-version target.
+Validated coverage includes serial prefill/decode, full 28-layer cached
+single-token decode, and module-by-module checks for the FPGA bring-up path.
 
-Validated coverage:
-
-- Model loading and generation
-- Serial prefill/decode with Hugging Face `past_key_values`
-- Model config, weight shapes, and KV cache shapes
-- Manual Layer 0 Q/K/V and full non-cached Layer 0
-- Manual Layer 0 cached decode
-- Manual full 28-layer single-token cached decode
-- Module-by-module checks for embedding, RMSNorm, GEMV, RoPE, KV cache,
-  attention, MLP, decoder layer, final norm, LM head, argmax, and full
-  `run_one_token`
-
-Detailed validation logic now lives in the Python files instead of this
-document:
+Detailed validation logic lives in the Python files instead of this document:
 
 - Full-model and exploratory references:
   `Qwen3-0.6B-Base/pc_testing/`
@@ -71,93 +60,139 @@ document:
 - Per-module validation index:
   `Qwen3-0.6B-Base/python_each_module/README.md`
 
-Useful commands:
+Useful validation commands:
 
 ```bash
 conda run -n llm_fpga python Qwen3-0.6B-Base/pc_testing/10_manual_full_model_cached_decode.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/run_all_module_validations.py
 ```
 
-Known validated prompt:
+Stable reference prompt:
 
 ```text
 The future of FPGA is
 ```
 
-Observed greedy continuation checkpoints:
+Greedy continuation checkpoints:
 
 - Prompt next token: token id `264`, text `' a'`
 - After feeding `' a'` back into cached decode: token id `26291`, text
   `' fascinating'`
 
-## Key Runtime Facts
+## FPGA Test Vector Status
 
-Model facts needed for first FPGA planning:
+Initial FP32 FPGA/HLS bring-up vectors are exported and verified for the first
+RMSNorm and Q/K/V GEMV kernels.
 
-- Layers: 28
-- Hidden size: 1024
-- MLP intermediate size: 3072
-- Query heads: 16
-- KV heads: 8
-- Head dim: 128
-- GQA ratio: 2 query heads per KV head
-- Vocabulary size: 151,936
-- RMSNorm epsilon: `1e-6`
-- RoPE theta: 1,000,000
-- Tied embedding/LM-head table shape: `[151936, 1024]`
+Scripts:
 
-Single-token layer flow:
+- Export:
+  `Qwen3-0.6B-Base/python_each_module/11_export_fpga_test_vectors.py`
+- Verify:
+  `Qwen3-0.6B-Base/python_each_module/12_verify_fpga_test_vectors.py`
+
+Generated local artifact directory, ignored by Git through `artifacts/`:
 
 ```text
-[1024]
-  -> input RMSNorm
-  -> q_proj [2048] -> [16, 128]
-  -> k_proj [1024] -> [8, 128]
-  -> v_proj [1024] -> [8, 128]
-  -> q_norm/k_norm
-  -> RoPE on Q/K
-  -> attention over per-layer KV cache
-  -> attention concat [2048]
-  -> o_proj [1024]
-  -> residual
-  -> post-attention RMSNorm
-  -> gate/up [3072]
-  -> silu(gate) * up
-  -> down [1024]
-  -> residual
+artifacts/test_vectors/qwen3_0p6b_fp32_v0/
 ```
 
-KV cache shape per layer:
+Current vector set:
+
+- `manifest.json`
+- `rmsnorm_layer0_last_token.npz`: input/weight/expected tensors for
+  Layer 0 RMSNorm
+- `qkv_layer0_last_token.npz`: normalized input, Q/K/V projection weights,
+  and expected Q/K/V outputs
+
+Export/verify commands:
+
+```bash
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/11_export_fpga_test_vectors.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/12_verify_fpga_test_vectors.py
+```
+
+Verified prompt/token selection: prompt `The future of FPGA is`, selected
+position `4`, selected token id `374` (`' is'`).
+
+Current max abs errors: RMSNorm `2.3841857910e-07`, `q_proj`
+`1.9073486328e-06`, `k_proj` `1.6689300537e-06`, `v_proj`
+`2.6822090149e-07`.
+
+## FPGA Memory Map Status
+
+Memory-map document: `FPGA_MEMORY_MAP.md`.
+
+Current confirmed coverage:
+
+- Confirmed PS DDR low range: `0x0000_0000` through `0x7FFF_FFFF` (2 GiB)
+- Confirmed AXI BRAM smoke-test range:
+  `0x8000_0000` through `0x8000_1FFF` (8 KiB)
+- Confirmed smoke-test path:
+  `M_AXI_HPM0_LPD` -> AXI SmartConnect -> AXI BRAM Controller -> Block Memory
+  Generator
+- Draft relative PL DDR4 layout for a nominal 512 MiB aperture, including
+  Q4 weights/scales, KV cache, activation buffers, RoPE table,
+  logits/argmax scratch, test-vector staging, and reserved space
+- PL DDR4 controller base/range remains TODO because PL DDR4 is not yet
+  instantiated in the current Vivado design
+
+Durable hardware target facts are in `PROJECT_CONTEXT.md`; detailed address
+planning lives only in `FPGA_MEMORY_MAP.md`.
+
+## Vivado Project Status
+
+Vivado project location:
 
 ```text
-K: [1, 8, T, 128]
-V: [1, 8, T, 128]
+FPGA_Project/Vivado_Project/LLM_FPGA.xpr
 ```
 
-Cache contents:
+Current project facts:
 
-- K cache stores K after q/k RMSNorm and RoPE.
-- V cache stores reshaped/transposed `v_proj` output without RoPE.
-- Q is not cached.
+- Vivado 2025.1.1 project, part `xczu2eg-sfvc784-2-i`, board part unset.
+- Zynq UltraScale+ MPSoC is configured with PS DDR, QSPI, UART0, SD1, PL0
+  clock, fabric reset, `M_AXI_HPM0_LPD`, and `M_AXI_HPM0_FPD`.
+- AXI BRAM smoke-test fabric is connected on `M_AXI_HPM0_LPD`:
+  `M_AXI_HPM0_LPD` -> AXI SmartConnect -> AXI BRAM Controller -> Block Memory
+  Generator.
+- Address Editor assignment: base `0x8000_0000`, range `8K`, high
+  `0x8000_1FFF`.
+- `M_AXI_HPM0_FPD` remains enabled but intentionally unconnected; it is the
+  only known incomplete address path.
+- Block design validation, HDL wrapper generation, synthesis, implementation,
+  bitstream generation, and hardware export all completed successfully with
+  0 errors and 0 critical warnings.
+- Exported XSA with bitstream:
+  `FPGA_Project/Vivado_Project/llm_system_axi_bram_smoke.xsa`
+- The XSA archive contains `llm_system_axi_bram_smoke.bit`, `llm_system.hwh`,
+  `psu_init.*`, and `sysdef.xml`.
+- Vivado Git hygiene was reviewed for the upcoming commit: keep source-bearing
+  `.xpr`, `.bd`, `.xci`, HDL, XDC, and intentional input files visible; ignore
+  regenerable Vivado outputs.
+- No tracked `.v`, `.sv`, `.xci`, `.bd`, or `.xdc` sources have been committed
+  yet.
 
-KV cache memory estimate across all 28 layers:
+Generated Vivado directories removed locally: `LLM_FPGA.cache/`,
+`LLM_FPGA.hw/`, `LLM_FPGA.ip_user_files/`, and `LLM_FPGA.sim/`. `.gitignore`
+now covers common Vivado generated directories and artifacts.
 
-- Per token per layer: `2 * 8 * 128 = 2048` values
-- Per token all layers: `28 * 2048 = 57344` values
-- Context 128: FP16/BF16 about 14 MiB, INT8 about 7 MiB
-- Context 256: FP16/BF16 about 28 MiB, INT8 about 14 MiB
-- Context 512: FP16/BF16 about 56 MiB, INT8 about 28 MiB
-- Context 1024: FP16/BF16 about 112 MiB, INT8 about 56 MiB
+Stable model shapes, layer flow, and KV-cache facts are intentionally kept in
+`PROJECT_CONTEXT.md`, not repeated here.
 
 ## Immediate Next Step
 
-Move from Python validation into FPGA preparation:
+Continue FPGA preparation:
 
-1. Export compact FPGA test vectors from the validated Python references.
-2. Draft the first memory map for weights, per-layer KV cache, activation
-   buffers, RoPE tables, logits, and argmax output.
-3. Start small FPGA/HLS kernel bring-up against those vectors, beginning with
-   RMSNorm and GEMV before assembling a complete decoder layer.
+1. Use the exported hardware to run a minimal PS-side memory write/read test
+   against BRAM base address `0x8000_0000`.
+2. Fill in and review `FPGA_MEMORY_MAP.md`, especially PL DDR4 base/range,
+   usable capacity, PS-to-PL transfer path, and Q4/KV/activation budgets.
+3. Start small FPGA/HLS kernel bring-up against the exported vectors, beginning
+   with RMSNorm and GEMV before assembling a complete decoder layer.
+4. Extend the vector exporter as each new hardware block is added, especially
+   RoPE, KV cache append/read, attention, MLP, and complete Layer 0 cached
+   decode.
 
 ## Practical Notes
 
