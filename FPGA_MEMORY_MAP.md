@@ -1,6 +1,6 @@
 # FPGA Memory Map
 
-Status: working draft, updated through AXI BRAM smoke-test hardware export
+Status: working draft, updated through successful AXI BRAM smoke-test hardware run
 
 This document defines the first FPGA-visible memory layout for the Qwen3
 0.6B accelerator bring-up. It distinguishes confirmed addresses from planning
@@ -48,7 +48,7 @@ FPGA_Project/Vivado_Project/llm_system_axi_bram_smoke.xsa
 | Space / IP | Interface | Base | High | Size | Status |
 | --- | --- | ---: | ---: | ---: | --- |
 | PS DDR low memory | PS DDR | `0x0000_0000` | `0x7FFF_FFFF` | 2 GiB | confirmed in XSA/HWH |
-| AXI BRAM smoke-test memory | `M_AXI_HPM0_LPD` -> AXI SmartConnect -> AXI BRAM Controller `S_AXI` | `0x8000_0000` | `0x8000_1FFF` | 8 KiB | confirmed in Address Editor and XSA/HWH |
+| AXI BRAM smoke-test memory | `M_AXI_HPM0_LPD` -> AXI SmartConnect -> AXI BRAM Controller `S_AXI` | `0x8000_0000` | `0x8000_1FFF` | 8 KiB | confirmed in Address Editor, XSA/HWH, and hardware run |
 | PL DDR4 | TODO | TODO | TODO | about 512 MiB expected | not in current block design |
 
 Current PS-to-PL smoke-test fabric:
@@ -66,6 +66,8 @@ Confirmed interface facts from the current handoff:
 - `M_AXI_HPM0_LPD` data width: 32 bits.
 - AXI BRAM controller `S_AXI` data width: 32 bits.
 - AXI BRAM controller address width: 13 bits.
+- AXI BRAM controller uses one BRAM interface in the passing hardware
+  configuration (`C_SINGLE_PORT_BRAM=1` / `SINGLE_PORT_BRAM=1`).
 - BRAM depth: 2048 32-bit words = 8192 bytes.
 - `pl_clk0` frequency in the exported handoff: about 96.97 MHz.
 - `M_AXI_HPM0_FPD` remains enabled but intentionally unconnected for now.
@@ -111,6 +113,10 @@ High-level split:
   handling in the standalone application.
 - Required flush/invalidate operations: TODO after the Vitis domain/cache
   settings are chosen.
+- The current standalone AXI BRAM smoke test has validated direct 32-bit
+  `Xil_Out32` / `Xil_In32` accesses to `0x8000_0000` through `0x8000_1FFF`.
+  Do not assume the same cache/coherency behavior for future PL DDR4 or DMA
+  paths until those paths are tested.
 
 ## Memory Spaces
 
@@ -140,17 +146,17 @@ Purpose: minimal PS-to-PL memory-mapped access test before adding PL DDR4.
 
 | Region | Base | Size | Owner | Contents | Status |
 | --- | ---: | ---: | --- | --- | --- |
-| AXI BRAM smoke-test memory | `0x8000_0000` | 8 KiB | PS write/read through `M_AXI_HPM0_LPD` | simple pattern write/read validation | ready for Vitis test |
+| AXI BRAM smoke-test memory | `0x8000_0000` | 8 KiB | PS write/read through `M_AXI_HPM0_LPD` | simple pattern write/read validation | passed in hardware |
 
-First test pattern plan:
+Validated smoke-test pattern:
 
 ```text
-write/read 32-bit words at:
-  0x8000_0000
-  0x8000_0004
-  0x8000_0008
-  ...
-within 0x8000_0000 through 0x8000_1FFF
+write/read 32-bit words:
+  0x8000_0000 <- 0xA5A50000
+  0x8000_0004 <- 0x5A5A0001
+  0x8000_0008 <- 0x12345678
+  0x8000_0400 <- 0xDEADBEEF
+  0x8000_1FFC <- 0xC001D00D
 ```
 
 Do not place accelerator control registers in this BRAM range long-term. It is
@@ -444,7 +450,7 @@ Bring-up order:
    - write/read 32-bit patterns at `0x8000_0000`
    - cover at least the first few words, a middle address, and the final
      aligned word at `0x8000_1FFC`
-   - pass condition: all read-back words match the written pattern
+   - status: passed in hardware with exact read-back matches
 2. RMSNorm kernel reads `input_hidden`, `norm_weight`, and `eps`; compare with
    `expected_output`.
 3. GEMV kernel reads `input_norm` and one projection matrix; compare with
@@ -458,7 +464,7 @@ Pass/fail fields to record:
 
 | Kernel | Vector | Max Abs Error | Mean Abs Error | Status |
 | --- | --- | ---: | ---: | --- |
-| PS-to-PL AXI BRAM | direct pattern test at `0x8000_0000` | exact match required | exact match required | next |
+| PS-to-PL AXI BRAM | direct pattern test at `0x8000_0000` | exact match | exact match | passed |
 | RMSNorm | `rmsnorm_layer0_last_token.npz` | TODO | TODO | TODO |
 | Q GEMV | `qkv_layer0_last_token.npz` | TODO | TODO | TODO |
 | K GEMV | `qkv_layer0_last_token.npz` | TODO | TODO | TODO |
@@ -470,3 +476,4 @@ Pass/fail fields to record:
 | --- | --- | --- |
 | 2026-05-24 | Initial skeleton | Adds PS DDR / PL DDR4 split and TODO sections |
 | 2026-05-26 | Add confirmed AXI BRAM smoke-test map and DDR planning draft | Records PS DDR low range, BRAM `0x8000_0000`-`0x8000_1FFF`, and a relative 512 MiB PL DDR4 layout draft |
+| 2026-05-27 | Record passing AXI BRAM hardware run | Confirms repeated 32-bit PS write/read access through `M_AXI_HPM0_LPD` at offsets `0x0`, `0x4`, `0x8`, `0x400`, and `0x1FFC` |

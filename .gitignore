@@ -67,3 +67,10 @@ dfx_runtime.txt
 # Keep source/config files tracked explicitly; large artifacts are restored via init/.
 # Vivado source-bearing files that should remain visible include:
 # *.xpr, *.bd, *.xci, *.xdc, source .tcl, HDL, .coe, .mem, and .mif.
+
+# Vitis local workspaces
+# Recreate these from the Vivado project/XSA and checked-in application sources.
+Vitis_Workspace/
+
+# Temporary local document extraction inputs
+tmp_pdf_inputs/

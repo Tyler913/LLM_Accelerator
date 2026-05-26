@@ -376,6 +376,11 @@
         "xci_path": "ip\\llm_system_axi_bram_ctrl_0_0\\llm_system_axi_bram_ctrl_0_0.xci",
         "inst_hier_path": "axi_bram_ctrl_0",
         "has_run_ip_tcl": "true",
+        "parameters": {
+          "SINGLE_PORT_BRAM": {
+            "value": "1"
+          }
+        },
         "interface_ports": {
           "S_AXI": {
             "bd_attributes": {
