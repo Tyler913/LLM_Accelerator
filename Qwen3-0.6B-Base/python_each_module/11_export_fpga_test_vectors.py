@@ -105,7 +105,7 @@ def main() -> None:
     manifest = {
         "format_version": 1,
         "name": "qwen3_0p6b_fp32_v0",
-        "purpose": "FPGA/HLS golden vectors for first RMSNorm and Q/K/V GEMV bring-up.",
+        "purpose": "FPGA/RTL golden vectors for first RMSNorm and Q/K/V GEMV bring-up.",
         "model_dir": str(backbone.config.name_or_path)
         if hasattr(backbone, "config")
         else "Qwen3-0.6B-Base",

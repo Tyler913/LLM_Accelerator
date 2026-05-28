@@ -219,8 +219,8 @@ Known model facts:
 | --- | --- | ---: | --- |
 | Nominal PL DDR4 aperture | user-reported 0.5 GB | 512 MiB assumed for draft | must be confirmed in Vivado |
 | Q4 packed weights | parameters * 4 bits | about 298.0 MB / 284.2 MiB | fits inside 320 MiB draft weight region |
-| Q4 scales | `(parameters / 64) * scale_bytes` | FP16 scales about 18.6 MB / 17.8 MiB | fits with Q4 weights in 320 MiB region |
-| Q4 metadata/alignment | format header, per-tensor metadata, padding | about 18 MiB margin if FP16 scales | draft margin |
+| Q4 scales | `(parameters / 64) * scale_bytes` | 16-bit scales about 18.6 MB / 17.8 MiB | fits with Q4 weights in 320 MiB region |
+| Q4 metadata/alignment | format header, per-tensor metadata, padding | about 18 MiB margin with 16-bit scales | draft margin |
 | KV cache context 128 | 28 * 2 * 8 * 128 * 128 * bytes | FP16/BF16 about 14 MiB | optional |
 | KV cache context 256 | 28 * 2 * 8 * 256 * 128 * bytes | FP16/BF16 about 28 MiB | first target, allocate 32 MiB |
 | KV cache context 512 | 28 * 2 * 8 * 512 * 128 * bytes | FP16/BF16 about 56 MiB | does not fit current 32 MiB KV allocation |
@@ -233,7 +233,7 @@ Known model facts:
 
 Current capacity read:
 
-- Q4 weights plus FP16 scales should fit in 0.5 GB PL DDR4 with context 256 KV
+- Q4 weights plus 16-bit scales should fit in 0.5 GB PL DDR4 with context 256 KV
   cache, assuming modest activation/debug buffers and no full BF16 weights.
 - Exact fit must still be checked after the PL DDR4 usable address range,
   alignment rules, and Q4 artifact format are fixed.
@@ -252,6 +252,17 @@ matrices. RMSNorm gamma vectors, Q4 scales, metadata, activations,
 accumulators, and KV cache may use separate explicitly chosen formats, but they
 do not permit a BF16/FP32 full-weight PL DDR4 layout.
 
+The current Verilog-facing Q4 v0 format is documented in `Q4_FORMAT.md`.
+Current bring-up artifact scope:
+
+```text
+Layer 0 q_proj/k_proj/v_proj only
+weights: signed int4, group size 64, two weights packed per byte
+scales: unsigned 16-bit fixed-point Q2.14
+activation test input: signed int16 fixed-point Q4.12
+layout: row-major, per-output-row contiguous 64-column groups
+```
+
 ### Region Header
 
 | Field | Type | Description | Status |
@@ -261,7 +272,7 @@ do not permit a BF16/FP32 full-weight PL DDR4 layout.
 | source_model | TODO | model source and revision | TODO |
 | quant_format | TODO | e.g. custom_groupwise_symmetric_q4 | TODO |
 | group_size | TODO | expected initial value: 64 | TODO |
-| scale_dtype | TODO | expected first version: FP16 or FP32 | TODO |
+| scale_dtype | TODO | current Q4 v0 bring-up uses unsigned 16-bit fixed-point Q2.14 | TODO |
 | checksum | TODO | artifact integrity check | TODO |
 
 ### Per-Layer Weight Order
@@ -290,7 +301,8 @@ Open decisions:
   exact packing, scale placement, and validation tolerance.
 - Use row-major, column-major, or tiled layout for GEMV?
 - Pack two signed int4 values per byte in low/high nibble order:
-- Scale placement: separate scale array or interleaved by block:
+- Scale placement: current Q4 v0 artifact stores separate scale arrays;
+  final PL DDR interleaving is still open:
 - Alignment per matrix:
 - Checksum granularity:
 
@@ -467,13 +479,15 @@ Bring-up order:
    - status: passed in hardware with exact read-back matches
 2. RMSNorm RTL block reads `input_hidden`, `norm_weight`, and `eps`; compare
    with `expected_output`.
-3. GEMV RTL block reads `input_norm` and one projection matrix; compare with
-   `expected_q`, `expected_k`, or `expected_v`.
+3. Q4 GEMV RTL block starts from the 64-value dot-product smoke vector in
+   `qwen3_0p6b_q4_v0/q_proj_row0_group0_dot64.npz`, then expands to full
+   Layer 0 Q/K/V using `qkv_layer0_last_token_q4.npz`.
 4. Extend vectors and memory regions for RoPE, KV cache, attention, MLP, and
    complete Layer 0.
 5. Use FP32 vectors as golden references, but design GEMV/weight-storage RTL
-   around the required Q4 path from the start. Add Q4 GEMV vectors and the
-   final packed weight layout before scaling beyond the first bring-up blocks.
+   around the required Q4 path from the start. The current Q4 v0 artifact is
+   the first packed-weight contract; extend it before scaling beyond Layer 0
+   Q/K/V.
 
 Pass/fail fields to record:
 
@@ -481,9 +495,9 @@ Pass/fail fields to record:
 | --- | --- | ---: | ---: | --- |
 | PS-to-PL AXI BRAM | direct pattern test at `0x8000_0000` | exact match | exact match | passed |
 | RMSNorm | `rmsnorm_layer0_last_token.npz` | TODO | TODO | TODO |
-| Q GEMV | `qkv_layer0_last_token.npz` | TODO | TODO | TODO |
-| K GEMV | `qkv_layer0_last_token.npz` | TODO | TODO | TODO |
-| V GEMV | `qkv_layer0_last_token.npz` | TODO | TODO | TODO |
+| Q4 Q GEMV | `qwen3_0p6b_q4_v0/qkv_layer0_last_token_q4.npz` | 0.22418976 | 0.01856172 | passed in Python verifier |
+| Q4 K GEMV | `qwen3_0p6b_q4_v0/qkv_layer0_last_token_q4.npz` | 0.12317824 | 0.01752916 | passed in Python verifier |
+| Q4 V GEMV | `qwen3_0p6b_q4_v0/qkv_layer0_last_token_q4.npz` | 0.07140590 | 0.01565306 | passed in Python verifier |
 
 ## Revision Log
 
@@ -493,3 +507,4 @@ Pass/fail fields to record:
 | 2026-05-26 | Add confirmed AXI BRAM smoke-test map and DDR planning draft | Records PS DDR low range, BRAM `0x8000_0000`-`0x8000_1FFF`, and a relative 512 MiB PL DDR4 layout draft |
 | 2026-05-27 | Record passing AXI BRAM hardware run | Confirms repeated 32-bit PS write/read access through `M_AXI_HPM0_LPD` at offsets `0x0`, `0x4`, `0x8`, `0x400`, and `0x1FFC` |
 | 2026-05-28 | Strengthen Q4 as required PL weight path | Records that large PL-stored weights must use the project custom Q4 weight-only format; BF16/FP32 weights are reference data only |
+| 2026-05-28 | Add Layer 0 Q/K/V Q4 v0 artifact contract | Uses signed int4 weights, group size 64, Q2.14 scales, Q4.12 activation test input, and Python-verified Q/K/V GEMV metrics |

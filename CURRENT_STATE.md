@@ -33,6 +33,8 @@ Key locations:
   `Qwen3-0.6B-Base/python_each_module/README.md`
 - Test vectors:
   `artifacts/test_vectors/qwen3_0p6b_fp32_v0/` (ignored by Git)
+- Q4 bring-up vectors:
+  `artifacts/test_vectors/qwen3_0p6b_q4_v0/` (ignored by Git)
 
 Useful commands:
 
@@ -40,6 +42,8 @@ Useful commands:
 conda run -n llm_fpga python Qwen3-0.6B-Base/pc_testing/10_manual_full_model_cached_decode.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/run_all_module_validations.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/12_verify_fpga_test_vectors.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/13_export_q4_gemv_vectors.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/14_verify_q4_gemv_vectors.py
 ```
 
 Latest local validation:
@@ -47,6 +51,9 @@ Latest local validation:
 - 2026-05-28: `conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/12_verify_fpga_test_vectors.py`
   passed. The existing FP32 RMSNorm and Q/K/V GEMV vectors are usable as the
   first RTL bring-up references.
+- 2026-05-28: Layer 0 Q/K/V custom Q4 v0 export and verification passed with
+  signed int4 weights, group size 64, `Q2.14` scales, and `Q4.12` activation
+  test input. See `Q4_FORMAT.md`.
 
 Stable reference prompt:
 
@@ -165,7 +172,9 @@ Use the working AXI path as the base for real PL-first RTL development:
 4. Continue refining `FPGA_MEMORY_MAP.md` when PL DDR4 is instantiated,
    especially PL DDR4 base/range, usable capacity, PS-to-PL transfer path, and
    Q4/KV/activation budgets.
-5. Bring up RMSNorm first, then GEMV, as hand-written RTL blocks.
+5. Bring up the first Q4 GEMV sub-block first:
+   `q_proj_row0_group0_dot64.npz` gives a 64-value signed-int4 dot-product
+   smoke vector for Verilog. RMSNorm remains the next activation-side block.
 6. Extend the vector exporter as new hardware blocks are added, especially
    RoPE, KV cache append/read, attention, MLP, and complete Layer 0 cached
    decode.

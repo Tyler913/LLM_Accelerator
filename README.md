@@ -6,6 +6,7 @@ Start here for persistent project context:
 
 - [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)
 - [CURRENT_STATE.md](CURRENT_STATE.md)
+- [Q4_FORMAT.md](Q4_FORMAT.md)
 
 For cross-platform setup and model asset restoration, start here:
 

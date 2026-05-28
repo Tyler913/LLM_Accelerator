@@ -206,6 +206,9 @@ Q4 weight-only quantization is a durable project constraint for the first
 deployable PL implementation. Do not build a first PL DDR4 storage plan that
 requires full BF16/FP32 model weights.
 
+The Verilog-facing Q4 v0 format and current Layer 0 Q/K/V artifact are
+documented in `Q4_FORMAT.md`.
+
 Do not start with GGUF, GPTQ, AWQ, FP8, or Q4_K hardware parsing.
 
 The required first custom Q4 format:
@@ -214,7 +217,7 @@ The required first custom Q4 format:
 - group-wise symmetric quantization
 - group size 64 initially
 - one scale per group
-- likely FP16 scale for the first version
+- current Verilog bring-up scale format: unsigned 16-bit fixed-point `Q2.14`
 - no zero point
 
 Formula:
