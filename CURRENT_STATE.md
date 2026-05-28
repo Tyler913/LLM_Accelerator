@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-05-27
+Last updated: 2026-05-28
 
 This file is the concise working-state handoff. For stable project context,
 read `PROJECT_CONTEXT.md` first. For workflow rules, read `AGENTS.md`.
@@ -42,6 +42,12 @@ conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/run_all_module_v
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/12_verify_fpga_test_vectors.py
 ```
 
+Latest local validation:
+
+- 2026-05-28: `conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/12_verify_fpga_test_vectors.py`
+  passed. The existing FP32 RMSNorm and Q/K/V GEMV vectors are usable as the
+  first RTL bring-up references.
+
 Stable reference prompt:
 
 ```text
@@ -57,6 +63,15 @@ Known greedy checkpoints:
 ## FPGA Bring-Up Status
 
 The first PS-to-PL AXI communication checkpoint is now successful.
+
+The development direction is now explicitly PL-first and RTL-first:
+
+- The main project purpose is to learn and practice Verilog/RTL and FPGA PL
+  development.
+- PS-side bare-metal code is support infrastructure for control, loading,
+  serial output, and validation.
+- Do not use HLS as the default path. Future PL compute blocks should be
+  hand-written Verilog/SystemVerilog unless the user explicitly changes this.
 
 Vivado project:
 
@@ -139,18 +154,19 @@ Solutions applied:
 
 ## Immediate Next Step
 
-Use the working AXI path as the base for the next PL-facing prototype:
+Use the working AXI path as the base for real PL-first RTL development:
 
 1. Review the visible Vivado/Vitis/source changes and decide the minimal
    hardware checkpoint to commit.
-2. Define a small control/status register map plus BRAM-backed test-vector
-   buffers for the first accelerator kernel.
-3. Continue refining `FPGA_MEMORY_MAP.md` when PL DDR4 is instantiated,
+2. Start the first hand-written Verilog/SystemVerilog PL compute block under
+   `FPGA_Project/verilog/`, using the exported FP32 vectors as the reference.
+3. Keep PS-side C minimal: only enough to load inputs, start/check hardware,
+   read outputs, and print pass/fail evidence.
+4. Continue refining `FPGA_MEMORY_MAP.md` when PL DDR4 is instantiated,
    especially PL DDR4 base/range, usable capacity, PS-to-PL transfer path, and
    Q4/KV/activation budgets.
-4. Bring up the first small FPGA/HLS kernels against exported vectors,
-   starting with RMSNorm and GEMV.
-5. Extend the vector exporter as new hardware blocks are added, especially
+5. Bring up RMSNorm first, then GEMV, as hand-written RTL blocks.
+6. Extend the vector exporter as new hardware blocks are added, especially
    RoPE, KV cache append/read, attention, MLP, and complete Layer 0 cached
    decode.
 

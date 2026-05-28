@@ -48,3 +48,9 @@ Project workflow notes:
 - The current first-version target is functionality over performance: run a
   small Qwen3 base model with serial prefill, single-token decode, greedy
   argmax, and a simple future Q4 weight format.
+- The user's main goal is to learn and practice Verilog/RTL and FPGA PL
+  development. Prefer hand-written Verilog/SystemVerilog RTL for PL compute
+  blocks. Do not introduce High-Level Synthesis (HLS) flows or HLS C/C++ IP
+  unless the user explicitly asks for them.
+- PS-side bare-metal code is support infrastructure for control, loading, and
+  validation. Keep the project focus on PL design and hardware understanding.

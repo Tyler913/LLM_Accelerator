@@ -80,6 +80,11 @@ Confirmed interface facts from the current handoff:
 The first version prioritizes correctness, observability, and incremental
 bring-up over peak throughput.
 
+The project focus is PL design with hand-written Verilog/SystemVerilog RTL.
+PS-side bare-metal code is used for control, loading, and validation, but it is
+not the main learning target. Do not assume an HLS flow unless the project
+direction is explicitly changed later.
+
 High-level split:
 
 - PS:
@@ -89,7 +94,7 @@ High-level split:
   - accelerator control
   - debug and validation orchestration
 - PL:
-  - one-token forward datapath kernels
+  - one-token forward datapath RTL blocks
   - FPGA-visible activation buffers
   - KV cache read/write
   - future custom Q4 weight reads
@@ -180,7 +185,7 @@ controller is instantiated and Address Editor assigns the range.
 | Activation buffers | `PL_DDR4_BASE + 0x1610_0000` | 64 MiB | PL read/write | hidden, normed, q/k/v, attention, MLP scratch, debug snapshots | draft |
 | RoPE table | `PL_DDR4_BASE + 0x1A10_0000` | 8 MiB | PS load or PL read | cos/sin table if precomputed | draft |
 | Logits / argmax scratch | `PL_DDR4_BASE + 0x1A90_0000` | 8 MiB | PL write, PS read | LM-head tile output and final token id | draft |
-| Test-vector staging | `PL_DDR4_BASE + 0x1B10_0000` | 32 MiB | PS load, PL read/write | optional HLS/RTL bring-up data | draft |
+| Test-vector staging | `PL_DDR4_BASE + 0x1B10_0000` | 32 MiB | PS load, PL read/write | optional RTL bring-up data | draft |
 | Reserved | `PL_DDR4_BASE + 0x1D10_0000` | 47 MiB | PS/PL | expansion room within nominal 512 MiB | draft |
 
 Draft relative coverage:
@@ -451,9 +456,9 @@ Bring-up order:
    - cover at least the first few words, a middle address, and the final
      aligned word at `0x8000_1FFC`
    - status: passed in hardware with exact read-back matches
-2. RMSNorm kernel reads `input_hidden`, `norm_weight`, and `eps`; compare with
-   `expected_output`.
-3. GEMV kernel reads `input_norm` and one projection matrix; compare with
+2. RMSNorm RTL block reads `input_hidden`, `norm_weight`, and `eps`; compare
+   with `expected_output`.
+3. GEMV RTL block reads `input_norm` and one projection matrix; compare with
    `expected_q`, `expected_k`, or `expected_v`.
 4. Extend vectors and memory regions for RoPE, KV cache, attention, MLP, and
    complete Layer 0.

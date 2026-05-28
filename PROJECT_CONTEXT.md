@@ -16,6 +16,11 @@ Build toward an FPGA inference stack that can run a small dense decoder-only
 LLM end to end, then use that working chain as the base for quantization,
 memory layout, kernel optimization, and hardware bring-up.
 
+The user's primary purpose for this project is to become stronger at Verilog/RTL
+and FPGA PL development. The PS side should stay as small as practical and serve
+as bring-up, control, loading, and validation support rather than becoming the
+center of the project.
+
 The first milestone prioritizes correctness and observability over speed:
 
 - serial prompt prefill
@@ -23,6 +28,8 @@ The first milestone prioritizes correctness and observability over speed:
 - greedy argmax
 - simple future custom Q4 weight format
 - no chat-specific behavior required
+- hand-written Verilog/SystemVerilog RTL for PL compute blocks by default
+- no High-Level Synthesis (HLS) unless explicitly requested later
 
 ## Baseline Model
 
@@ -81,6 +88,7 @@ Current intended first-version split:
   - PL control
   - send prompt/generated token ids to PL
   - receive generated token ids from PL
+  - support validation and hardware bring-up, but remain secondary to PL work
 - PL:
   - embedding lookup
   - complete single-token forward through all 28 layers
@@ -88,6 +96,7 @@ Current intended first-version split:
   - final RMSNorm
   - tied LM head
   - greedy argmax
+  - implemented with hand-written RTL as the default development path
 
 The PL should eventually expose:
 
@@ -226,8 +235,8 @@ The current phase is FPGA bring-up:
 
 1. Run the PS-side AXI BRAM write/read smoke test at `0x8000_0000`.
 2. Add and map PL DDR4 only after the PS-to-PL AXI path is proven.
-3. Bring up small FPGA/HLS kernels against the exported FP32 vectors, starting
-   with RMSNorm and GEMV.
+3. Bring up small hand-written RTL compute blocks against the exported FP32
+   vectors, starting with RMSNorm and GEMV.
 
 Keep the exact next action in `CURRENT_STATE.md`; keep detailed address
 planning in `FPGA_MEMORY_MAP.md`.
