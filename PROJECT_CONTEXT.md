@@ -26,7 +26,7 @@ The first milestone prioritizes correctness and observability over speed:
 - serial prompt prefill
 - single-token cached decode
 - greedy argmax
-- simple future custom Q4 weight format
+- required custom Q4 weight-only format for large PL-stored weights
 - no chat-specific behavior required
 - hand-written Verilog/SystemVerilog RTL for PL compute blocks by default
 - no High-Level Synthesis (HLS) unless explicitly requested later
@@ -122,9 +122,10 @@ Current user-reported FPGA target:
 The first memory-map planning document is `FPGA_MEMORY_MAP.md`. The dual-memory
 target means the first hardware architecture should distinguish PS-owned
 runtime/staging memory from PL-side accelerator storage. The PL DDR4 is too
-small for the complete BF16 baseline weights, but it is a plausible target for
-future custom Q4 weight-only artifacts plus KV cache and activation buffers,
-subject to the detailed capacity budget in the memory-map document.
+small for the complete BF16 baseline weights, so the first deployable PL
+weight-storage path must be the project custom Q4 weight-only format plus KV
+cache and activation buffers, subject to the detailed capacity budget in the
+memory-map document.
 
 ## KV Cache Facts
 
@@ -201,9 +202,13 @@ Known validated greedy checkpoints:
 
 ## Quantization Direction
 
+Q4 weight-only quantization is a durable project constraint for the first
+deployable PL implementation. Do not build a first PL DDR4 storage plan that
+requires full BF16/FP32 model weights.
+
 Do not start with GGUF, GPTQ, AWQ, FP8, or Q4_K hardware parsing.
 
-The planned first custom Q4 format:
+The required first custom Q4 format:
 
 - signed int4 weights
 - group-wise symmetric quantization
@@ -226,8 +231,11 @@ q = round(weight / scale)
 q = clamp(q, -8, 7)
 ```
 
-Q4 here means weight-only quantization. Keep activations, accumulators, and KV
-cache simpler at first.
+Q4 here means weight-only quantization. It applies to the large model weights
+stored in PL DDR4, including embedding/LM-head and GEMV matrices. Small
+non-matrix parameters such as RMSNorm gamma, Q4 scales, metadata, activations,
+accumulators, and KV cache may use simpler fixed-point or FP16-style formats as
+explicitly chosen, but they do not relax the Q4 requirement for large weights.
 
 ## Immediate Technical Direction
 

@@ -97,7 +97,7 @@ High-level split:
   - one-token forward datapath RTL blocks
   - FPGA-visible activation buffers
   - KV cache read/write
-  - future custom Q4 weight reads
+  - custom Q4 weight reads as the default PL weight path
   - final LM-head scan and greedy argmax
 
 ## Addressing Rules
@@ -180,7 +180,7 @@ controller is instantiated and Address Editor assigns the range.
 | Region | Base | Size | Owner | Contents | Status |
 | --- | ---: | ---: | --- | --- | --- |
 | Header / memory-map metadata | `PL_DDR4_BASE + 0x0000_0000` | 1 MiB | PS/PL | magic, version, checksums, layout table | draft |
-| Weight region | `PL_DDR4_BASE + 0x0010_0000` | 320 MiB | PS load, PL read | future Q4 weights and scales | draft |
+| Weight region | `PL_DDR4_BASE + 0x0010_0000` | 320 MiB | PS load, PL read | required Q4 weights and scales | draft |
 | KV cache region | `PL_DDR4_BASE + 0x1410_0000` | 32 MiB | PL read/write | per-layer K/V cache, context 256 first | draft |
 | Activation buffers | `PL_DDR4_BASE + 0x1610_0000` | 64 MiB | PL read/write | hidden, normed, q/k/v, attention, MLP scratch, debug snapshots | draft |
 | RoPE table | `PL_DDR4_BASE + 0x1A10_0000` | 8 MiB | PS load or PL read | cos/sin table if precomputed | draft |
@@ -210,8 +210,10 @@ Known model facts:
 - Parameters: 596,049,920
 - Stored baseline dtype: `bfloat16`
 - Baseline full weights: about 1.19 GB, too large for 0.5 GB PL DDR4
-- Planned first Q4: signed int4, group-wise symmetric, group size 64, no zero
+- Required first Q4: signed int4, group-wise symmetric, group size 64, no zero
   point
+- Full BF16/FP32 weights are reference data only and must not be the first PL
+  DDR4 storage target.
 
 | Item | Formula | Estimated Size | Decision |
 | --- | --- | ---: | --- |
@@ -243,6 +245,12 @@ Current capacity read:
 ## Weight Layout
 
 TODO: Define this before generating full-model Q4 artifacts.
+
+Large model weights stored in PL DDR4 must use the project custom Q4
+weight-only format. This includes embedding/LM-head and all projection/MLP
+matrices. RMSNorm gamma vectors, Q4 scales, metadata, activations,
+accumulators, and KV cache may use separate explicitly chosen formats, but they
+do not permit a BF16/FP32 full-weight PL DDR4 layout.
 
 ### Region Header
 
@@ -278,7 +286,8 @@ Fill in exact offsets and sizes after choosing packing and alignment.
 
 Open decisions:
 
-- Store embedding/LM head as Q4 immediately, or keep a higher precision first?
+- Embedding/LM head are part of the required Q4 weight path; decide only the
+  exact packing, scale placement, and validation tolerance.
 - Use row-major, column-major, or tiled layout for GEMV?
 - Pack two signed int4 values per byte in low/high nibble order:
 - Scale placement: separate scale array or interleaved by block:
@@ -462,8 +471,9 @@ Bring-up order:
    `expected_q`, `expected_k`, or `expected_v`.
 4. Extend vectors and memory regions for RoPE, KV cache, attention, MLP, and
    complete Layer 0.
-5. Only after FP32/BF16-style flow is understood, introduce Q4 GEMV vectors and
-   the final packed weight layout.
+5. Use FP32 vectors as golden references, but design GEMV/weight-storage RTL
+   around the required Q4 path from the start. Add Q4 GEMV vectors and the
+   final packed weight layout before scaling beyond the first bring-up blocks.
 
 Pass/fail fields to record:
 
@@ -482,3 +492,4 @@ Pass/fail fields to record:
 | 2026-05-24 | Initial skeleton | Adds PS DDR / PL DDR4 split and TODO sections |
 | 2026-05-26 | Add confirmed AXI BRAM smoke-test map and DDR planning draft | Records PS DDR low range, BRAM `0x8000_0000`-`0x8000_1FFF`, and a relative 512 MiB PL DDR4 layout draft |
 | 2026-05-27 | Record passing AXI BRAM hardware run | Confirms repeated 32-bit PS write/read access through `M_AXI_HPM0_LPD` at offsets `0x0`, `0x4`, `0x8`, `0x400`, and `0x1FFC` |
+| 2026-05-28 | Strengthen Q4 as required PL weight path | Records that large PL-stored weights must use the project custom Q4 weight-only format; BF16/FP32 weights are reference data only |

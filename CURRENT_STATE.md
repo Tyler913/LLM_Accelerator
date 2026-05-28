@@ -17,7 +17,7 @@ Current first-version target:
 - PS-side tokenizer, detokenizer, and PL control
 - PL-side `next_token = run_one_token(input_token, position)` path
 - Initial context target: 128 or 256 tokens
-- Later quantization direction: simple custom Q4 weight-only format
+- Required PL DDR4 weight path: custom Q4 weight-only format
 
 ## Software Baseline
 
@@ -174,6 +174,9 @@ Use the working AXI path as the base for real PL-first RTL development:
 
 - Always use `conda run -n llm_fpga ...` for Python commands.
 - Keep large model weights and generated artifacts out of Git history.
+- Treat BF16/FP32 model data as software reference and validation input only.
+  The first PL DDR4 weight layout and GEMV datapaths must assume custom Q4
+  weight-only storage for large weights.
 - Treat `Vitis_Workspace/` as a local regenerated workspace. Keep durable
   application source under `FPGA_Project/software/` and recreate Vitis
   platform/application/build outputs from the Vivado hardware export.

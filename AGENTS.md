@@ -13,6 +13,11 @@ Hard rules:
   the user explicitly requests it.
 - The local model baseline is `Qwen3-0.6B-Base/`, downloaded from
   `Qwen/Qwen3-0.6B-Base`.
+- The first deployable PL weight path must use the project's custom Q4
+  weight-only quantization for all large model weights stored in PL DDR4. Do
+  not design BF16/FP32 full-weight storage or full-precision GEMV datapaths as
+  the default implementation path; FP32/BF16 data is for software reference and
+  bring-up comparison only.
 - Preserve model artifacts and paper files unless the user explicitly asks to
   remove them.
 - Do not run broad staging commands such as `git add .`, `git add -A`, or
@@ -47,7 +52,7 @@ Project workflow notes:
   under `Qwen3-0.6B-Base/pc_testing/`.
 - The current first-version target is functionality over performance: run a
   small Qwen3 base model with serial prefill, single-token decode, greedy
-  argmax, and a simple future Q4 weight format.
+  argmax, and the required custom Q4 weight-only path.
 - The user's main goal is to learn and practice Verilog/RTL and FPGA PL
   development. Prefer hand-written Verilog/SystemVerilog RTL for PL compute
   blocks. Do not introduce High-Level Synthesis (HLS) flows or HLS C/C++ IP
