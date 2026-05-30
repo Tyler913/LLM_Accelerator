@@ -83,20 +83,28 @@ Important shapes:
 Current intended first-version split:
 
 - PS:
-  - tokenizer
-  - detokenizer
-  - PL control
-  - send prompt/generated token ids to PL
+  - board, runtime, storage, and peripheral initialization
+  - tokenizer and detokenizer
+  - Q4 artifact loading and transfer into FPGA-visible memory
+  - PL control register writes and status polling
+  - send prompt/generated token ids, position, and sequence metadata to PL
   - receive generated token ids from PL
-  - support validation and hardware bring-up, but remain secondary to PL work
+  - validation, debug printout, and optional readback of intermediate buffers
 - PL:
   - embedding lookup
+  - all model-side prefill computation
+  - all model-side decode computation
   - complete single-token forward through all 28 layers
+  - Q4 GEMV for large model weights
+  - RMSNorm, RoPE, attention, MLP, final norm, and LM-head scan
   - KV cache read/write
-  - final RMSNorm
-  - tied LM head
   - greedy argmax
   - implemented with hand-written RTL as the default development path
+
+The PS must not become the model compute path. It may schedule one token at a
+time, load data, configure addresses, wait for completion, and print debug
+evidence, but the first-version goal is that both prompt prefill and generated
+token decode execute their model math in PL.
 
 The PL should eventually expose:
 
@@ -106,6 +114,31 @@ next_token = run_one_token(input_token, position)
 
 Prompt prefill should reuse this same one-token path. This keeps the first FPGA
 target aligned with the validated software reference.
+
+Practical first-version call flow:
+
+```text
+PS:
+  prompt_text -> tokenizer -> prompt token ids
+  load custom Q4 artifacts and metadata into FPGA-visible memory
+  initialize control registers and base addresses
+
+prefill loop:
+  for each prompt token:
+    PS writes input_token and position
+    PS starts PL run_one_token
+    PL executes the full one-token model path and appends K/V cache
+    PS waits for done/status
+
+decode loop:
+  previous_token = last prefill/decode output token
+  while generation continues:
+    PS writes previous_token and position
+    PS starts PL run_one_token
+    PL executes the full one-token model path, reads/appends K/V cache, and
+      computes greedy argmax
+    PS reads output_token and detokenizes it
+```
 
 ## Hardware Target
 

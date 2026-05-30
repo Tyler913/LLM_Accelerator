@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-05-28
+Last updated: 2026-05-29
 
 This file is the concise working-state handoff. For stable project context,
 read `PROJECT_CONTEXT.md` first. For workflow rules, read `AGENTS.md`.
@@ -16,6 +16,8 @@ Current first-version target:
 - Greedy argmax text continuation
 - PS-side tokenizer, detokenizer, and PL control
 - PL-side `next_token = run_one_token(input_token, position)` path
+- PL owns all model-side prefill and decode math; PS schedules tokens, loads
+  artifacts, writes control registers, polls status, and handles text I/O/debug
 - Initial context target: 128 or 256 tokens
 - Required PL DDR4 weight path: custom Q4 weight-only format
 
@@ -54,6 +56,9 @@ Latest local validation:
 - 2026-05-28: Layer 0 Q/K/V custom Q4 v0 export and verification passed with
   signed int4 weights, group size 64, `Q2.14` scales, and `Q4.12` activation
   test input. See `Q4_FORMAT.md`.
+- 2026-05-29: `q4_dot_product_64` FSM skeleton compiles with
+  `iverilog -g2012 -tnull FPGA_Project\rtl\q4_dot_product_64.sv`; datapath
+  implementation is still pending.
 
 Stable reference prompt:
 
@@ -166,15 +171,16 @@ Use the working AXI path as the base for real PL-first RTL development:
 1. Review the visible Vivado/Vitis/source changes and decide the minimal
    hardware checkpoint to commit.
 2. Start the first hand-written Verilog/SystemVerilog PL compute block under
-   `FPGA_Project/verilog/`, using the exported FP32 vectors as the reference.
+   `FPGA_Project/`, using the exported FP32 vectors as the reference.
 3. Keep PS-side C minimal: only enough to load inputs, start/check hardware,
    read outputs, and print pass/fail evidence.
 4. Continue refining `FPGA_MEMORY_MAP.md` when PL DDR4 is instantiated,
    especially PL DDR4 base/range, usable capacity, PS-to-PL transfer path, and
    Q4/KV/activation budgets.
-5. Bring up the first Q4 GEMV sub-block first:
-   `q_proj_row0_group0_dot64.npz` gives a 64-value signed-int4 dot-product
-   smoke vector for Verilog. RMSNorm remains the next activation-side block.
+5. Implement `q4_dot_product_64` against `q_proj_row0_group0_dot64.npz`:
+   unpack 64 signed int4 weights, multiply by 64 signed `Q4.12` activations,
+   accumulate the raw partial sum, then multiply by the unsigned `Q2.14` scale.
+   RMSNorm remains the next activation-side block.
 6. Extend the vector exporter as new hardware blocks are added, especially
    RoPE, KV cache append/read, attention, MLP, and complete Layer 0 cached
    decode.
@@ -186,6 +192,9 @@ Use the working AXI path as the base for real PL-first RTL development:
 - Treat BF16/FP32 model data as software reference and validation input only.
   The first PL DDR4 weight layout and GEMV datapaths must assume custom Q4
   weight-only storage for large weights.
+- Keep PS-side code as orchestration/support only. Do not move model math for
+  prefill or decode back into PS unless the project direction explicitly
+  changes.
 - Treat `Vitis_Workspace/` as a local regenerated workspace. Keep durable
   application source under `FPGA_Project/software/` and recreate Vitis
   platform/application/build outputs from the Vivado hardware export.
