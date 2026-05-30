@@ -83,6 +83,23 @@ Latest local validation:
   `FPGA_Project/sim/tb_q4_dot_product_64.sv`. Running it generates
   `FPGA_Project/wave/q4_dot_product_64.vcd` and passes the same dot64 smoke
   vector (`24751`, `3019622`). Waveform/build outputs are ignored by Git.
+- 2026-05-30: Added the initial `q4_gemv_row_1024` RTL interface skeleton with
+  1024-wide activation/weight inputs, 16 Q2.14 group scales, busy/done, and a
+  signed 48-bit Q26 row accumulator output. The empty skeleton passes
+  `iverilog -g2012 -tnull`.
+- 2026-05-30: `q4_gemv_row_1024` now has the parallel-compute FSM draft,
+  16 generated `q4_dot_product_64` instances, and a combinational 16-way
+  scaled-sum adder draft. Elaboration with `q4_dot_product_64` passes
+  `iverilog -g2012 -tnull`; output-register logic is still pending.
+- 2026-05-30: `q4_gemv_row_1024` output logic now elaborates and passed a
+  temporary `iverilog`/`vvp` smoke simulation against Q4 artifact data for
+  `q_proj` row 0: `o_row_sum_q26 = -3482169`, matching the Python-computed
+  exact Q26 row sum.
+- 2026-05-30: Updated `q4_gemv_row_1024` comments to describe the current
+  parallel 16-dot64 architecture and added a reusable testbench at
+  `FPGA_Project/sim/tb_q4_gemv_row_1024.sv`. Running it generates
+  `FPGA_Project/wave/q4_gemv_row_1024.vcd` and passes the `q_proj` row 0 smoke
+  vector with `o_row_sum_q26 = -3482169`.
 
 Stable reference prompt:
 
