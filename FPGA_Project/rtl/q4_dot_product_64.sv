@@ -34,37 +34,37 @@ module q4_dot_product_64 # (
     parameter int SCALED_WIDTH  = 42
 )
 (
-    input  logic                                       i_clk,
-    input  logic                                       i_rst_n,
+    input  logic                                         i_clk,
+    input  logic                                         i_rst_n,
 
     // Start a new dot-product transaction when the module is not busy.
     // Keep activation_flat_i, weight_packed_i, and scale_q2_14_i stable until
     // done_o is asserted.
-    input  logic                                       i_start,
+    input  logic                                         i_start,
 
     // 64 signed int16 Q4.12 activations, flattened little-element-endian:
     // element j is activation_flat_i[ACT_WIDTH*j +: ACT_WIDTH].
-    input  logic        [GROUP_SIZE*ACT_WIDTH-1:0]     i_activation_flat,
+    input  logic        [GROUP_SIZE*ACT_WIDTH-1 : 0]     i_activation_flat,
 
     // 64 signed int4 Q4 weights packed into 32 bytes.
-    input  logic        [GROUP_SIZE*WEIGHT_WIDTH-1:0]  i_weight_packed,
+    input  logic        [GROUP_SIZE*WEIGHT_WIDTH-1 : 0]  i_weight_packed,
 
     // Unsigned Q2.14 scale for this 64-weight group.
-    input  logic        [SCALE_WIDTH-1:0]              i_scale_q2_14,
+    input  logic        [SCALE_WIDTH-1 : 0]              i_scale_q2_14,
 
     // Busy is high after start is accepted and before the result is ready.
-    output logic                                       o_busy,
+    output logic                                         o_busy,
 
     // Done should pulse for one cycle when partial_sum_o and scaled_sum_q26_o
     // are valid.
-    output logic                                       o_done,
+    output logic                                         o_done,
 
     // Raw integer sum before applying the Q2.14 scale.
-    output logic signed [PARTIAL_WIDTH-1:0]            o_partial_sum,
+    output logic signed [PARTIAL_WIDTH-1 : 0]            o_partial_sum,
 
     // Scaled integer result. The binary point is after ACT_FRAC + SCALE_FRAC
     // fractional bits, so the current Q4 v0 denominator is 2^26.
-    output logic signed [SCALED_WIDTH-1:0]             o_scaled_sum_q26
+    output logic signed [SCALED_WIDTH-1 : 0]             o_scaled_sum_q26
 );
 
     // TODO: Implement the sequential datapath.
@@ -154,6 +154,50 @@ module q4_dot_product_64 # (
                 next_state = IDLE;
             end
         endcase
+    end
+
+
+    logic signed [ACT_WIDTH-1 : 0]     current_activation;
+    logic signed [WEIGHT_WIDTH-1 : 0]  current_weight_q4;
+    logic signed [PRODUCT_WIDTH-1 : 0] current_product;
+    logic signed [SCALE_WIDTH : 0]     signed_scale_q2_14;
+
+
+    always_comb begin
+        current_activation = i_activation_flat[index*ACT_WIDTH +: ACT_WIDTH];
+        current_weight_q4  = i_weight_packed[index*WEIGHT_WIDTH +: WEIGHT_WIDTH];
+        current_product    = current_activation * current_weight_q4;
+        signed_scale_q2_14 = $signed({1'b0, i_scale_q2_14});
+    end
+
+    always_ff @(posedge i_clk or negedge i_rst_n) begin
+        if (i_rst_n == 1'b0) begin
+            o_partial_sum    <= 'd0;
+            o_scaled_sum_q26 <= 'd0;
+        end
+        else begin
+            case (current_state)
+                IDLE: begin
+                    o_partial_sum    <= 'd0;
+                    o_scaled_sum_q26 <= 'd0;
+                end
+                RUN: begin
+                    o_partial_sum    <= o_partial_sum + current_product;
+                    o_scaled_sum_q26 <= 'd0;
+                end
+                SCALE: begin
+                    o_scaled_sum_q26 <= o_partial_sum * signed_scale_q2_14;
+                end
+                DONE: begin
+                    o_partial_sum    <= o_partial_sum;
+                    o_scaled_sum_q26 <= o_scaled_sum_q26;
+                end
+                default: begin
+                    o_partial_sum    <= 'd0;
+                    o_scaled_sum_q26 <= 'd0;
+                end
+            endcase
+        end
     end
 
 endmodule

@@ -176,9 +176,9 @@ Latest results against FP32 expected Q/K/V outputs:
 
 | Matrix | Max Abs Error | Mean Abs Error | RMSE |
 | --- | ---: | ---: | ---: |
-| `q_proj` | 0.22418976 | 0.01856172 | 0.02495134 |
-| `k_proj` | 0.12317824 | 0.01752916 | 0.02286999 |
-| `v_proj` | 0.07140590 | 0.01565306 | 0.01975244 |
+| `q_proj` | 0.22418833 | 0.01856173 | 0.02495133 |
+| `k_proj` | 0.12317657 | 0.01752916 | 0.02286997 |
+| `v_proj` | 0.07140587 | 0.01565307 | 0.01975244 |
 
 The verifier also confirms exact reconstruction from packed bytes and scales,
 including the `q_proj` row 0 group 0 dot64 smoke vector.

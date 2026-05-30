@@ -55,6 +55,10 @@ build/
 *.rpx
 *.pb
 *.ltx
+*.vcd
+*.fst
+*.ghw
+*.vvp
 *.mcs
 *.mmi
 *.pdi

@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-05-29
+Last updated: 2026-05-30
 
 This file is the concise working-state handoff. For stable project context,
 read `PROJECT_CONTEXT.md` first. For workflow rules, read `AGENTS.md`.
@@ -59,6 +59,30 @@ Latest local validation:
 - 2026-05-29: `q4_dot_product_64` FSM skeleton compiles with
   `iverilog -g2012 -tnull FPGA_Project\rtl\q4_dot_product_64.sv`; datapath
   implementation is still pending.
+- 2026-05-30: On macOS, `conda run -n llm_fpga python init/verify_assets.py`
+  passed and the local Git safety hook matches `init/git-hooks/pre-commit`.
+  The ignored FP32 and Q4 vector directories were regenerated locally with
+  scripts `11_export_fpga_test_vectors.py` and `13_export_q4_gemv_vectors.py`.
+- 2026-05-30: On macOS, `12_verify_fpga_test_vectors.py` and
+  `14_verify_q4_gemv_vectors.py` both passed. The regenerated dot64 smoke
+  vector still has `partial_sum_int64 = 24751` and
+  `scaled_sum_q26_int64 = 3019622`.
+- 2026-05-30: On macOS, `iverilog -g2012 -tnull
+  FPGA_Project/rtl/q4_dot_product_64.sv` passes with the Homebrew `iverilog`;
+  datapath implementation is still pending.
+- 2026-05-30: User added the first `q4_dot_product_64` datapath draft
+  (`current_activation`, `current_weight_q4`, `current_product`, RUN
+  accumulation, and SCALE multiply). Syntax still passes with `iverilog`, but
+  review found that SCALE must convert the unsigned `i_scale_q2_14` into a
+  signed positive value before multiplying by signed `o_partial_sum`.
+- 2026-05-30: After adding signed scale conversion, `q4_dot_product_64`
+  passed a temporary `iverilog`/`vvp` smoke simulation generated from
+  `q_proj_row0_group0_dot64.npz`: `o_partial_sum = 24751` and
+  `o_scaled_sum_q26 = 3019622`.
+- 2026-05-30: Added a reusable Icarus Verilog testbench at
+  `FPGA_Project/sim/tb_q4_dot_product_64.sv`. Running it generates
+  `FPGA_Project/wave/q4_dot_product_64.vcd` and passes the same dot64 smoke
+  vector (`24751`, `3019622`). Waveform/build outputs are ignored by Git.
 
 Stable reference prompt:
 
