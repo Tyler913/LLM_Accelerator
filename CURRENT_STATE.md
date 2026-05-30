@@ -100,6 +100,21 @@ Latest local validation:
   `FPGA_Project/sim/tb_q4_gemv_row_1024.sv`. Running it generates
   `FPGA_Project/wave/q4_gemv_row_1024.vcd` and passes the `q_proj` row 0 smoke
   vector with `o_row_sum_q26 = -3482169`.
+- 2026-05-30: Added the initial `q4_gemv_tile_1024` RTL interface skeleton.
+  It parameterizes `OUT_ROWS` for 1/2/4-row parallel experiments, shares one
+  1024-wide activation input, accepts `OUT_ROWS` packed Q4 weight rows and
+  scale rows, and outputs flattened signed Q26 row results. The empty skeleton
+  passes `iverilog -g2012 -tnull`.
+- 2026-05-30: Implemented the first `q4_gemv_tile_1024` parallel row
+  controller. It pulses `OUT_ROWS` generated `q4_gemv_row_1024` instances,
+  waits for all row `done` bits, and packs the signed Q26 row outputs into
+  `o_output_flat`. Elaboration passes for `OUT_ROWS=1`, `2`, and default `4`
+  with Icarus Verilog.
+- 2026-05-30: Added a reusable `q4_gemv_tile_1024` testbench at
+  `FPGA_Project/sim/tb_q4_gemv_tile_1024.sv` plus generated hex vector files
+  under `FPGA_Project/sim/vectors/`. Running it generates
+  `FPGA_Project/wave/q4_gemv_tile_1024.vcd` and passes `q_proj` rows 0..3 with
+  Q26 outputs `[-3482169, 7403300, 4069596, -6026990]`.
 
 Stable reference prompt:
 
