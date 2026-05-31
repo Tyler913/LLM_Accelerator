@@ -22,10 +22,13 @@ module tb_q4_dot_product_64;
 
     localparam int GROUP_SIZE    = 64;
     localparam int ACT_WIDTH     = 16;
+    localparam int ACT_FRAC      = 12;
     localparam int WEIGHT_WIDTH  = 4;
     localparam int SCALE_WIDTH   = 16;
-    localparam int PARTIAL_WIDTH = 26;
-    localparam int SCALED_WIDTH  = 42;
+    localparam int SCALE_FRAC    = 14;
+    localparam int PRODUCT_WIDTH = ACT_WIDTH + WEIGHT_WIDTH;
+    localparam int PARTIAL_WIDTH = PRODUCT_WIDTH + $clog2(GROUP_SIZE);
+    localparam int SCALED_WIDTH  = PARTIAL_WIDTH + SCALE_WIDTH;
 
     localparam logic [GROUP_SIZE*ACT_WIDTH-1:0] TEST_ACTIVATION_FLAT =
         1024'h01f40103ff9df636ff5c009402e9ff06f191fde100a3fd120162ffe70074ff07fe9e04b3066dfdc9fd1cfeebfb3a022dffa3fe230450fca2e91dfcda014806e3043606ee01bd02d4df3e026300de032704c5ffdfffff017afc5afef6fa10011e0669edf1ecdd06e50391f9eb05dffc81ea89fb7709f6fcfcebcbe96b0b5c01b8;
@@ -55,7 +58,17 @@ module tb_q4_dot_product_64;
     string wavefile;
     int cycle_count;
 
-    q4_dot_product_64 dut (
+    q4_dot_product_64 #(
+        .GROUP_SIZE   (GROUP_SIZE),
+        .ACT_WIDTH    (ACT_WIDTH),
+        .ACT_FRAC     (ACT_FRAC),
+        .WEIGHT_WIDTH (WEIGHT_WIDTH),
+        .SCALE_WIDTH  (SCALE_WIDTH),
+        .SCALE_FRAC   (SCALE_FRAC),
+        .PRODUCT_WIDTH(PRODUCT_WIDTH),
+        .PARTIAL_WIDTH(PARTIAL_WIDTH),
+        .SCALED_WIDTH (SCALED_WIDTH)
+    ) dut (
         .i_clk(clk),
         .i_rst_n(rst_n),
         .i_start(start),

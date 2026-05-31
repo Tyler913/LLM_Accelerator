@@ -15,19 +15,21 @@
 //
 //   row_sum_q26 = sum_group scaled[group]
 //
-// The binary point of row_sum_q26 is after ACT_FRAC + SCALE_FRAC bits.
+// The binary point of row_sum_q26 is after ACT_FRAC + SCALE_FRAC bits. The
+// default ACT_WIDTH=24 matches the planned signed Q12.12 RMSNorm output path;
+// instantiate with ACT_WIDTH=16 for the original Q4.12 bring-up vectors.
 module q4_gemv_row_1024 # (
     parameter int INPUT_SIZE    = 1024,
     parameter int GROUP_SIZE    = 64,
     parameter int GROUP_COUNT   = INPUT_SIZE / GROUP_SIZE,
-    parameter int ACT_WIDTH     = 16,
+    parameter int ACT_WIDTH     = 24,
     parameter int ACT_FRAC      = 12,
     parameter int WEIGHT_WIDTH  = 4,
     parameter int SCALE_WIDTH   = 16,
     parameter int SCALE_FRAC    = 14,
-    parameter int PARTIAL_WIDTH = 26,
-    parameter int SCALED_WIDTH  = 42,
-    parameter int ROW_ACC_WIDTH = 48
+    parameter int PARTIAL_WIDTH = ACT_WIDTH + WEIGHT_WIDTH + $clog2(GROUP_SIZE),
+    parameter int SCALED_WIDTH  = PARTIAL_WIDTH + SCALE_WIDTH,
+    parameter int ROW_ACC_WIDTH = SCALED_WIDTH + $clog2(GROUP_COUNT) + 2
 )
 (
     input  logic                                        i_clk,
@@ -37,7 +39,7 @@ module q4_gemv_row_1024 # (
     // Keep all input buses stable until o_done is asserted.
     input  logic                                        i_start,
 
-    // 1024 signed int16 Q4.12 activations, flattened little-element-endian:
+    // INPUT_SIZE signed fixed-point activations, flattened little-element-endian:
     // element j is i_activation_flat[ACT_WIDTH*j +: ACT_WIDTH].
     input  logic        [INPUT_SIZE*ACT_WIDTH-1 : 0]    i_activation_flat,
 
@@ -145,7 +147,7 @@ module q4_gemv_row_1024 # (
     logic        [GROUP_COUNT-1 : 0]   instant_done;
     logic signed [PARTIAL_WIDTH-1 : 0] instant_partial_sum    [GROUP_COUNT];
     logic signed [SCALED_WIDTH-1 : 0]  instant_scaled_sum_q26 [GROUP_COUNT];
-    logic signed [ROW_ACC_WIDTH-1 : 0] row_16_instant_scaled_sum;
+    logic signed [ROW_ACC_WIDTH-1 : 0] row_instant_scaled_sum;
 
     assign parallel_compute_done = &instant_done;
     assign instant_start         = (current_state == IDLE) && (i_start == 1'b1);
@@ -154,7 +156,17 @@ module q4_gemv_row_1024 # (
 
     generate
         for (group_index = 0 ; group_index < GROUP_COUNT ; group_index = group_index + 1) begin : gen_q4_dot_product_64
-            q4_dot_product_64 inst_q4_dot_product_64 (
+            q4_dot_product_64 #(
+                .GROUP_SIZE    (GROUP_SIZE),
+                .ACT_WIDTH     (ACT_WIDTH),
+                .ACT_FRAC      (ACT_FRAC),
+                .WEIGHT_WIDTH  (WEIGHT_WIDTH),
+                .SCALE_WIDTH   (SCALE_WIDTH),
+                .SCALE_FRAC    (SCALE_FRAC),
+                .PRODUCT_WIDTH (ACT_WIDTH + WEIGHT_WIDTH),
+                .PARTIAL_WIDTH (PARTIAL_WIDTH),
+                .SCALED_WIDTH  (SCALED_WIDTH)
+            ) inst_q4_dot_product_64 (
                 .i_clk             (i_clk),
                 .i_rst_n           (i_rst_n),
 
@@ -174,10 +186,10 @@ module q4_gemv_row_1024 # (
     integer i;
 
     always @* begin
-        row_16_instant_scaled_sum = 'd0;
+        row_instant_scaled_sum = 'd0;
 
         for (i = 0 ; i < GROUP_COUNT ; i = i + 1) begin
-            row_16_instant_scaled_sum = row_16_instant_scaled_sum + $signed({{(ROW_ACC_WIDTH-SCALED_WIDTH){instant_scaled_sum_q26[i][SCALED_WIDTH-1]}}, instant_scaled_sum_q26[i]});
+            row_instant_scaled_sum = row_instant_scaled_sum + $signed({{(ROW_ACC_WIDTH-SCALED_WIDTH){instant_scaled_sum_q26[i][SCALED_WIDTH-1]}}, instant_scaled_sum_q26[i]});
         end
     end
 
@@ -189,7 +201,7 @@ module q4_gemv_row_1024 # (
             case (current_state)
                 IDLE:             o_row_sum_q26 <= 'd0;
                 PARALLEL_COMPUTE: o_row_sum_q26 <= 'd0;
-                ACCUMULATE:       o_row_sum_q26 <= row_16_instant_scaled_sum;
+                ACCUMULATE:       o_row_sum_q26 <= row_instant_scaled_sum;
                 DONE:             o_row_sum_q26 <= o_row_sum_q26;
                 default:          o_row_sum_q26 <= 'd0;
             endcase

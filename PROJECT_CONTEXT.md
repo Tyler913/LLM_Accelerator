@@ -273,6 +273,63 @@ non-matrix parameters such as RMSNorm gamma, Q4 scales, metadata, activations,
 accumulators, and KV cache may use simpler fixed-point or FP16-style formats as
 explicitly chosen, but they do not relax the Q4 requirement for large weights.
 
+## RMSNorm Range Calibration
+
+The current RMSNorm range profiling script is:
+
+```bash
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/16_profile_rmsnorm_ranges.py
+```
+
+It hooks all 113 RMSNorm modules in `Qwen3-0.6B-Base`:
+
+- 28 input layer norms
+- 28 post-attention layer norms
+- 28 q_norm modules
+- 28 k_norm modules
+- 1 final norm
+
+The 2026-05-31 prompt-suite run covered 8 prompts from a one-character input
+through a long technical paragraph, for 257 prompt tokens total, plus one
+generated feedback token per prompt. The observed maxima were:
+
+| Quantity | Observed Max |
+| --- | ---: |
+| RMSNorm input max abs | about `6691.77` |
+| RMSNorm output max abs | about `588.13` |
+| RMSNorm gamma max abs | `192` |
+| inv_rms max | about `46.08` |
+| sum_squares max | about `4.55e7` |
+
+This is a calibration suite, not a proof over all possible prompts. Still, it
+is much broader than the Layer 0 single-token bring-up vector and shows that a
+single global signed int16 `Q4.12` activation format is not safe for full-model
+RMSNorm/residual streams.
+
+Current conservative starting formats for RMSNorm RTL planning:
+
+- residual/RMSNorm input: signed 24-bit `Q14.10`
+- RMSNorm output: signed 24-bit `Q12.12`
+- RMSNorm gamma: unsigned 16-bit `UQ8.8`
+- inv_rms: unsigned 24-bit `UQ8.16`
+- sum_squares accumulator: unsigned 64-bit
+
+Layer 0 `Q4.12` remains useful as a small bring-up vector and for the existing
+Q4 GEMV tests, but it should not be treated as the durable full-model
+activation format without per-buffer scaling, a wider format, or an explicit
+clamp policy.
+
+The current Q4 GEMV RTL defaults to `ACT_WIDTH=24` for the planned signed
+`Q12.12` RMSNorm output path. Its internal widths are derived from
+`ACT_WIDTH`, so the original 16-bit `Q4.12` bring-up tests remain supported by
+explicitly instantiating GEMV with `ACT_WIDTH=16`. With the current group size
+and Q2.14 scales, the default 24-bit path derives:
+
+- product width: 28 bits
+- 64-lane partial width: 34 bits
+- scaled group width: 50 bits
+- 16-group row accumulator width: 56 bits
+
 ## Immediate Technical Direction
 
 The current phase is FPGA bring-up:

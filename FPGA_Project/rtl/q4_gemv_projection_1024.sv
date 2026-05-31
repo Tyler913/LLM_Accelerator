@@ -21,21 +21,23 @@
 //
 // TILE_ROWS controls how many rows the reused tile computes in parallel.
 // The first bring-up target uses TILE_ROWS=4, matching q4_gemv_tile_1024's
-// default architecture. OUT_FEATURES must be divisible by TILE_ROWS.
+// default architecture. OUT_FEATURES must be divisible by TILE_ROWS. The
+// default ACT_WIDTH=24 matches the planned signed Q12.12 RMSNorm output path;
+// instantiate with ACT_WIDTH=16 for the original Q4.12 bring-up vectors.
 module q4_gemv_projection_1024 # (
     parameter int OUT_FEATURES  = 2048,
     parameter int TILE_ROWS     = 4,
     parameter int INPUT_SIZE    = 1024,
     parameter int GROUP_SIZE    = 64,
     parameter int GROUP_COUNT   = INPUT_SIZE / GROUP_SIZE,
-    parameter int ACT_WIDTH     = 16,
+    parameter int ACT_WIDTH     = 24,
     parameter int ACT_FRAC      = 12,
     parameter int WEIGHT_WIDTH  = 4,
     parameter int SCALE_WIDTH   = 16,
     parameter int SCALE_FRAC    = 14,
-    parameter int PARTIAL_WIDTH = 26,
-    parameter int SCALED_WIDTH  = 42,
-    parameter int ROW_ACC_WIDTH = 48
+    parameter int PARTIAL_WIDTH = ACT_WIDTH + WEIGHT_WIDTH + $clog2(GROUP_SIZE),
+    parameter int SCALED_WIDTH  = PARTIAL_WIDTH + SCALE_WIDTH,
+    parameter int ROW_ACC_WIDTH = SCALED_WIDTH + $clog2(GROUP_COUNT) + 2
 )
 (
     input  logic                                              i_clk,
@@ -45,7 +47,7 @@ module q4_gemv_projection_1024 # (
     // Keep activation, weights, and scales stable until o_done is asserted.
     input  logic                                              i_start,
 
-    // Shared 1024 signed int16 Q4.12 activation vector.
+    // Shared INPUT_SIZE signed fixed-point activation vector.
     input  logic [INPUT_SIZE*ACT_WIDTH-1 : 0]                 i_activation_flat,
 
     // Full packed Q4 projection matrix. Row r is:

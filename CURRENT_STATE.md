@@ -47,6 +47,7 @@ conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/12_verify_fpga_t
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/13_export_q4_gemv_vectors.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/14_verify_q4_gemv_vectors.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/15_export_q4_projection_vectors.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/16_profile_rmsnorm_ranges.py
 ```
 
 Latest local validation:
@@ -134,6 +135,28 @@ Latest local validation:
   The real projection simulation covers four sequential 4-row tiles and passes
   with exact Q26 outputs for all 16 rows; the testbench reported 284 waited
   cycles after start.
+- 2026-05-31: Added `16_profile_rmsnorm_ranges.py` to profile all RMSNorm
+  modules. The latest run used 8 prompts ranging from one character to a long
+  technical paragraph, covering 257 prompt tokens plus one generated feedback
+  token per prompt. It hooked 113 RMSNorm modules and found full-model
+  residual/RMSNorm ranges far beyond the Layer 0 bring-up vector:
+  global input max abs about `6691.77`, global output max abs about `588.13`,
+  gamma max abs `192`, inv_rms max about `46.08`, and sum_squares max about
+  `4.55e7`. A single global signed int16 activation format would need roughly
+  `Q14.2`; current conservative RMSNorm RTL planning should use wider formats
+  such as signed 24-bit `Q14.10` input, signed 24-bit `Q12.12` output,
+  unsigned 16-bit `UQ8.8` gamma, unsigned 24-bit `UQ8.16` inv_rms, and a
+  64-bit sum_squares accumulator.
+- 2026-05-31: Updated the Q4 GEMV RTL stack so product, partial, scaled, and
+  row-accumulator widths are derived from `ACT_WIDTH`, and passed parameters
+  all the way from projection/tile/row down to `q4_dot_product_64`. The RTL now
+  defaults to `ACT_WIDTH=24` for the planned signed Q12.12 RMSNorm output path.
+  Existing 16-bit Q4.12 dot/row/tile/projection smoke tests explicitly override
+  `ACT_WIDTH=16` and still pass. The real projection test uses the 24-bit path,
+  sign-extends the original Q4.12 activation vector to Q12.12, and passes q_proj
+  rows 0..15 with exact Q26 outputs. Icarus elaboration also passes for the
+  default-width q_proj (`OUT_FEATURES=2048`) and k/v-style (`OUT_FEATURES=1024`)
+  projection configurations.
 
 Stable reference prompt:
 
@@ -252,9 +275,10 @@ Use the working AXI path as the base for real PL-first RTL development:
 4. Continue refining `FPGA_MEMORY_MAP.md` when PL DDR4 is instantiated,
    especially PL DDR4 base/range, usable capacity, PS-to-PL transfer path, and
    Q4/KV/activation budgets.
-5. Extend projection-level validation beyond `q_proj` rows 0..15 if useful
-   (for example `q_proj` rows 0..63 or k/v rows 0..15), then decide whether to
-   continue into RMSNorm RTL or a memory-mapped PS-driven wrapper.
+5. Start RMSNorm RTL planning from the prompt-suite profile: signed 24-bit
+   `Q14.10` input, signed 24-bit `Q12.12` output, unsigned 16-bit `UQ8.8`
+   gamma, unsigned 24-bit `UQ8.16` inv_rms, and a 64-bit sum_squares
+   accumulator unless a per-buffer scaling strategy is deliberately chosen.
 6. Extend the vector exporter as new hardware blocks are added, especially
    RMSNorm fixed-point vectors, full Q/K/V GEMV tile batches, RoPE, KV cache
    append/read, attention, MLP, and complete Layer 0 cached decode.

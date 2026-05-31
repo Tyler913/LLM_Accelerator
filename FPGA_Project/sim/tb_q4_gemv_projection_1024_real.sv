@@ -1,7 +1,8 @@
 `timescale 1ns/1ps
 `default_nettype none
 
-// Real-vector smoke test for q4_gemv_projection_1024.
+// Real-vector smoke test for q4_gemv_projection_1024 with a 24-bit activation
+// interface.
 //
 // Stimulus:
 //   q_proj rows 0..15 from qkv_layer0_last_token_q4.npz
@@ -11,6 +12,11 @@
 //   tile 1: rows 4..7
 //   tile 2: rows 8..11
 //   tile 3: rows 12..15
+//
+// The source activation vector is the original 16-bit Q4.12 bring-up vector.
+// This test sign-extends it to 24-bit Q12.12 to verify that the GEMV parameter
+// chain works with the planned wider RMSNorm output path. The numeric Q26
+// outputs are unchanged by sign extension because ACT_FRAC remains 12.
 //
 // Run from the repository root:
 //
@@ -32,10 +38,15 @@ module tb_q4_gemv_projection_1024_real;
     localparam int INPUT_SIZE    = 1024;
     localparam int GROUP_SIZE    = 64;
     localparam int GROUP_COUNT   = INPUT_SIZE / GROUP_SIZE;
-    localparam int ACT_WIDTH     = 16;
+    localparam int SOURCE_ACT_WIDTH = 16;
+    localparam int ACT_WIDTH     = 24;
     localparam int WEIGHT_WIDTH  = 4;
     localparam int SCALE_WIDTH   = 16;
-    localparam int ROW_ACC_WIDTH = 48;
+    localparam int EXPECTED_WIDTH = 48;
+    localparam int PRODUCT_WIDTH = ACT_WIDTH + WEIGHT_WIDTH;
+    localparam int PARTIAL_WIDTH = PRODUCT_WIDTH + $clog2(GROUP_SIZE);
+    localparam int SCALED_WIDTH  = PARTIAL_WIDTH + SCALE_WIDTH;
+    localparam int ROW_ACC_WIDTH = SCALED_WIDTH + $clog2(GROUP_COUNT) + 2;
 
     logic clk;
     logic rst_n;
@@ -47,9 +58,10 @@ module tb_q4_gemv_projection_1024_real;
     logic done;
     logic [OUT_FEATURES*ROW_ACC_WIDTH-1:0] output_flat;
 
-    logic [ACT_WIDTH-1:0] activation_mem [0:INPUT_SIZE-1];
+    logic [SOURCE_ACT_WIDTH-1:0] activation_mem [0:INPUT_SIZE-1];
     logic [WEIGHT_WIDTH-1:0] weight_mem [0:OUT_FEATURES*INPUT_SIZE-1];
     logic [SCALE_WIDTH-1:0] scale_mem [0:OUT_FEATURES*GROUP_COUNT-1];
+    logic signed [EXPECTED_WIDTH-1:0] expected_mem_raw [0:OUT_FEATURES-1];
     logic signed [ROW_ACC_WIDTH-1:0] expected_mem [0:OUT_FEATURES-1];
     logic signed [ROW_ACC_WIDTH-1:0] observed_mem [0:OUT_FEATURES-1];
 
@@ -64,8 +76,10 @@ module tb_q4_gemv_projection_1024_real;
     integer mismatch_count;
 
     q4_gemv_projection_1024 #(
-        .OUT_FEATURES(OUT_FEATURES),
-        .TILE_ROWS   (TILE_ROWS)
+        .OUT_FEATURES (OUT_FEATURES),
+        .TILE_ROWS    (TILE_ROWS),
+        .ACT_WIDTH    (ACT_WIDTH),
+        .ROW_ACC_WIDTH(ROW_ACC_WIDTH)
     ) dut (
         .i_clk               (clk),
         .i_rst_n             (rst_n),
@@ -96,7 +110,7 @@ module tb_q4_gemv_projection_1024_real;
             $readmemh({vector_dir, "/", prefix, "_activation.hex"}, activation_mem);
             $readmemh({vector_dir, "/", prefix, "_weight.hex"}, weight_mem);
             $readmemh({vector_dir, "/", prefix, "_scale.hex"}, scale_mem);
-            $readmemh({vector_dir, "/", prefix, "_expected.hex"}, expected_mem);
+            $readmemh({vector_dir, "/", prefix, "_expected.hex"}, expected_mem_raw);
         end
     endtask
 
@@ -108,10 +122,15 @@ module tb_q4_gemv_projection_1024_real;
 
             for (input_index = 0; input_index < INPUT_SIZE; input_index = input_index + 1) begin
                 activation_flat[input_index*ACT_WIDTH +: ACT_WIDTH] =
-                    activation_mem[input_index];
+                    {{(ACT_WIDTH-SOURCE_ACT_WIDTH){activation_mem[input_index][SOURCE_ACT_WIDTH-1]}},
+                     activation_mem[input_index]};
             end
 
             for (row_index = 0; row_index < OUT_FEATURES; row_index = row_index + 1) begin
+                expected_mem[row_index] =
+                    {{(ROW_ACC_WIDTH-EXPECTED_WIDTH){expected_mem_raw[row_index][EXPECTED_WIDTH-1]}},
+                     expected_mem_raw[row_index]};
+
                 for (input_index = 0; input_index < INPUT_SIZE; input_index = input_index + 1) begin
                     weight_packed_flat[(row_index*INPUT_SIZE + input_index)*WEIGHT_WIDTH +: WEIGHT_WIDTH] =
                         weight_mem[row_index*INPUT_SIZE + input_index];
@@ -162,7 +181,7 @@ module tb_q4_gemv_projection_1024_real;
         end
 
         #1;
-        $display("q4_gemv_projection_1024 real q_proj rows 0..15 test");
+        $display("q4_gemv_projection_1024 real q_proj rows 0..15 ACT_WIDTH=24 test");
         $display("  cycles waited after start = %0d", cycle_count);
 
         for (row_index = 0; row_index < OUT_FEATURES; row_index = row_index + 1) begin

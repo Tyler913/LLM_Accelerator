@@ -34,5 +34,7 @@ Script map:
   dot64 smoke data, and reconstructed Q/K/V GEMV outputs
 - `15_export_q4_projection_vectors.py`: exports real q_proj rows 0..15 hex
   vectors for the projection-level RTL testbench
+- `16_profile_rmsnorm_ranges.py`: profiles RMSNorm input/output/gamma/inv_rms
+  ranges across all model RMSNorm modules for the reference prompt path
 - `run_all_module_validations.py`: runs the core validation scripts `01`-`10`
   in order

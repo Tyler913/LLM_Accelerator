@@ -21,20 +21,22 @@
 //     2^(ACT_FRAC + SCALE_FRAC)
 //
 // OUT_ROWS is intentionally parameterized so Vivado can be tried with
-// OUT_ROWS=1, 2, and 4 on the XCZU2EG target.
+// OUT_ROWS=1, 2, and 4 on the XCZU2EG target. The default ACT_WIDTH=24 matches
+// the planned signed Q12.12 RMSNorm output interface; instantiate with
+// ACT_WIDTH=16 for the original Q4.12 bring-up vectors.
 module q4_gemv_tile_1024 # (
     parameter int OUT_ROWS      = 4,
     parameter int INPUT_SIZE    = 1024,
     parameter int GROUP_SIZE    = 64,
     parameter int GROUP_COUNT   = INPUT_SIZE / GROUP_SIZE,
-    parameter int ACT_WIDTH     = 16,
+    parameter int ACT_WIDTH     = 24,
     parameter int ACT_FRAC      = 12,
     parameter int WEIGHT_WIDTH  = 4,
     parameter int SCALE_WIDTH   = 16,
     parameter int SCALE_FRAC    = 14,
-    parameter int PARTIAL_WIDTH = 26,
-    parameter int SCALED_WIDTH  = 42,
-    parameter int ROW_ACC_WIDTH = 48
+    parameter int PARTIAL_WIDTH = ACT_WIDTH + WEIGHT_WIDTH + $clog2(GROUP_SIZE),
+    parameter int SCALED_WIDTH  = PARTIAL_WIDTH + SCALE_WIDTH,
+    parameter int ROW_ACC_WIDTH = SCALED_WIDTH + $clog2(GROUP_COUNT) + 2
 )
 (
     input  logic                                          i_clk,
@@ -44,7 +46,7 @@ module q4_gemv_tile_1024 # (
     // busy. Keep all input buses stable until o_done is asserted.
     input  logic                                          i_start,
 
-    // Shared 1024 signed int16 Q4.12 activation vector. Element j is:
+    // Shared INPUT_SIZE signed fixed-point activation vector. Element j is:
     // i_activation_flat[ACT_WIDTH*j +: ACT_WIDTH].
     input  logic [INPUT_SIZE*ACT_WIDTH-1 : 0]             i_activation_flat,
 

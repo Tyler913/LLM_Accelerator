@@ -13,6 +13,10 @@
 //   scaled_sum_q26 = partial_sum * scale_q2_14
 //   float_value = scaled_sum_q26 / 2^(ACT_FRAC + SCALE_FRAC)
 //
+// The default ACT_WIDTH=24 matches the planned signed Q12.12 RMSNorm output
+// path. The width parameters are derived so the same datapath can also be
+// instantiated with ACT_WIDTH=16 for the original Q4.12 bring-up vectors.
+//
 // Packing contract:
 //
 //   activation_flat_i[ACT_WIDTH*j +: ACT_WIDTH] holds activation[j].
@@ -24,14 +28,14 @@
 // Implementation is intentionally left for hand-written RTL practice.
 module q4_dot_product_64 # (
     parameter int GROUP_SIZE    = 64,
-    parameter int ACT_WIDTH     = 16,
+    parameter int ACT_WIDTH     = 24,
     parameter int ACT_FRAC      = 12,
     parameter int WEIGHT_WIDTH  = 4,
     parameter int SCALE_WIDTH   = 16,
     parameter int SCALE_FRAC    = 14,
-    parameter int PRODUCT_WIDTH = 20,
-    parameter int PARTIAL_WIDTH = 26,
-    parameter int SCALED_WIDTH  = 42
+    parameter int PRODUCT_WIDTH = ACT_WIDTH + WEIGHT_WIDTH,
+    parameter int PARTIAL_WIDTH = PRODUCT_WIDTH + $clog2(GROUP_SIZE),
+    parameter int SCALED_WIDTH  = PARTIAL_WIDTH + SCALE_WIDTH
 )
 (
     input  logic                                         i_clk,
@@ -42,7 +46,7 @@ module q4_dot_product_64 # (
     // done_o is asserted.
     input  logic                                         i_start,
 
-    // 64 signed int16 Q4.12 activations, flattened little-element-endian:
+    // GROUP_SIZE signed fixed-point activations, flattened little-element-endian:
     // element j is activation_flat_i[ACT_WIDTH*j +: ACT_WIDTH].
     input  logic        [GROUP_SIZE*ACT_WIDTH-1 : 0]     i_activation_flat,
 
