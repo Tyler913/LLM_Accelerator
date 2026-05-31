@@ -157,6 +157,17 @@ Latest local validation:
   rows 0..15 with exact Q26 outputs. Icarus elaboration also passes for the
   default-width q_proj (`OUT_FEATURES=2048`) and k/v-style (`OUT_FEATURES=1024`)
   projection configurations.
+- 2026-05-31: Added RMSNorm RTL interface skeletons:
+  `rmsnorm_sum_squares_1024.sv`, `fixed_sqrt_u64.sv`, `fixed_udiv.sv`,
+  `rmsnorm_apply_1024.sv`, and `rmsnorm_1024.sv`. These files currently define
+  parameters, ports, fixed-point contracts, and TODO placeholders only; datapath
+  and FSM implementation are intentionally pending for step-by-step RTL work.
+- 2026-05-31: Implemented `rmsnorm_sum_squares_1024.sv` as a serial
+  square-and-accumulate stage with an `IDLE/RUN/DONE` FSM. It accepts a
+  flattened signed Q14.10 input vector, squares one element per cycle, and
+  accumulates into a 64-bit unsigned Q20-scaled sum. Added
+  `tb_rmsnorm_sum_squares_1024.sv` as a small 8-element smoke test; it passes
+  with `sum_squares = 31457454`.
 
 Stable reference prompt:
 
