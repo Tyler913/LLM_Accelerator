@@ -32,5 +32,7 @@ Script map:
   Q/K/V GEMV vectors from the FP32 vector artifact
 - `14_verify_q4_gemv_vectors.py`: verifies Q4 packing, fixed-point scales,
   dot64 smoke data, and reconstructed Q/K/V GEMV outputs
+- `15_export_q4_projection_vectors.py`: exports real q_proj rows 0..15 hex
+  vectors for the projection-level RTL testbench
 - `run_all_module_validations.py`: runs the core validation scripts `01`-`10`
   in order

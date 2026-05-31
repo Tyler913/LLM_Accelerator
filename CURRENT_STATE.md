@@ -46,6 +46,7 @@ conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/run_all_module_v
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/12_verify_fpga_test_vectors.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/13_export_q4_gemv_vectors.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/14_verify_q4_gemv_vectors.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/15_export_q4_projection_vectors.py
 ```
 
 Latest local validation:
@@ -127,6 +128,12 @@ Latest local validation:
   by repeating the existing `q_proj` rows 0..3 vector; it passes with the
   expected repeated Q26 outputs. Icarus elaboration also passes for the default
   `OUT_FEATURES=2048` q_proj-style case and `OUT_FEATURES=1024` k/v-style case.
+- 2026-05-31: Added `15_export_q4_projection_vectors.py` and
+  `tb_q4_gemv_projection_1024_real.sv`. The exporter writes real `q_proj`
+  rows 0..15 projection hex vectors from `qkv_layer0_last_token_q4.npz`.
+  The real projection simulation covers four sequential 4-row tiles and passes
+  with exact Q26 outputs for all 16 rows; the testbench reported 284 waited
+  cycles after start.
 
 Stable reference prompt:
 
@@ -245,9 +252,9 @@ Use the working AXI path as the base for real PL-first RTL development:
 4. Continue refining `FPGA_MEMORY_MAP.md` when PL DDR4 is instantiated,
    especially PL DDR4 base/range, usable capacity, PS-to-PL transfer path, and
    Q4/KV/activation budgets.
-5. Extend projection-level validation from the repeated 8-row smoke test to
-   real Layer 0 Q/K/V tiles from `qkv_layer0_last_token_q4.npz`, then decide
-   whether to continue into RMSNorm RTL or a memory-mapped PS-driven wrapper.
+5. Extend projection-level validation beyond `q_proj` rows 0..15 if useful
+   (for example `q_proj` rows 0..63 or k/v rows 0..15), then decide whether to
+   continue into RMSNorm RTL or a memory-mapped PS-driven wrapper.
 6. Extend the vector exporter as new hardware blocks are added, especially
    RMSNorm fixed-point vectors, full Q/K/V GEMV tile batches, RoPE, KV cache
    append/read, attention, MLP, and complete Layer 0 cached decode.
