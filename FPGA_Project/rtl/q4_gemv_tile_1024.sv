@@ -37,35 +37,35 @@ module q4_gemv_tile_1024 # (
     parameter int ROW_ACC_WIDTH = 48
 )
 (
-    input  logic                                                 i_clk,
-    input  logic                                                 i_rst_n,
+    input  logic                                          i_clk,
+    input  logic                                          i_rst_n,
 
     // Start a new OUT_ROWS-row GEMV tile transaction when the module is not
     // busy. Keep all input buses stable until o_done is asserted.
-    input  logic                                                 i_start,
+    input  logic                                          i_start,
 
     // Shared 1024 signed int16 Q4.12 activation vector. Element j is:
     // i_activation_flat[ACT_WIDTH*j +: ACT_WIDTH].
-    input  logic        [INPUT_SIZE*ACT_WIDTH-1 : 0]             i_activation_flat,
+    input  logic [INPUT_SIZE*ACT_WIDTH-1 : 0]             i_activation_flat,
 
     // OUT_ROWS packed Q4 weight rows. Row r is:
     // i_weight_packed_flat[INPUT_SIZE*WEIGHT_WIDTH*r +:
     //                      INPUT_SIZE*WEIGHT_WIDTH].
-    input  logic        [OUT_ROWS*INPUT_SIZE*WEIGHT_WIDTH-1 : 0] i_weight_packed_flat,
+    input  logic [OUT_ROWS*INPUT_SIZE*WEIGHT_WIDTH-1 : 0] i_weight_packed_flat,
 
     // OUT_ROWS scale rows. Row r contains GROUP_COUNT unsigned Q2.14 scales:
     // i_scale_flat[GROUP_COUNT*SCALE_WIDTH*r +: GROUP_COUNT*SCALE_WIDTH].
-    input  logic        [OUT_ROWS*GROUP_COUNT*SCALE_WIDTH-1 : 0] i_scale_flat,
+    input  logic [OUT_ROWS*GROUP_COUNT*SCALE_WIDTH-1 : 0] i_scale_flat,
 
     // Busy is high after start is accepted and before the tile result is ready.
-    output logic                                                 o_busy,
+    output logic                                          o_busy,
 
     // Done should pulse for one cycle when all OUT_ROWS output lanes are valid.
-    output logic                                                 o_done,
+    output logic                                          o_done,
 
     // OUT_ROWS signed Q26 row results, flattened little-row-endian.
     // Row r is o_output_flat[ROW_ACC_WIDTH*r +: ROW_ACC_WIDTH].
-    output logic        [OUT_ROWS*ROW_ACC_WIDTH-1 : 0]           o_output_flat
+    output logic [OUT_ROWS*ROW_ACC_WIDTH-1 : 0]           o_output_flat
 );
 
     // OUT_ROWS parallel row controller.
@@ -109,7 +109,7 @@ module q4_gemv_tile_1024 # (
             IDLE: begin
                 if (i_start == 1'b1) begin
                     next_state = PARALLEL_ROWS;
-                    o_busy = 1'b1;
+                    o_busy     = 1'b1;
                 end
             end
 
@@ -121,7 +121,7 @@ module q4_gemv_tile_1024 # (
             end
 
             DONE: begin
-                o_done = 1'b1;
+                o_done     = 1'b1;
                 next_state = IDLE;
             end
 
@@ -135,16 +135,28 @@ module q4_gemv_tile_1024 # (
 
     generate
         for (row_index = 0; row_index < OUT_ROWS; row_index = row_index + 1) begin : gen_q4_gemv_row_1024
-            q4_gemv_row_1024 inst_q4_gemv_row_1024 (
-                .i_clk            (i_clk),
-                .i_rst_n          (i_rst_n),
-                .i_start          (row_start),
-                .i_activation_flat(i_activation_flat),
-                .i_weight_packed  (i_weight_packed_flat[row_index*INPUT_SIZE*WEIGHT_WIDTH +: INPUT_SIZE*WEIGHT_WIDTH]),
-                .i_scale_flat     (i_scale_flat[row_index*GROUP_COUNT*SCALE_WIDTH +: GROUP_COUNT*SCALE_WIDTH]),
-                .o_busy           (row_busy[row_index]),
-                .o_done           (row_done[row_index]),
-                .o_row_sum_q26    (row_output[row_index])
+            q4_gemv_row_1024 #(
+                .INPUT_SIZE    (INPUT_SIZE),
+                .GROUP_SIZE    (GROUP_SIZE),
+                .GROUP_COUNT   (GROUP_COUNT),
+                .ACT_WIDTH     (ACT_WIDTH),
+                .ACT_FRAC      (ACT_FRAC),
+                .WEIGHT_WIDTH  (WEIGHT_WIDTH),
+                .SCALE_WIDTH   (SCALE_WIDTH),
+                .SCALE_FRAC    (SCALE_FRAC),
+                .PARTIAL_WIDTH (PARTIAL_WIDTH),
+                .SCALED_WIDTH  (SCALED_WIDTH),
+                .ROW_ACC_WIDTH (ROW_ACC_WIDTH)
+            ) inst_q4_gemv_row_1024 (
+                .i_clk             (i_clk),
+                .i_rst_n           (i_rst_n),
+                .i_start           (row_start),
+                .i_activation_flat (i_activation_flat),
+                .i_weight_packed   (i_weight_packed_flat[row_index*INPUT_SIZE*WEIGHT_WIDTH +: INPUT_SIZE*WEIGHT_WIDTH]),
+                .i_scale_flat      (i_scale_flat[row_index*GROUP_COUNT*SCALE_WIDTH +: GROUP_COUNT*SCALE_WIDTH]),
+                .o_busy            (row_busy[row_index]),
+                .o_done            (row_done[row_index]),
+                .o_row_sum_q26     (row_output[row_index])
             );
 
             assign o_output_flat[row_index*ROW_ACC_WIDTH +: ROW_ACC_WIDTH] = row_output[row_index];

@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-05-30
+Last updated: 2026-05-31
 
 This file is the concise working-state handoff. For stable project context,
 read `PROJECT_CONTEXT.md` first. For workflow rules, read `AGENTS.md`.
@@ -115,6 +115,18 @@ Latest local validation:
   under `FPGA_Project/sim/vectors/`. Running it generates
   `FPGA_Project/wave/q4_gemv_tile_1024.vcd` and passes `q_proj` rows 0..3 with
   Q26 outputs `[-3482169, 7403300, 4069596, -6026990]`.
+- 2026-05-31: Re-read the project docs and current Q4 RTL stack. Re-ran
+  `12_verify_fpga_test_vectors.py` and `14_verify_q4_gemv_vectors.py` with
+  `conda run -n llm_fpga`; both passed. Rebuilt and reran the Icarus
+  testbenches for `q4_dot_product_64`, `q4_gemv_row_1024`, and
+  `q4_gemv_tile_1024`; all three smoke tests passed with the expected Q26
+  results.
+- 2026-05-31: Added `q4_gemv_projection_1024`, a projection-level controller
+  that reuses one `q4_gemv_tile_1024` engine across serial output-row tiles.
+  Added `tb_q4_gemv_projection_1024.sv`, which runs two sequential 4-row tiles
+  by repeating the existing `q_proj` rows 0..3 vector; it passes with the
+  expected repeated Q26 outputs. Icarus elaboration also passes for the default
+  `OUT_FEATURES=2048` q_proj-style case and `OUT_FEATURES=1024` k/v-style case.
 
 Stable reference prompt:
 
@@ -233,13 +245,12 @@ Use the working AXI path as the base for real PL-first RTL development:
 4. Continue refining `FPGA_MEMORY_MAP.md` when PL DDR4 is instantiated,
    especially PL DDR4 base/range, usable capacity, PS-to-PL transfer path, and
    Q4/KV/activation budgets.
-5. Implement `q4_dot_product_64` against `q_proj_row0_group0_dot64.npz`:
-   unpack 64 signed int4 weights, multiply by 64 signed `Q4.12` activations,
-   accumulate the raw partial sum, then multiply by the unsigned `Q2.14` scale.
-   RMSNorm remains the next activation-side block.
+5. Extend projection-level validation from the repeated 8-row smoke test to
+   real Layer 0 Q/K/V tiles from `qkv_layer0_last_token_q4.npz`, then decide
+   whether to continue into RMSNorm RTL or a memory-mapped PS-driven wrapper.
 6. Extend the vector exporter as new hardware blocks are added, especially
-   RoPE, KV cache append/read, attention, MLP, and complete Layer 0 cached
-   decode.
+   RMSNorm fixed-point vectors, full Q/K/V GEMV tile batches, RoPE, KV cache
+   append/read, attention, MLP, and complete Layer 0 cached decode.
 
 ## Practical Notes
 
