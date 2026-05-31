@@ -36,5 +36,7 @@ Script map:
   vectors for the projection-level RTL testbench
 - `16_profile_rmsnorm_ranges.py`: profiles RMSNorm input/output/gamma/inv_rms
   ranges across all model RMSNorm modules for the reference prompt path
+- `17_export_rmsnorm_fixed_vectors.py`: exports real Layer 0 RMSNorm
+  fixed-point hex vectors for the `rmsnorm_1024` RTL testbench
 - `run_all_module_validations.py`: runs the core validation scripts `01`-`10`
   in order

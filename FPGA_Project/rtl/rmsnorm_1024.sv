@@ -63,7 +63,262 @@ module rmsnorm_1024 #(
     output logic [INV_RMS_WIDTH-1 : 0]                o_inv_rms
 );
 
-    // TODO: Implement the RMSNorm controller and instantiate the submodules.
+    localparam IDLE        = 4'd0;
+    localparam START_SUM   = 4'd1;
+    localparam WAIT_SUM    = 4'd2;
+    localparam START_SQRT  = 4'd3;
+    localparam WAIT_SQRT   = 4'd4;
+    localparam START_DIV   = 4'd5;
+    localparam WAIT_DIV    = 4'd6;
+    localparam START_APPLY = 4'd7;
+    localparam WAIT_APPLY  = 4'd8;
+    localparam DONE        = 4'd9;
+
+    localparam logic [DIV_NUM_WIDTH-1 : 0] DIV_NUMERATOR_VALUE =
+        ({{(DIV_NUM_WIDTH-1){1'b0}}, 1'b1} << DIV_NUM_SHIFT);
+
+    logic [3 : 0]                         current_state;
+    logic [3 : 0]                         next_state;
+
+    logic                                 sum_start;
+    logic                                 sum_busy;
+    logic                                 sum_done;
+    logic [SUM_WIDTH-1 : 0]               sum_squares;
+
+    logic                                 sqrt_start;
+    logic                                 sqrt_busy;
+    logic                                 sqrt_done;
+    logic [SUM_WIDTH-1 : 0]               sqrt_radicand;
+    logic [RMS_WIDTH-1 : 0]               rms_q10;
+
+    logic                                 div_start;
+    logic                                 div_busy;
+    logic                                 div_done;
+    logic                                 div_by_zero;
+    logic [DIV_NUM_WIDTH-1 : 0]           div_numerator;
+    logic [RMS_WIDTH-1 : 0]               div_remainder;
+    logic [RMS_WIDTH-1 : 0]               div_denominator;
+    logic [INV_RMS_WIDTH-1 : 0]           inv_rms_q16;
+
+    logic                                 apply_start;
+    logic                                 apply_busy;
+    logic                                 apply_done;
+    logic                                 apply_saturation;
+    logic [INPUT_SIZE*OUT_WIDTH-1 : 0]    apply_output_flat;
+
+    assign o_busy = (current_state != IDLE) && (current_state != DONE);
+    assign o_done = (current_state == DONE);
+
+    assign o_saturation = apply_saturation;
+    assign o_output_flat = apply_output_flat;
+
+    assign sum_start   = (current_state == START_SUM);
+    assign sqrt_start  = (current_state == START_SQRT);
+    assign div_start   = (current_state == START_DIV);
+    assign apply_start = (current_state == START_APPLY);
+
+    assign div_numerator = DIV_NUMERATOR_VALUE;
+
+    always_comb begin
+        next_state = current_state;
+
+        case (current_state)
+            IDLE: begin
+                if (i_start == 1'b1) begin
+                    next_state = START_SUM;
+                end
+            end
+
+            START_SUM: begin
+                next_state = WAIT_SUM;
+            end
+
+            WAIT_SUM: begin
+                if (sum_done == 1'b1) begin
+                    next_state = START_SQRT;
+                end
+            end
+
+            START_SQRT: begin
+                next_state = WAIT_SQRT;
+            end
+
+            WAIT_SQRT: begin
+                if (sqrt_done == 1'b1) begin
+                    next_state = START_DIV;
+                end
+            end
+
+            START_DIV: begin
+                next_state = WAIT_DIV;
+            end
+
+            WAIT_DIV: begin
+                if (div_done == 1'b1) begin
+                    next_state = START_APPLY;
+                end
+            end
+
+            START_APPLY: begin
+                next_state = WAIT_APPLY;
+            end
+
+            WAIT_APPLY: begin
+                if (apply_done == 1'b1) begin
+                    next_state = DONE;
+                end
+            end
+
+            DONE: begin
+                next_state = IDLE;
+            end
+
+            default: begin
+                next_state = IDLE;
+            end
+        endcase
+    end
+
+    always_ff @(posedge i_clk or negedge i_rst_n) begin
+        if (i_rst_n == 1'b0) begin
+            current_state <= IDLE;
+        end
+        else begin
+            current_state <= next_state;
+        end
+    end
+
+    always_ff @(posedge i_clk or negedge i_rst_n) begin
+        if (i_rst_n == 1'b0) begin
+            o_sum_squares  <= 'd0;
+            o_mean_square  <= 'd0;
+            sqrt_radicand  <= 'd0;
+            div_denominator <= 'd0;
+            o_inv_rms      <= 'd0;
+        end
+        else begin
+            case (current_state)
+                IDLE: begin
+                    if (i_start == 1'b1) begin
+                        o_sum_squares  <= 'd0;
+                        o_mean_square  <= 'd0;
+                        sqrt_radicand  <= 'd0;
+                        div_denominator <= 'd0;
+                        o_inv_rms      <= 'd0;
+                    end
+                end
+
+                WAIT_SUM: begin
+                    if (sum_done == 1'b1) begin
+                        o_sum_squares <= sum_squares;
+                        o_mean_square <= sum_squares >> MEAN_SHIFT;
+                        sqrt_radicand <= (sum_squares >> MEAN_SHIFT) + EPS_Q20;
+                    end
+                end
+
+                WAIT_SQRT: begin
+                    if (sqrt_done == 1'b1) begin
+                        div_denominator <= rms_q10;
+                    end
+                end
+
+                WAIT_DIV: begin
+                    if (div_done == 1'b1) begin
+                        o_inv_rms <= inv_rms_q16;
+                    end
+                end
+
+                default: begin
+                    o_sum_squares  <= o_sum_squares;
+                    o_mean_square  <= o_mean_square;
+                    sqrt_radicand  <= sqrt_radicand;
+                    div_denominator <= div_denominator;
+                    o_inv_rms      <= o_inv_rms;
+                end
+            endcase
+        end
+    end
+
+    rmsnorm_sum_squares_1024 #(
+        .INPUT_SIZE     (INPUT_SIZE),
+        .IN_WIDTH       (IN_WIDTH),
+        .IN_FRAC        (IN_FRAC),
+        .PRODUCT_WIDTH  (IN_WIDTH * 2),
+        .SUM_WIDTH      (SUM_WIDTH),
+        .ELEMENT_INDEX_W((INPUT_SIZE <= 1) ? 1 : $clog2(INPUT_SIZE))
+    ) inst_rmsnorm_sum_squares_1024 (
+        .i_clk        (i_clk),
+        .i_rst_n      (i_rst_n),
+        .i_start      (sum_start),
+        .i_input_flat (i_input_flat),
+        .o_busy       (sum_busy),
+        .o_done       (sum_done),
+        .o_sum_squares(sum_squares)
+    );
+
+    fixed_sqrt_u64 #(
+        .IN_WIDTH       (SUM_WIDTH),
+        .IN_FRAC        (SUM_FRAC),
+        .OUT_WIDTH      (RMS_WIDTH),
+        .OUT_FRAC       (RMS_FRAC),
+        .ITERATION_COUNT(RMS_WIDTH),
+        .ITERATION_W    ((RMS_WIDTH <= 1) ? 1 : $clog2(RMS_WIDTH))
+    ) inst_fixed_sqrt_u64 (
+        .i_clk     (i_clk),
+        .i_rst_n   (i_rst_n),
+        .i_start   (sqrt_start),
+        .i_radicand(sqrt_radicand),
+        .o_busy    (sqrt_busy),
+        .o_done    (sqrt_done),
+        .o_root    (rms_q10)
+    );
+
+    fixed_udiv #(
+        .NUMERATOR_WIDTH  (DIV_NUM_WIDTH),
+        .DENOMINATOR_WIDTH(RMS_WIDTH),
+        .QUOTIENT_WIDTH   (INV_RMS_WIDTH),
+        .REMAINDER_WIDTH  (RMS_WIDTH),
+        .ITERATION_COUNT  (INV_RMS_WIDTH),
+        .ITERATION_W      ((INV_RMS_WIDTH <= 1) ? 1 : $clog2(INV_RMS_WIDTH))
+    ) inst_fixed_udiv (
+        .i_clk           (i_clk),
+        .i_rst_n         (i_rst_n),
+        .i_start         (div_start),
+        .i_numerator     (div_numerator),
+        .i_denominator   (div_denominator),
+        .o_busy          (div_busy),
+        .o_done          (div_done),
+        .o_divide_by_zero(div_by_zero),
+        .o_quotient      (inv_rms_q16),
+        .o_remainder     (div_remainder)
+    );
+
+    rmsnorm_apply_1024 #(
+        .INPUT_SIZE     (INPUT_SIZE),
+        .IN_WIDTH       (IN_WIDTH),
+        .IN_FRAC        (IN_FRAC),
+        .INV_RMS_WIDTH  (INV_RMS_WIDTH),
+        .INV_RMS_FRAC   (INV_RMS_FRAC),
+        .GAMMA_WIDTH    (GAMMA_WIDTH),
+        .GAMMA_FRAC     (GAMMA_FRAC),
+        .OUT_WIDTH      (OUT_WIDTH),
+        .OUT_FRAC       (OUT_FRAC),
+        .PRODUCT1_WIDTH (IN_WIDTH + INV_RMS_WIDTH),
+        .PRODUCT2_WIDTH (IN_WIDTH + INV_RMS_WIDTH + GAMMA_WIDTH),
+        .OUTPUT_SHIFT   (IN_FRAC + INV_RMS_FRAC + GAMMA_FRAC - OUT_FRAC),
+        .ELEMENT_INDEX_W((INPUT_SIZE <= 1) ? 1 : $clog2(INPUT_SIZE))
+    ) inst_rmsnorm_apply_1024 (
+        .i_clk        (i_clk),
+        .i_rst_n      (i_rst_n),
+        .i_start      (apply_start),
+        .i_input_flat (i_input_flat),
+        .i_gamma_flat (i_gamma_flat),
+        .i_inv_rms    (o_inv_rms),
+        .o_busy       (apply_busy),
+        .o_done       (apply_done),
+        .o_saturation (apply_saturation),
+        .o_output_flat(apply_output_flat)
+    );
 
 endmodule
 
