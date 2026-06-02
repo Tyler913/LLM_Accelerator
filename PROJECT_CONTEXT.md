@@ -73,10 +73,12 @@ Important shapes:
 - Q projection: `[1024] -> [2048] -> [16, 128]`
 - K projection: `[1024] -> [1024] -> [8, 128]`
 - V projection: `[1024] -> [1024] -> [8, 128]`
+- Q/K head RMSNorm gamma vectors: `[128]` each
 - Attention concat before `o_proj`: `[2048]`
 - `o_proj`: `[2048] -> [1024]`
 - MLP gate/up: `[1024] -> [3072]`
 - MLP down: `[3072] -> [1024]`
+- Layer input, post-attention, and final RMSNorm gamma vectors: `[1024]`
 
 ## Target System Split
 

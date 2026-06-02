@@ -286,8 +286,8 @@ Fill in exact offsets and sizes after choosing packing and alignment.
 | layer N q_proj | `[2048, 1024]` | TODO | TODO | TODO | row-major candidate |
 | layer N k_proj | `[1024, 1024]` | TODO | TODO | TODO | row-major candidate |
 | layer N v_proj | `[1024, 1024]` | TODO | TODO | TODO | row-major candidate |
-| layer N q_norm weight | `[128]` or config-derived | TODO | TODO | TODO | confirm shape |
-| layer N k_norm weight | `[128]` or config-derived | TODO | TODO | TODO | confirm shape |
+| layer N q_norm weight | `[128]` | TODO | TODO | TODO | shape confirmed; choose fixed-point gamma format |
+| layer N k_norm weight | `[128]` | TODO | TODO | TODO | shape confirmed; choose fixed-point gamma format |
 | layer N o_proj | `[1024, 2048]` | TODO | TODO | TODO | row-major candidate |
 | layer N post-attn RMSNorm weight | `[1024]` | TODO | TODO | TODO | gamma |
 | layer N gate_proj | `[3072, 1024]` | TODO | TODO | TODO | MLP |
@@ -508,3 +508,4 @@ Pass/fail fields to record:
 | 2026-05-27 | Record passing AXI BRAM hardware run | Confirms repeated 32-bit PS write/read access through `M_AXI_HPM0_LPD` at offsets `0x0`, `0x4`, `0x8`, `0x400`, and `0x1FFC` |
 | 2026-05-28 | Strengthen Q4 as required PL weight path | Records that large PL-stored weights must use the project custom Q4 weight-only format; BF16/FP32 weights are reference data only |
 | 2026-05-28 | Add Layer 0 Q/K/V Q4 v0 artifact contract | Uses signed int4 weights, group size 64, Q2.14 scales, Q4.12 activation test input, and Python-verified Q/K/V GEMV metrics |
+| 2026-06-02 | Confirm q_norm/k_norm tensor shapes | Layer 0 `q_norm.weight` and `k_norm.weight` are both `[128]`; fixed-point gamma format remains open |

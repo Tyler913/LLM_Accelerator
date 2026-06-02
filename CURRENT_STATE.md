@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-05-31
+Last updated: 2026-06-02
 
 This file is the concise working-state handoff. For stable project context,
 read `PROJECT_CONTEXT.md` first. For workflow rules, read `AGENTS.md`.
@@ -53,8 +53,8 @@ conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/17_export_rmsnor
 
 ## Current RTL Progress
 
-The project now has two reusable hand-written RTL compute blocks: Q4 GEMV for
-large linear projections and RMSNorm for 1024-wide hidden vectors.
+The project now has reusable hand-written RTL compute blocks for Q4 GEMV,
+RMSNorm, and the first RoPE attention-front-end stage.
 
 Q4 GEMV stack:
 
@@ -96,6 +96,21 @@ RMSNorm fixed-point state:
 - RMSNorm output: signed 24-bit `Q12.12`, saturated to signed 24-bit range.
 - Current epsilon uses `EPS_Q20=1`, representing about `9.54e-7`.
 
+RoPE stack:
+
+- `rope_qk_layer_128.sv`: first 128-d head-dimension RoPE stage for one
+  token's Q/K heads. It accepts Q as `[16, 128]`, K as `[8, 128]`, shared
+  `[128]` cos/sin vectors for the current position, and produces RoPE-applied
+  Q/K outputs.
+
+RoPE fixed-point/interface state:
+
+- Q/K input: signed 24-bit `Q12.12`.
+- Cos/sin input: signed 16-bit `Q1.15`.
+- Q/K output: signed 24-bit `Q12.12`, saturated.
+- Current implementation processes one scalar lane per cycle and keeps the
+  flattened-vector bring-up style used by the existing RMSNorm/GEMV modules.
+
 RMSNorm range profiling:
 
 - `16_profile_rmsnorm_ranges.py` profiles all 113 RMSNorm modules in the local
@@ -108,6 +123,28 @@ RMSNorm range profiling:
   bring-up, but it is not a formal proof over all possible prompts.
 
 ## Latest Validation
+
+Local RTL recheck on 2026-06-02:
+
+- Re-ran every existing `FPGA_Project/sim/*.vvp` simulation locally; all passed.
+- Key real-vector checkpoints remained unchanged:
+  `tb_q4_gemv_projection_1024_real.sv` reported 284 waited cycles after start,
+  and `tb_rmsnorm_1024_real.sv` reported 2104 waited cycles after start.
+- `git status --short` was clean after the recheck; generated `.vcd`/`.vvp`
+  files remain ignored.
+
+Model tensor shape check on 2026-06-02:
+
+- A `safetensors` inspection under `conda run -n llm_fpga ...` confirmed
+  Layer 0 `q_norm.weight` and `k_norm.weight` are both shape `[128]`.
+- The same check confirmed the expected Layer 0 projection and MLP matrix
+  shapes already documented in `PROJECT_CONTEXT.md`.
+
+RoPE RTL checks:
+
+- `rope_qk_layer_128.sv` Icarus elaboration passed with:
+  `iverilog -g2012 -tnull -s rope_qk_layer_128 FPGA_Project/rtl/rope_qk_layer_128.sv`
+- A real-vector RoPE exporter and testbench are still pending.
 
 Python/software checks:
 
@@ -160,9 +197,10 @@ RMSNorm RTL checks:
   coverage for `post_attention_layernorm`, `q_norm`, `k_norm`, or final norm.
 - GEMV projection has real q_proj rows 0..15 validation, but not yet broad
   q/k/v/o/MLP coverage.
-- RoPE, attention score/softmax/value accumulation, KV cache read/write,
-  residual add, SiLU, MLP elementwise multiply, final LM-head scan, and greedy
-  argmax are still pending.
+- RoPE now has an initial RTL module, but no real-vector testbench yet.
+- Attention score/softmax/value accumulation, KV cache read/write, residual
+  add, SiLU, MLP elementwise multiply, final LM-head scan, and greedy argmax
+  are still pending.
 - Current RTL uses flattened vectors for bring-up. Memory-mapped or streaming
   PS/PL integration is still a later step.
 
@@ -216,18 +254,21 @@ Important bring-up notes:
 Next phase: broaden real-vector coverage, then move into the attention
 front-end.
 
-1. Optionally extend `17_export_rmsnorm_fixed_vectors.py` and
+1. Add a real-vector exporter for `rope_qk_layer_128.sv` using Layer 0
+   q/k after q_norm/k_norm and the current-position RoPE cos/sin table.
+2. Add `tb_rope_qk_layer_128.sv` and compare the RTL output against the
+   exported fixed-point RoPE reference.
+3. Optionally extend `17_export_rmsnorm_fixed_vectors.py` and
    `tb_rmsnorm_1024_real.sv` beyond Layer 0 `input_layernorm` to cover
-   `post_attention_layernorm`, `q_norm`, `k_norm`, and final norm cases.
-2. Extend GEMV projection vectors beyond q_proj rows 0..15 when useful:
+   `post_attention_layernorm` and final norm cases.
+4. Extend GEMV projection vectors beyond q_proj rows 0..15 when useful:
    q/k/v projection tiles first, then o_proj and MLP gate/up/down projections.
-3. Start the next RTL block for the
-   attention front-end. The likely next module is RoPE for 128-d Q/K head
-   vectors, followed by KV cache append/read planning.
-4. Keep PS-side C minimal until these PL compute blocks have stable standalone
+5. Continue the attention front-end after RoPE validation with KV cache
+   append/read planning.
+6. Keep PS-side C minimal until these PL compute blocks have stable standalone
    simulation evidence. The PS should remain orchestration/control, not model
    compute.
-5. Continue refining `FPGA_MEMORY_MAP.md` when PL DDR4 is instantiated,
+7. Continue refining `FPGA_MEMORY_MAP.md` when PL DDR4 is instantiated,
    especially PL DDR4 base/range, usable capacity, PS-to-PL transfer path, and
    Q4/KV/activation budgets.
 
