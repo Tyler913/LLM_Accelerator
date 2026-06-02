@@ -221,9 +221,9 @@ Known model facts:
 | Q4 packed weights | parameters * 4 bits | about 298.0 MB / 284.2 MiB | fits inside 320 MiB draft weight region |
 | Q4 scales | `(parameters / 64) * scale_bytes` | 16-bit scales about 18.6 MB / 17.8 MiB | fits with Q4 weights in 320 MiB region |
 | Q4 metadata/alignment | format header, per-tensor metadata, padding | about 18 MiB margin with 16-bit scales | draft margin |
-| KV cache context 128 | 28 * 2 * 8 * 128 * 128 * bytes | FP16/BF16 about 14 MiB | optional |
-| KV cache context 256 | 28 * 2 * 8 * 256 * 128 * bytes | FP16/BF16 about 28 MiB | first target, allocate 32 MiB |
-| KV cache context 512 | 28 * 2 * 8 * 512 * 128 * bytes | FP16/BF16 about 56 MiB | does not fit current 32 MiB KV allocation |
+| KV cache context 128 | 28 * 2 * 8 * 128 * 128 * bytes | FP16/BF16 about 14 MiB; fixed 32-bit padded about 28 MiB | optional |
+| KV cache context 256 | 28 * 2 * 8 * 256 * 128 * bytes | FP16/BF16 about 28 MiB; fixed 32-bit padded about 56 MiB | first fixed-point target needs more than current 32 MiB draft allocation |
+| KV cache context 512 | 28 * 2 * 8 * 512 * 128 * bytes | FP16/BF16 about 56 MiB; fixed 32-bit padded about 112 MiB | does not fit current 32 MiB KV allocation |
 | Activation buffers | one-token buffers plus debug room | allocate 64 MiB | draft |
 | RoPE table | depends on max context and dtype | allocate 8 MiB | draft; enough for small-context precomputed tables |
 | Logits scratch | vocab_size * bytes or tiled | full FP32 logits about 0.58 MiB | allocate 8 MiB for tiled/debug use |
@@ -321,9 +321,7 @@ Current validated facts:
 - V cache stores reshaped/transposed `v_proj` output without RoPE.
 - Q is not cached.
 
-TODO: Choose a physical layout.
-
-Candidate layout:
+Current first physical layout:
 
 ```text
 kv_cache[layer][kv_kind][head][position][head_dim]
@@ -336,15 +334,28 @@ Where:
 
 | Field | Value | Status |
 | --- | --- | --- |
-| Max context | 256 for first target | draft |
-| Cache dtype | FP16/BF16 first planning assumption | draft |
+| Max context | 256 first target; 512 supported by address generator | draft |
+| Cache dtype | signed 24-bit `Q12.12` padded to 32-bit DDR words for the current fixed-point RTL path | draft |
 | Layer stride | `2 * 8 * max_context * 128 * bytes_per_value` | draft |
 | K/V stride | `8 * max_context * 128 * bytes_per_value` | draft |
 | Head stride | `max_context * 128 * bytes_per_value` | draft |
 | Position stride | `128 * bytes_per_value` | draft |
-| Head-dim stride | `bytes_per_value` | draft |
-| Append address formula | TODO | TODO |
-| Read address formula | TODO | TODO |
+| Head-dim stride | `bytes_per_value`; current fixed-point default is 4 bytes | draft |
+| Append address formula | `base + layer*layer_stride + kv_kind*kv_stride + head*head_stride + position*position_stride + dim*bytes_per_value` | initial RTL implemented |
+| Read address formula | same formula, sweeping `position` from 0 through current cache length minus 1 | initial RTL implemented |
+
+The first RTL address generator is:
+
+```text
+FPGA_Project/rtl/kv_cache_addr_gen.sv
+```
+
+It currently generates byte addresses and range-valid flags only. It does not
+perform DDR4 reads/writes, AXI handshakes, burst planning, or data packing.
+Those functions belong in later append/read controllers. The default
+`ELEMENT_BYTES=4` follows the current fixed-point RTL widths: RoPE outputs
+signed 24-bit `Q12.12` K values, and V values should be converted into the same
+cache element format before storage.
 
 ## Activation Buffers
 
@@ -509,3 +520,5 @@ Pass/fail fields to record:
 | 2026-05-28 | Strengthen Q4 as required PL weight path | Records that large PL-stored weights must use the project custom Q4 weight-only format; BF16/FP32 weights are reference data only |
 | 2026-05-28 | Add Layer 0 Q/K/V Q4 v0 artifact contract | Uses signed int4 weights, group size 64, Q2.14 scales, Q4.12 activation test input, and Python-verified Q/K/V GEMV metrics |
 | 2026-06-02 | Confirm q_norm/k_norm tensor shapes | Layer 0 `q_norm.weight` and `k_norm.weight` are both `[128]`; fixed-point gamma format remains open |
+| 2026-06-02 | Add KV cache address formula RTL | Implements `kv_cache_addr_gen.sv` for `cache[layer][kv_kind][head][position][dim]`, with context-256 and context-512 smoke tests |
+| 2026-06-02 | Align KV cache element stride with current fixed-point RTL | Changes the default KV cache address element stride to 4 bytes for signed 24-bit `Q12.12` K/V values padded to 32-bit DDR words |

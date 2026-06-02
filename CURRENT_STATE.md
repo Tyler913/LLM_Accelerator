@@ -54,7 +54,8 @@ conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/17_export_rmsnor
 ## Current RTL Progress
 
 The project now has reusable hand-written RTL compute blocks for Q4 GEMV,
-RMSNorm, and the first RoPE attention-front-end stage.
+RMSNorm, the first RoPE attention-front-end stage, and KV cache address
+generation.
 
 Q4 GEMV stack:
 
@@ -111,6 +112,18 @@ RoPE fixed-point/interface state:
 - Current implementation processes one scalar lane per cycle and keeps the
   flattened-vector bring-up style used by the existing RMSNorm/GEMV modules.
 
+KV cache address stack:
+
+- `kv_cache_addr_gen.sv`: byte-address generator for
+  `cache[layer][kv_kind][head][position][dim]`, where `kv_kind=0` is K and
+  `kv_kind=1` is V.
+- The module is parameterized for context 256 or 512 and element byte width.
+  The default uses 28 layers, 8 KV heads, head dimension 128, context 256, and
+  4 bytes per cache element. This matches the current fixed-point RTL path by
+  storing signed 24-bit `Q12.12` K/V values padded to 32-bit DDR words.
+- It outputs both `o_offset_bytes` and `o_byte_addr`, plus `o_valid` for index
+  range checking.
+
 RMSNorm range profiling:
 
 - `16_profile_rmsnorm_ranges.py` profiles all 113 RMSNorm modules in the local
@@ -145,6 +158,13 @@ RoPE RTL checks:
 - `rope_qk_layer_128.sv` Icarus elaboration passed with:
   `iverilog -g2012 -tnull -s rope_qk_layer_128 FPGA_Project/rtl/rope_qk_layer_128.sv`
 - A real-vector RoPE exporter and testbench are still pending.
+
+KV cache RTL checks:
+
+- `tb_kv_cache_addr_gen.sv` passed context-256 and context-512 smoke vectors.
+- Covered K/V kind stride, head stride, position stride, dim stride, layer
+  stride, max context-512 address, invalid layer range reporting, and the
+  current 4-byte padded fixed-point element stride.
 
 Python/software checks:
 
@@ -198,9 +218,11 @@ RMSNorm RTL checks:
 - GEMV projection has real q_proj rows 0..15 validation, but not yet broad
   q/k/v/o/MLP coverage.
 - RoPE now has an initial RTL module, but no real-vector testbench yet.
-- Attention score/softmax/value accumulation, KV cache read/write, residual
-  add, SiLU, MLP elementwise multiply, final LM-head scan, and greedy argmax
-  are still pending.
+- KV cache address generation exists, but append/read FSMs and DDR4/AXI
+  integration are still pending.
+- Attention score/softmax/value accumulation, residual add, SiLU, MLP
+  elementwise multiply, final LM-head scan, and greedy argmax are still
+  pending.
 - Current RTL uses flattened vectors for bring-up. Memory-mapped or streaming
   PS/PL integration is still a later step.
 
@@ -264,7 +286,7 @@ front-end.
 4. Extend GEMV projection vectors beyond q_proj rows 0..15 when useful:
    q/k/v projection tiles first, then o_proj and MLP gate/up/down projections.
 5. Continue the attention front-end after RoPE validation with KV cache
-   append/read planning.
+   append/read FSM planning using `kv_cache_addr_gen.sv`.
 6. Keep PS-side C minimal until these PL compute blocks have stable standalone
    simulation evidence. The PS should remain orchestration/control, not model
    compute.
