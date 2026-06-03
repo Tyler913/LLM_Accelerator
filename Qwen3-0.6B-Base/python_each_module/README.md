@@ -38,5 +38,8 @@ Script map:
   ranges across all model RMSNorm modules for the reference prompt path
 - `17_export_rmsnorm_fixed_vectors.py`: exports real Layer 0 RMSNorm
   fixed-point hex vectors for the `rmsnorm_1024` RTL testbench
+- `18_export_rope_fixed_vectors.py`: exports real Layer 0 last-token Q/K,
+  cos/sin, and fixed-point RoPE expected hex vectors for the
+  `rope_qk_layer_128` RTL testbench
 - `run_all_module_validations.py`: runs the core validation scripts `01`-`10`
   in order

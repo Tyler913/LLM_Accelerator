@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-06-02
+Last updated: 2026-06-03
 
 This file is the concise working-state handoff. For stable project context,
 read `PROJECT_CONTEXT.md` first. For workflow rules, read `AGENTS.md`.
@@ -49,6 +49,7 @@ conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/14_verify_q4_gem
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/15_export_q4_projection_vectors.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/16_profile_rmsnorm_ranges.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/17_export_rmsnorm_fixed_vectors.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/18_export_rope_fixed_vectors.py
 ```
 
 ## Current RTL Progress
@@ -157,7 +158,14 @@ RoPE RTL checks:
 
 - `rope_qk_layer_128.sv` Icarus elaboration passed with:
   `iverilog -g2012 -tnull -s rope_qk_layer_128 FPGA_Project/rtl/rope_qk_layer_128.sv`
-- A real-vector RoPE exporter and testbench are still pending.
+- `18_export_rope_fixed_vectors.py` exports real Layer 0 last-token Q/K after
+  q_norm/k_norm, current-position cos/sin, and fixed-point Q/K RoPE expected
+  outputs for `rope_qk_layer_128.sv`.
+- `tb_rope_qk_layer_128.sv` passed the real Layer 0 last-token RoPE vector
+  exactly. The simulation reported 3072 waited cycles after start,
+  `saturation=0`, Q output `max_abs_diff=0`, and K output `max_abs_diff=0`.
+- The exporter reported fixed-point output versus FP32 RoPE reference max abs
+  differences of about `0.00066185` for Q and `0.00784302` for K.
 
 KV cache RTL checks:
 
@@ -168,11 +176,15 @@ KV cache RTL checks:
 
 Python/software checks:
 
+- `04_validate_qk_norm_rope.py` re-ran on 2026-06-03 and matched Hugging Face
+  for q_norm, k_norm, and post-RoPE Layer 0 K cache with max abs error `0`.
 - `12_verify_fpga_test_vectors.py` passed for the FP32 module vectors.
 - `14_verify_q4_gemv_vectors.py` passed for the custom Q4 bring-up vectors.
 - `15_export_q4_projection_vectors.py` exports real q_proj projection vectors.
 - `16_profile_rmsnorm_ranges.py` produced the range profile summarized above.
 - `17_export_rmsnorm_fixed_vectors.py` exports real Layer 0 input_layernorm
+  fixed-point RTL vectors from the reference prompt path.
+- `18_export_rope_fixed_vectors.py` exports real Layer 0 last-token Q/K RoPE
   fixed-point RTL vectors from the reference prompt path.
 
 Q4 GEMV RTL checks:
@@ -217,7 +229,8 @@ RMSNorm RTL checks:
   coverage for `post_attention_layernorm`, `q_norm`, `k_norm`, or final norm.
 - GEMV projection has real q_proj rows 0..15 validation, but not yet broad
   q/k/v/o/MLP coverage.
-- RoPE now has an initial RTL module, but no real-vector testbench yet.
+- RoPE now has real Layer 0 last-token validation, but not yet broader
+  position/layer coverage or a streaming/memory-mapped wrapper.
 - KV cache address generation exists, but append/read FSMs and DDR4/AXI
   integration are still pending.
 - Attention score/softmax/value accumulation, residual add, SiLU, MLP
@@ -273,24 +286,22 @@ Important bring-up notes:
 
 ## Immediate Next Step
 
-Next phase: broaden real-vector coverage, then move into the attention
-front-end.
+Next phase: continue the attention front-end now that RoPE has a real-vector
+RTL check.
 
-1. Add a real-vector exporter for `rope_qk_layer_128.sv` using Layer 0
-   q/k after q_norm/k_norm and the current-position RoPE cos/sin table.
-2. Add `tb_rope_qk_layer_128.sv` and compare the RTL output against the
-   exported fixed-point RoPE reference.
+1. Plan the KV cache append/read FSMs around `kv_cache_addr_gen.sv`, using
+   RoPE-applied K and fixed-point V cache values as the first cache payloads.
+2. Decide the first V-cache fixed-point export/check path, because K is stored
+   after RoPE while V is stored from the reshaped/transposed `v_proj` output.
 3. Optionally extend `17_export_rmsnorm_fixed_vectors.py` and
    `tb_rmsnorm_1024_real.sv` beyond Layer 0 `input_layernorm` to cover
    `post_attention_layernorm` and final norm cases.
 4. Extend GEMV projection vectors beyond q_proj rows 0..15 when useful:
    q/k/v projection tiles first, then o_proj and MLP gate/up/down projections.
-5. Continue the attention front-end after RoPE validation with KV cache
-   append/read FSM planning using `kv_cache_addr_gen.sv`.
-6. Keep PS-side C minimal until these PL compute blocks have stable standalone
+5. Keep PS-side C minimal until these PL compute blocks have stable standalone
    simulation evidence. The PS should remain orchestration/control, not model
    compute.
-7. Continue refining `FPGA_MEMORY_MAP.md` when PL DDR4 is instantiated,
+6. Continue refining `FPGA_MEMORY_MAP.md` when PL DDR4 is instantiated,
    especially PL DDR4 base/range, usable capacity, PS-to-PL transfer path, and
    Q4/KV/activation budgets.
 
