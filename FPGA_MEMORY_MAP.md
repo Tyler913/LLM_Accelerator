@@ -1,10 +1,12 @@
 # FPGA Memory Map
 
-Status: working draft, updated through successful AXI BRAM smoke-test hardware run
+Status: working draft, updated through the successful PS-to-PL PL DDR4
+smoke-test hardware run on 2026-06-07
 
 This document defines the first FPGA-visible memory layout for the Qwen3
-0.6B accelerator bring-up. It distinguishes confirmed addresses from planning
-allocations that still depend on adding the PL DDR4 memory controller.
+0.6B accelerator bring-up. It distinguishes hardware-proven base apertures
+from draft accelerator subregions that still need real RTL data-movement and
+kernel integration.
 
 For the current project state, read `PROJECT_CONTEXT.md` and
 `CURRENT_STATE.md` first.
@@ -14,32 +16,72 @@ For the current project state, read `PROJECT_CONTEXT.md` and
 - Device family: Xilinx Zynq UltraScale+ MPSoC
 - Device: `XCZU2EG`
 - Vivado project part: `xczu2eg-sfvc784-2-i`
-- Board name: custom / board part currently unset in the Vivado project
-- PS DDR: 2 GiB, confirmed in the exported handoff as DDR low memory
-  `0x0000_0000` through `0x7FFF_FFFF`
+- Board/material: ALIENTEK/ATK MPSoC-P4 V1.4 reference material, schematic
+  title `ATK_DFZU2EG_ZU4EV_1V4`; Vivado board part currently unset
+- PS DDR: 2 GiB physical board target. The current standalone BSP exports the
+  low-memory region as `0x0000_0000` through `0x7FEF_FFFF`; keep software
+  allocations linker/domain driven rather than hard-coding the top of PS DDR.
 - PS DDR type/config: DDR4, 64-bit controller bus, x16 DRAM device width,
   nominal DDR controller frequency about 600 MHz in the current PS config
-- PL DDR4: 0.5 GB / nominal 512 MiB, user-reported, not yet instantiated in
-  the current Vivado block design
+- PL DDR4: 0.5 GB / nominal 512 MiB, confirmed in the board material as
+  PL-side DDR4 wiring and now instantiated in the Vivado block design as a
+  DDR4 SDRAM MIG IP with AXI4 enabled
+- PL DDR4 board interface: x16 DDR4 on FPGA Bank 64, `VCCO_64` tied to
+  `DDR_1V2`, `INTERNAL_VREF 0.6`, two DQS pairs, two DM/DBI pins, and
+  `c0_ddr4_reset_n` / `PL_DDR4_RST` on AG9
+- PL DDR4 board clock source: 100 MHz differential PL clock on AE5/AF5, named
+  `sys_clk_p/sys_clk_n` in the board XDC and `PL_CLK0_P/PL_CLK0_N` in the
+  schematic
+- PL DDR4 device evidence: physical chip marking reported on 2026-06-03 is
+  `SEC 325`, `K4A4G16`, `BCTD`, `6WC0150SC`, matching the Samsung
+  `K4A4G165WF-BCTD` 4Gb x16 DDR4 datasheet in the board material directory.
+  The schematic page-18 `MT40A256M16GE-083E` label is treated as an
+  alternate/library placeholder for the populated board unless later BOM
+  evidence says otherwise.
+- Capacity cross-check: one 4Gb x16 PL DDR4 device gives 512 MiB / 0.5 GB.
+  Schematic pages 14-17 show four x16 PS DDR4 devices feeding
+  `PS_DDR4_DQ[63:0]`; four 4Gb-class devices give 16Gb total / 2 GB.
 - Vivado/Vitis version: Vivado 2025.1.1 in the current project
 - First software model: `Qwen/Qwen3-0.6B-Base`
 - First accelerator goal: single-token `run_one_token(input_token, position)`
 
-TODO:
+Current PL DDR4 controller configuration:
 
-- Replace custom board placeholder if the vendor board/product name becomes
-  known.
-- PL DDR4 physical base/range: base TODO, range expected to be about 512 MiB.
-- PL DDR4 memory controller IP: TODO.
-- Decide whether PS reaches PL DDR4 directly through an AXI memory-mapped path,
-  through DMA, or through a staged debug path.
-- Decide the PL kernel access path to PL DDR4 after the memory controller is
-  added.
+- MIG IP cell: `ddr4_0`
+- Vivado equivalent preset: `MT40A256M16GE-075E`, used as a 4Gb x16 DDR4
+  component equivalent for the populated Samsung `K4A4G165WF-BCTD`
+- Memory device interface speed: `833 ps` / DDR4-2400-class operation
+- Reference input clock: about `100.040 MHz`, differential, from the board PL
+  clock pins AE5/AF5
+- PHY/controller ratio: `4:1`
+- DDR data width: x16
+- AXI data width: 128 bits
+- AXI address width: 29 bits, matching a 512 MiB memory aperture
+- AXI narrow burst: enabled for 32-bit PS smoke-test accesses through a wider
+  AXI slave
+- Data mask/DBI: `DM NO DBI`
+- Memory address map: `ROW COLUMN BANK`
 
-## Confirmed Current Address Map
+Completed hardware checkpoint:
 
-This section is the source of truth for what exists in the current exported
-AXI BRAM smoke-test hardware:
+- The current reset-fix hardware handoff is
+  `FPGA_Project/Vivado_Project/llm_system_pl_ddr4_aux_reset_fix.xsa`.
+- The current Vitis platform is `llm_pl_ddr4_aux_reset_fix_platform`.
+- The standalone smoke app proved PS read/write access to the current AXI BRAM
+  aperture, DDR4 status GPIO, and PL DDR4 aperture on hardware.
+
+## Current Address Map
+
+This section is the source of truth for the current Vivado block design and
+successful board smoke test.
+
+Current reset-fix hardware handoff:
+
+```text
+FPGA_Project/Vivado_Project/llm_system_pl_ddr4_aux_reset_fix.xsa
+```
+
+Previous BRAM-only checkpoint, kept only as historical evidence:
 
 ```text
 FPGA_Project/Vivado_Project/llm_system_axi_bram_smoke.xsa
@@ -47,33 +89,46 @@ FPGA_Project/Vivado_Project/llm_system_axi_bram_smoke.xsa
 
 | Space / IP | Interface | Base | High | Size | Status |
 | --- | --- | ---: | ---: | ---: | --- |
-| PS DDR low memory | PS DDR | `0x0000_0000` | `0x7FFF_FFFF` | 2 GiB | confirmed in XSA/HWH |
-| AXI BRAM smoke-test memory | `M_AXI_HPM0_LPD` -> AXI SmartConnect -> AXI BRAM Controller `S_AXI` | `0x8000_0000` | `0x8000_1FFF` | 8 KiB | confirmed in Address Editor, XSA/HWH, and hardware run |
-| PL DDR4 | TODO | TODO | TODO | about 512 MiB expected | not in current block design |
+| PS DDR low memory | PS DDR | `0x0000_0000` | `0x7FEF_FFFF` | about 2 GiB minus reserved top window | exported in current standalone BSP |
+| AXI BRAM memory | `M_AXI_HPM0_FPD` -> AXI SmartConnect `M00_AXI` -> AXI BRAM Controller `S_AXI` | `0xA000_0000` | `0xA000_1FFF` | 8 KiB | passed current hardware smoke |
+| DDR4 status AXI GPIO | `M_AXI_HPM0_FPD` -> AXI SmartConnect `M02_AXI` -> AXI GPIO `S_AXI` | `0xA001_0000` | `0xA001_FFFF` | 64 KiB | passed current hardware smoke |
+| PL DDR4 | `M_AXI_HPM0_FPD` -> AXI SmartConnect `M01_AXI` -> AXI Clock Converter -> `ddr4_0/C0_DDR4_S_AXI` | `0x4_0000_0000` | `0x4_1FFF_FFFF` | 512 MiB | passed current hardware smoke |
 
-Current PS-to-PL smoke-test fabric:
+Current PS-to-PL fabric:
 
 ```text
-M_AXI_HPM0_LPD
+M_AXI_HPM0_FPD
   -> AXI SmartConnect
-  -> AXI BRAM Controller
-  -> Block Memory Generator
+      M00_AXI -> AXI BRAM Controller -> Block Memory Generator
+      M01_AXI -> AXI Clock Converter -> DDR4 MIG C0_DDR4_S_AXI
+      M02_AXI -> AXI GPIO DDR4 status register
 ```
 
-Confirmed interface facts from the current handoff:
+Confirmed block-design and BSP facts:
 
-- `M_AXI_HPM0_LPD` is the active PS master used for the BRAM smoke test.
-- `M_AXI_HPM0_LPD` data width: 32 bits.
+- `M_AXI_HPM0_FPD` is the active PS master for the current PL memory fabric.
+- `M_AXI_HPM0_LPD` is disabled in the current block design to remove the
+  incomplete address path used during early bring-up.
 - AXI BRAM controller `S_AXI` data width: 32 bits.
 - AXI BRAM controller address width: 13 bits.
 - AXI BRAM controller uses one BRAM interface in the passing hardware
   configuration (`C_SINGLE_PORT_BRAM=1` / `SINGLE_PORT_BRAM=1`).
 - BRAM depth: 2048 32-bit words = 8192 bytes.
 - `pl_clk0` frequency in the exported handoff: about 96.97 MHz.
-- `M_AXI_HPM0_FPD` remains enabled but intentionally unconnected for now.
-  It is the only known incomplete address path in the current block design and
-  is a candidate for a later high-bandwidth path, including possible PL DDR4
-  bring-up work.
+- The DDR4 AXI Clock Converter uses the PS/SmartConnect clock on its `S_AXI`
+  side and `ddr4_0/c0_ddr4_ui_clk` on its `M_AXI` side.
+- `ddr4_0/c0_ddr4_ui_clk_sync_rst` feeds the DDR UI-domain
+  `proc_sys_reset_0/ext_reset_in`.
+- `proc_sys_reset_0/aux_reset_in` is tied high because that input is
+  active-low in the current IP configuration.
+- `proc_sys_reset_0/peripheral_aresetn` drives both `ddr4_0/c0_ddr4_aresetn`
+  and the clock converter `m_axi_aresetn`.
+- The current BSP defines `XPAR_AXI_GPIO_0_BASEADDR` and
+  `XPAR_XGPIO_0_BASEADDR` as `0xA001_0000`, with GPIO width `0x3`.
+- The current BSP defines `XPAR_DDR4_0_BASEADDRESS` as `0x400000000` and
+  `XPAR_DDR4_0_HIGHADDRESS` as `0x41fffffff`.
+- PL DDR4 is above the 32-bit address range. Bare-metal software must use a
+  64-bit-capable address type such as `UINTPTR` for `0x4_0000_0000`.
 
 ## Design Intent
 
@@ -105,23 +160,28 @@ High-level split:
 - All offsets in this document are byte offsets relative to the selected memory
   space unless marked as physical addresses.
 - Physical addresses are written as byte addresses.
-- Current AXI BRAM smoke-test access should use 32-bit word accesses aligned to
-  4-byte boundaries.
+- Current AXI BRAM and PL DDR4 smoke-test accesses use 32-bit word accesses
+  aligned to 4-byte boundaries.
 - Endianness: little-endian for PS-side scalar accesses.
-- Scalar format: unsigned 32-bit words for the first BRAM read/write test.
+- Scalar format: unsigned 32-bit words for the current BRAM and PL DDR4
+  smoke-test reads/writes.
 - Vector format: TODO for accelerator data; keep exported Python vectors as the
   reference until a hardware transfer format is fixed.
 - Matrix layout: TODO; row-major remains the working candidate for first GEMV
   bring-up.
-- Cache coherency rule between PS and PL: TODO. For the BRAM smoke test, use
-  direct volatile memory-mapped accesses or cache-disabled/flush-invalidate
-  handling in the standalone application.
+- Cache coherency rule between PS and PL: TODO. For the current standalone
+  smoke tests, use direct memory-mapped accesses plus explicit cache
+  flush/invalidate handling where the app touches cached regions.
 - Required flush/invalidate operations: TODO after the Vitis domain/cache
   settings are chosen.
-- The current standalone AXI BRAM smoke test has validated direct 32-bit
-  `Xil_Out32` / `Xil_In32` accesses to `0x8000_0000` through `0x8000_1FFF`.
-  Do not assume the same cache/coherency behavior for future PL DDR4 or DMA
-  paths until those paths are tested.
+- The current standalone smoke app has validated direct 32-bit `Xil_Out32` /
+  `Xil_In32` accesses to AXI BRAM at `0xA000_0000` through `0xA000_1FFF` and
+  PL DDR4 at selected addresses in `0x4_0000_0000` through `0x4_1FFF_FFFF`.
+- PL DDR4 addresses are 64-bit physical addresses. C code must use `UINTPTR`
+  or another 64-bit-capable type and should print high/low 32-bit halves for
+  debug output.
+- Do not assume future PL masters, DMA engines, or cached PS buffer paths have
+  the same coherency behavior as the current direct standalone MMIO smoke app.
 
 ## Memory Spaces
 
@@ -131,7 +191,7 @@ Purpose: host/runtime memory owned primarily by the processing system.
 
 | Region | Base | Size | Owner | Contents | Status |
 | --- | ---: | ---: | --- | --- | --- |
-| PS DDR low memory | `0x0000_0000` | 2 GiB | PS | Main PS memory aperture, `0x0000_0000` through `0x7FFF_FFFF` | confirmed |
+| PS DDR low memory | `0x0000_0000` | about 2 GiB minus reserved top window | PS | Main standalone BSP aperture, `0x0000_0000` through `0x7FEF_FFFF` | confirmed |
 | Runtime workspace | linker/domain selected | TODO | PS | bare-metal text/data, stack, heap, or later OS runtime | planned |
 | Token buffers | PS DDR offset TODO | TODO | PS | prompt token ids, generated token ids | planned |
 | Loader staging | PS DDR offset TODO | TODO | PS | model or artifact staging before PL DDR copy | planned |
@@ -140,65 +200,106 @@ Purpose: host/runtime memory owned primarily by the processing system.
 
 Notes:
 
-- The current handoff exposes DDR low memory as `0x0000_0000` through
-  `0x7FFF_FFFF`.
+- The current standalone BSP exposes DDR low memory as `0x0000_0000` through
+  `0x7FEF_FFFF`. The physical board target remains 2 GiB PS DDR.
 - Do not hard-code PS DDR suballocations until the Vitis standalone app and
   linker script are created.
 
 ### PL BRAM Smoke Test
 
-Purpose: minimal PS-to-PL memory-mapped access test before adding PL DDR4.
+Purpose: minimal PS-to-PL memory-mapped access test kept in the current block
+design as a quick sanity check before touching PL DDR4.
 
 | Region | Base | Size | Owner | Contents | Status |
 | --- | ---: | ---: | --- | --- | --- |
-| AXI BRAM smoke-test memory | `0x8000_0000` | 8 KiB | PS write/read through `M_AXI_HPM0_LPD` | simple pattern write/read validation | passed in hardware |
+| AXI BRAM smoke-test memory | `0xA000_0000` | 8 KiB | PS write/read through `M_AXI_HPM0_FPD` | simple pattern write/read validation | passed in current hardware |
 
 Validated smoke-test pattern:
 
 ```text
 write/read 32-bit words:
-  0x8000_0000 <- 0xA5A50000
-  0x8000_0004 <- 0x5A5A0001
-  0x8000_0008 <- 0x12345678
-  0x8000_0400 <- 0xDEADBEEF
-  0x8000_1FFC <- 0xC001D00D
+  0xA000_0000 <- 0xA5A50000
+  0xA000_0004 <- 0x5A5A0001
+  0xA000_0008 <- 0x12345678
+  0xA000_0400 <- 0xDEADBEEF
+  0xA000_1FFC <- 0xC001D00D
 ```
 
 Do not place accelerator control registers in this BRAM range long-term. It is
 only a connectivity smoke test unless deliberately repurposed later.
 
+The earlier BRAM-only checkpoint used `0x8000_0000` through `0x8000_1FFF` via
+`M_AXI_HPM0_LPD`. The integrated PL DDR4 design moved the active PS-to-PL
+fabric to `M_AXI_HPM0_FPD` and remapped this smoke BRAM to `0xA000_0000`.
+
+### DDR4 Status GPIO
+
+Purpose: PS-readable debug/status register for the PL DDR4 controller and DDR
+AXI reset-release path.
+
+| Region | Base | Size | Owner | Contents | Status |
+| --- | ---: | ---: | --- | --- | --- |
+| DDR4 status AXI GPIO | `0xA001_0000` | 64 KiB | PL status, PS read | DDR4 calibration/reset status bits | passed in current hardware |
+
+Bit layout:
+
+| Bit | Signal | Good Value | Meaning |
+| ---: | --- | ---: | --- |
+| 0 | `ddr4_0/c0_init_calib_complete` | `1` | DDR4 MIG calibration complete |
+| 1 | `ddr4_0/c0_ddr4_ui_clk_sync_rst` | `0` | DDR UI-domain reset is deasserted |
+| 2 | `proc_sys_reset_0/peripheral_aresetn` | `1` | DDR AXI-side active-low reset is released |
+
+The expected good status word is `0x5`.
+
 ### PL DDR4
 
 Purpose: accelerator-side storage for weights, KV cache, and working buffers.
 
-Current status: user-reported hardware capacity is 0.5 GB / nominal 512 MiB,
-but no PL DDR4 controller or address aperture exists in the current exported
-Vivado design. The table below uses offsets relative to a future PL DDR4 base.
-Replace `PL_DDR4_BASE + offset` with physical addresses only after the
-controller is instantiated and Address Editor assigns the range.
+Current status: the PL DDR4 controller is instantiated in the Vivado block
+design, Address Editor assigns a 512 MiB aperture, block-design validation and
+bitstream generation pass, and PS standalone write/readback smoke testing
+passes on hardware.
+
+Current physical base:
+
+```text
+PL_DDR4_BASE = 0x4_0000_0000
+PL_DDR4_HIGH = 0x4_1FFF_FFFF
+```
 
 | Region | Base | Size | Owner | Contents | Status |
 | --- | ---: | ---: | --- | --- | --- |
-| Header / memory-map metadata | `PL_DDR4_BASE + 0x0000_0000` | 1 MiB | PS/PL | magic, version, checksums, layout table | draft |
-| Weight region | `PL_DDR4_BASE + 0x0010_0000` | 320 MiB | PS load, PL read | required Q4 weights and scales | draft |
-| KV cache region | `PL_DDR4_BASE + 0x1410_0000` | 32 MiB | PL read/write | per-layer K/V cache, context 256 first | draft |
-| Activation buffers | `PL_DDR4_BASE + 0x1610_0000` | 64 MiB | PL read/write | hidden, normed, q/k/v, attention, MLP scratch, debug snapshots | draft |
-| RoPE table | `PL_DDR4_BASE + 0x1A10_0000` | 8 MiB | PS load or PL read | cos/sin table if precomputed | draft |
-| Logits / argmax scratch | `PL_DDR4_BASE + 0x1A90_0000` | 8 MiB | PL write, PS read | LM-head tile output and final token id | draft |
-| Test-vector staging | `PL_DDR4_BASE + 0x1B10_0000` | 32 MiB | PS load, PL read/write | optional RTL bring-up data | draft |
-| Reserved | `PL_DDR4_BASE + 0x1D10_0000` | 47 MiB | PS/PL | expansion room within nominal 512 MiB | draft |
+| Header / memory-map metadata | `0x4_0000_0000` | 1 MiB | PS/PL | magic, version, checksums, layout table | draft |
+| Weight region | `0x4_0010_0000` | 320 MiB | PS load, PL read | required Q4 weights and scales | draft |
+| KV cache region | `0x4_1410_0000` | 32 MiB | PL read/write | per-layer K/V cache, context 256 first | draft |
+| Activation buffers | `0x4_1610_0000` | 64 MiB | PL read/write | hidden, normed, q/k/v, attention, MLP scratch, debug snapshots | draft |
+| RoPE table | `0x4_1A10_0000` | 8 MiB | PS load or PL read | cos/sin table if precomputed | draft |
+| Logits / argmax scratch | `0x4_1A90_0000` | 8 MiB | PL write, PS read | LM-head tile output and final token id | draft |
+| Test-vector staging | `0x4_1B10_0000` | 32 MiB | PS load, PL read/write | optional RTL bring-up data | draft |
+| Reserved | `0x4_1D10_0000` | 47 MiB | PS/PL | expansion room within nominal 512 MiB | draft |
 
 Draft relative coverage:
 
 ```text
-PL_DDR4_BASE + 0x0000_0000
+0x4_0000_0000
   through
-PL_DDR4_BASE + 0x1FFF_FFFF
+0x4_1FFF_FFFF
 ```
 
 This assumes a 512 MiB usable aperture. Recompute the table if the actual PL
 DDR4 controller exposes less than 512 MiB or if alignment constraints reserve
 part of the address space.
+
+Validated current smoke-test points:
+
+```text
+write/read 32-bit words:
+  0x4_00000000 <- 0xD4D40000
+  0x4_00000004 <- 0x4D4D0001
+  0x4_00001000 <- 0x13572468
+  0x4_10000000 <- 0x24681357
+  0x4_1FFFFFFC <- 0xDD44AA55
+```
 
 ## Capacity Budget Worksheet
 
@@ -217,7 +318,7 @@ Known model facts:
 
 | Item | Formula | Estimated Size | Decision |
 | --- | --- | ---: | --- |
-| Nominal PL DDR4 aperture | user-reported 0.5 GB | 512 MiB assumed for draft | must be confirmed in Vivado |
+| Nominal PL DDR4 aperture | Address Editor assignment | 512 MiB | assigned in Vivado and passed PS write/readback smoke |
 | Q4 packed weights | parameters * 4 bits | about 298.0 MB / 284.2 MiB | fits inside 320 MiB draft weight region |
 | Q4 scales | `(parameters / 64) * scale_bytes` | 16-bit scales about 18.6 MB / 17.8 MiB | fits with Q4 weights in 320 MiB region |
 | Q4 metadata/alignment | format header, per-tensor metadata, padding | about 18 MiB margin with 16-bit scales | draft margin |
@@ -235,8 +336,9 @@ Current capacity read:
 
 - Q4 weights plus 16-bit scales should fit in 0.5 GB PL DDR4 with context 256 KV
   cache, assuming modest activation/debug buffers and no full BF16 weights.
-- Exact fit must still be checked after the PL DDR4 usable address range,
-  alignment rules, and Q4 artifact format are fixed.
+- The base 512 MiB PL DDR4 aperture is now hardware-proven, but exact full-model
+  fit must still be checked after alignment rules and the final Q4 artifact
+  format are fixed.
 - If FP32 scales are used instead of FP16 scales, the scale table grows to
   about 35.5 MiB. That still appears plausible, but it reduces weight-region
   metadata/alignment margin and should be re-budgeted before generating a full
@@ -423,13 +525,15 @@ TODO:
 
 TODO: Fill this after choosing AXI4-Lite or another control path.
 
-Current AXI BRAM smoke-test range is not the final control register map. It is
-only used to verify that PS can access a PL memory-mapped slave:
+Current AXI BRAM and DDR4 status GPIO ranges are not the final accelerator
+control register map. They are only used to verify that PS can access PL
+memory-mapped slaves and observe DDR4 readiness:
 
 | Smoke-Test Item | Address | Width | Access | Description |
 | --- | ---: | ---: | --- | --- |
-| BRAM word 0 | `0x8000_0000` | 32 | R/W | first pattern-test word |
-| BRAM word N | `0x8000_0000 + 4*N` | 32 | R/W | valid for `0 <= N < 2048` |
+| BRAM word 0 | `0xA000_0000` | 32 | R/W | first pattern-test word |
+| BRAM word N | `0xA000_0000 + 4*N` | 32 | R/W | valid for `0 <= N < 2048` |
+| DDR4 status | `0xA001_0000` | 3 useful bits | R | `bit0=calib_complete`, `bit1=ui_reset`, `bit2=axi_resetn`; good value is `0x5` |
 
 Future accelerator control should probably use AXI4-Lite registers separate
 from this temporary BRAM aperture.
@@ -464,14 +568,17 @@ Candidate first-version flow:
 8. PS reads the generated token and repeats decode.
 9. Optional debug mode copies intermediate buffers back to PS DDR.
 
-Open questions:
+Current state and open questions:
 
-- Does PS access future PL DDR4 directly, or through DMA?
-- Is future PL DDR4 coherent with PS caches?
-- How are large artifacts loaded into PL DDR4 on Windows/Linux during bring-up?
-- What is the fastest reliable path for test-vector staging?
-- Does `M_AXI_HPM0_FPD` become the preferred high-bandwidth path, or is it
-  disabled until a concrete PL DDR4 controller path is ready?
+- Direct PS memory-mapped access to PL DDR4 through `M_AXI_HPM0_FPD` is proven
+  for standalone 32-bit smoke-test writes/readbacks.
+- The next step is to define a small structured PL DDR4 staging buffer and use
+  it for Q4 vector/artifact bring-up.
+- Decide later whether DMA is needed for faster bulk copies.
+- Future cache coherency policy is still open for PS buffers, PL masters, DMA,
+  or cached runtime paths.
+- Large-artifact loading flow on Windows/Linux remains open until the Q4
+  full-model artifact format and transfer path are fixed.
 
 ## Validation Plan
 
@@ -484,18 +591,27 @@ artifacts/test_vectors/qwen3_0p6b_fp32_v0/
 Bring-up order:
 
 1. Run the AXI BRAM smoke test from PS:
-   - write/read 32-bit patterns at `0x8000_0000`
+   - write/read 32-bit patterns at `0xA000_0000`
    - cover at least the first few words, a middle address, and the final
-     aligned word at `0x8000_1FFC`
-   - status: passed in hardware with exact read-back matches
-2. RMSNorm RTL block reads `input_hidden`, `norm_weight`, and `eps`; compare
+     aligned word at `0xA000_1FFC`
+   - status: passed in current hardware with exact read-back matches
+2. Run the PL DDR4 smoke test from PS:
+   - use the reset-fix Vitis platform built from
+     `FPGA_Project/Vivado_Project/llm_system_pl_ddr4_aux_reset_fix.xsa`
+   - read the DDR4 status GPIO at `0xA001_0000`
+   - require `calib_complete=1`, `ui_reset=0`, and `axi_resetn=1`
+   - write/read 32-bit patterns at the first, middle, and final aligned words
+     of `0x4_0000_0000` through `0x4_1FFF_FFFF`
+   - use `UINTPTR` or another 64-bit-capable address type in C
+   - status: passed in current hardware with exact read-back matches
+3. RMSNorm RTL block reads `input_hidden`, `norm_weight`, and `eps`; compare
    with `expected_output`.
-3. Q4 GEMV RTL block starts from the 64-value dot-product smoke vector in
+4. Q4 GEMV RTL block starts from the 64-value dot-product smoke vector in
    `qwen3_0p6b_q4_v0/q_proj_row0_group0_dot64.npz`, then expands to full
    Layer 0 Q/K/V using `qkv_layer0_last_token_q4.npz`.
-4. Extend vectors and memory regions for RoPE, KV cache, attention, MLP, and
+5. Extend vectors and memory regions for RoPE, KV cache, attention, MLP, and
    complete Layer 0.
-5. Use FP32 vectors as golden references, but design GEMV/weight-storage RTL
+6. Use FP32 vectors as golden references, but design GEMV/weight-storage RTL
    around the required Q4 path from the start. The current Q4 v0 artifact is
    the first packed-weight contract; extend it before scaling beyond Layer 0
    Q/K/V.
@@ -504,7 +620,9 @@ Pass/fail fields to record:
 
 | Kernel | Vector | Max Abs Error | Mean Abs Error | Status |
 | --- | --- | ---: | ---: | --- |
-| PS-to-PL AXI BRAM | direct pattern test at `0x8000_0000` | exact match | exact match | passed |
+| PS-to-PL AXI BRAM | direct pattern test at `0xA000_0000` | exact match | exact match | passed |
+| DDR4 status GPIO | direct read at `0xA001_0000` | exact expected status `0x5` | exact expected status `0x5` | passed |
+| PS-to-PL PL DDR4 | direct pattern test at `0x4_0000_0000`, `0x4_0000_0004`, `0x4_0000_1000`, `0x4_1000_0000`, and `0x4_1FFF_FFFC` | exact match | exact match | passed |
 | RMSNorm | `rmsnorm_layer0_last_token.npz` | TODO | TODO | TODO |
 | Q4 Q GEMV | `qwen3_0p6b_q4_v0/qkv_layer0_last_token_q4.npz` | 0.22418976 | 0.01856172 | passed in Python verifier |
 | Q4 K GEMV | `qwen3_0p6b_q4_v0/qkv_layer0_last_token_q4.npz` | 0.12317824 | 0.01752916 | passed in Python verifier |
@@ -522,3 +640,9 @@ Pass/fail fields to record:
 | 2026-06-02 | Confirm q_norm/k_norm tensor shapes | Layer 0 `q_norm.weight` and `k_norm.weight` are both `[128]`; fixed-point gamma format remains open |
 | 2026-06-02 | Add KV cache address formula RTL | Implements `kv_cache_addr_gen.sv` for `cache[layer][kv_kind][head][position][dim]`, with context-256 and context-512 smoke tests |
 | 2026-06-02 | Align KV cache element stride with current fixed-point RTL | Changes the default KV cache address element stride to 4 bytes for signed 24-bit `Q12.12` K/V values padded to 32-bit DDR words |
+| 2026-06-03 | Record MPSoC-P4 PL DDR4 board facts | Confirms real Bank 64 x16 PL DDR4 wiring and 512 MiB-class device evidence, while keeping physical base/range TODO until Vivado instantiation and hardware readback |
+| 2026-06-03 | Confirm populated DDR4 marking | Physical marking `SEC 325` / `K4A4G16` / `BCTD` matches Samsung `K4A4G165WF-BCTD`; one x16 4Gb PL chip gives 0.5 GB and four PS x16 chips give 2 GB |
+| 2026-06-04 | Assign PL DDR4 in Vivado block design | Adds DDR4 MIG AXI path through `M_AXI_HPM0_FPD`; BRAM moves to `0xA000_0000`, PL DDR4 maps to `0x4_0000_0000`-`0x4_1FFF_FFFF`; block-design validation passes, hardware readback pending |
+| 2026-06-04 | Generate PL DDR4 bitstream and XSA | Synthesis, implementation, and bitstream generation pass for `llm_system_wrapper.bit`; routed timing meets constraints with WNS `0.572 ns`, route status reports `0` routing errors, and routed DRC has warnings but no errors; exported XSA is `FPGA_Project/Vivado_Project/llm_system_pl_ddr4_smoke.xsa`; Vitis platform/application and board readback remained pending at that time |
+| 2026-06-07 | Add DDR4 readiness status GPIO | Adds PS-readable `0xA001_0000` AXI GPIO with `calib_complete`, `ui_reset`, and `axi_resetn` status bits; expected good status is `0x5` |
+| 2026-06-07 | Prove PS-to-PL DDR4 hardware path | Final reset-fix XSA `llm_system_pl_ddr4_aux_reset_fix.xsa` and platform `llm_pl_ddr4_aux_reset_fix_platform` pass board smoke: BRAM at `0xA000_0000`, status GPIO at `0xA001_0000`, and PL DDR4 at `0x4_0000_0000` through `0x4_1FFF_FFFF` all read/write as expected |

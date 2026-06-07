@@ -1,9 +1,10 @@
 # Current State
 
-Last updated: 2026-06-03
+Last updated: 2026-06-07
 
-This file is the concise working-state handoff. For stable project context,
-read `PROJECT_CONTEXT.md` first. For workflow rules, read `AGENTS.md`.
+This file is the concise working-state handoff. For durable project context,
+read `PROJECT_CONTEXT.md` first. For detailed address planning, read
+`FPGA_MEMORY_MAP.md`. For workflow rules, read `AGENTS.md`.
 
 ## Current Goal
 
@@ -14,12 +15,13 @@ Current first-version target:
 
 - Serial prefill and single-token cached decode
 - Greedy argmax text continuation
-- PS-side tokenizer, detokenizer, and PL control
-- PL-side `next_token = run_one_token(input_token, position)` path
-- PL owns all model-side prefill and decode math; PS schedules tokens, loads
-  artifacts, writes control registers, polls status, and handles text I/O/debug
+- PS-side tokenizer, detokenizer, artifact loading, PL control, status polling,
+  and debug output
+- PL-side `next_token = run_one_token(input_token, position)` model path
+- PL owns model-side prefill and decode math
 - Initial context target: 128 or 256 tokens
 - Required PL DDR4 weight path: custom Q4 weight-only format
+- PL compute blocks use hand-written Verilog/SystemVerilog by default
 
 ## Software Baseline
 
@@ -33,7 +35,7 @@ Key locations:
 - Module references: `Qwen3-0.6B-Base/python_each_module/`
 - Module validation index:
   `Qwen3-0.6B-Base/python_each_module/README.md`
-- Test vectors:
+- FP32 test vectors:
   `artifacts/test_vectors/qwen3_0p6b_fp32_v0/` (ignored by Git)
 - Q4 bring-up vectors:
   `artifacts/test_vectors/qwen3_0p6b_q4_v0/` (ignored by Git)
@@ -43,201 +45,9 @@ Useful commands:
 ```bash
 conda run -n llm_fpga python Qwen3-0.6B-Base/pc_testing/10_manual_full_model_cached_decode.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/run_all_module_validations.py
-conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/12_verify_fpga_test_vectors.py
-conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/13_export_q4_gemv_vectors.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/14_verify_q4_gemv_vectors.py
-conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/15_export_q4_projection_vectors.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/16_profile_rmsnorm_ranges.py
-conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/17_export_rmsnorm_fixed_vectors.py
-conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/18_export_rope_fixed_vectors.py
 ```
-
-## Current RTL Progress
-
-The project now has reusable hand-written RTL compute blocks for Q4 GEMV,
-RMSNorm, the first RoPE attention-front-end stage, and KV cache address
-generation.
-
-Q4 GEMV stack:
-
-- `q4_dot_product_64.sv`: one 64-element group dot product with signed int4
-  weights and unsigned Q2.14 scale.
-- `q4_gemv_row_1024.sv`: one 1024-wide output row using 16 parallel dot64
-  engines.
-- `q4_gemv_tile_1024.sv`: parallel row tile, default `OUT_ROWS=4`.
-- `q4_gemv_projection_1024.sv`: projection controller that reuses one tile
-  across serial output-row tiles.
-
-Q4 GEMV fixed-point/interface state:
-
-- Large weights use the project custom Q4 weight-only path from `Q4_FORMAT.md`.
-- GEMV activation input now defaults to signed 24-bit `Q12.12`, matching the
-  planned RMSNorm output path.
-- The original 16-bit `Q4.12` bring-up vectors are still supported through
-  explicit `ACT_WIDTH=16` testbench/module overrides.
-- Product, partial, scaled, and row-accumulator widths are derived from
-  `ACT_WIDTH`. Default 24-bit activation derives 28-bit products, 34-bit
-  64-lane partial sums, 50-bit scaled group sums, and 56-bit row accumulators.
-
-RMSNorm stack:
-
-- `rmsnorm_sum_squares_1024.sv`: serial square-and-accumulate over one vector.
-- `fixed_sqrt_u64.sv`: sequential trial-bit unsigned square root.
-- `fixed_udiv.sv`: sequential unsigned shift-subtract divider.
-- `rmsnorm_apply_1024.sv`: serial multiply-scale-saturate apply stage.
-- `rmsnorm_1024.sv`: top-level controller across sum, mean/epsilon, sqrt,
-  reciprocal, and apply.
-
-RMSNorm fixed-point state:
-
-- Input residual/RMSNorm stream: signed 24-bit `Q14.10`.
-- Gamma: unsigned 16-bit `UQ8.8`.
-- Sum-squares accumulator: unsigned 64-bit with `2*IN_FRAC` scaling.
-- RMS/sqrt output: unsigned 24-bit `Q14.10`.
-- Inverse RMS: unsigned 24-bit `UQ8.16`.
-- RMSNorm output: signed 24-bit `Q12.12`, saturated to signed 24-bit range.
-- Current epsilon uses `EPS_Q20=1`, representing about `9.54e-7`.
-
-RoPE stack:
-
-- `rope_qk_layer_128.sv`: first 128-d head-dimension RoPE stage for one
-  token's Q/K heads. It accepts Q as `[16, 128]`, K as `[8, 128]`, shared
-  `[128]` cos/sin vectors for the current position, and produces RoPE-applied
-  Q/K outputs.
-
-RoPE fixed-point/interface state:
-
-- Q/K input: signed 24-bit `Q12.12`.
-- Cos/sin input: signed 16-bit `Q1.15`.
-- Q/K output: signed 24-bit `Q12.12`, saturated.
-- Current implementation processes one scalar lane per cycle and keeps the
-  flattened-vector bring-up style used by the existing RMSNorm/GEMV modules.
-
-KV cache address stack:
-
-- `kv_cache_addr_gen.sv`: byte-address generator for
-  `cache[layer][kv_kind][head][position][dim]`, where `kv_kind=0` is K and
-  `kv_kind=1` is V.
-- The module is parameterized for context 256 or 512 and element byte width.
-  The default uses 28 layers, 8 KV heads, head dimension 128, context 256, and
-  4 bytes per cache element. This matches the current fixed-point RTL path by
-  storing signed 24-bit `Q12.12` K/V values padded to 32-bit DDR words.
-- It outputs both `o_offset_bytes` and `o_byte_addr`, plus `o_valid` for index
-  range checking.
-
-RMSNorm range profiling:
-
-- `16_profile_rmsnorm_ranges.py` profiles all 113 RMSNorm modules in the local
-  Qwen3 model.
-- Latest prompt-suite profile covered 8 prompts and 257 prompt tokens plus one
-  generated feedback token per prompt.
-- Observed maxima: input abs about `6691.77`, output abs about `588.13`, gamma
-  max `192`, inv_rms max about `46.08`, and sum_squares max about `4.55e7`.
-- This profile justifies the current 24-bit RMSNorm formats for first RTL
-  bring-up, but it is not a formal proof over all possible prompts.
-
-## Latest Validation
-
-Local RTL recheck on 2026-06-02:
-
-- Re-ran every existing `FPGA_Project/sim/*.vvp` simulation locally; all passed.
-- Key real-vector checkpoints remained unchanged:
-  `tb_q4_gemv_projection_1024_real.sv` reported 284 waited cycles after start,
-  and `tb_rmsnorm_1024_real.sv` reported 2104 waited cycles after start.
-- `git status --short` was clean after the recheck; generated `.vcd`/`.vvp`
-  files remain ignored.
-
-Model tensor shape check on 2026-06-02:
-
-- A `safetensors` inspection under `conda run -n llm_fpga ...` confirmed
-  Layer 0 `q_norm.weight` and `k_norm.weight` are both shape `[128]`.
-- The same check confirmed the expected Layer 0 projection and MLP matrix
-  shapes already documented in `PROJECT_CONTEXT.md`.
-
-RoPE RTL checks:
-
-- `rope_qk_layer_128.sv` Icarus elaboration passed with:
-  `iverilog -g2012 -tnull -s rope_qk_layer_128 FPGA_Project/rtl/rope_qk_layer_128.sv`
-- `18_export_rope_fixed_vectors.py` exports real Layer 0 last-token Q/K after
-  q_norm/k_norm, current-position cos/sin, and fixed-point Q/K RoPE expected
-  outputs for `rope_qk_layer_128.sv`.
-- `tb_rope_qk_layer_128.sv` passed the real Layer 0 last-token RoPE vector
-  exactly. The simulation reported 3072 waited cycles after start,
-  `saturation=0`, Q output `max_abs_diff=0`, and K output `max_abs_diff=0`.
-- The exporter reported fixed-point output versus FP32 RoPE reference max abs
-  differences of about `0.00066185` for Q and `0.00784302` for K.
-
-KV cache RTL checks:
-
-- `tb_kv_cache_addr_gen.sv` passed context-256 and context-512 smoke vectors.
-- Covered K/V kind stride, head stride, position stride, dim stride, layer
-  stride, max context-512 address, invalid layer range reporting, and the
-  current 4-byte padded fixed-point element stride.
-
-Python/software checks:
-
-- `04_validate_qk_norm_rope.py` re-ran on 2026-06-03 and matched Hugging Face
-  for q_norm, k_norm, and post-RoPE Layer 0 K cache with max abs error `0`.
-- `12_verify_fpga_test_vectors.py` passed for the FP32 module vectors.
-- `14_verify_q4_gemv_vectors.py` passed for the custom Q4 bring-up vectors.
-- `15_export_q4_projection_vectors.py` exports real q_proj projection vectors.
-- `16_profile_rmsnorm_ranges.py` produced the range profile summarized above.
-- `17_export_rmsnorm_fixed_vectors.py` exports real Layer 0 input_layernorm
-  fixed-point RTL vectors from the reference prompt path.
-- `18_export_rope_fixed_vectors.py` exports real Layer 0 last-token Q/K RoPE
-  fixed-point RTL vectors from the reference prompt path.
-
-Q4 GEMV RTL checks:
-
-- `tb_q4_dot_product_64.sv` passes with `partial_sum = 24751` and
-  `scaled_sum_q26 = 3019622`.
-- `tb_q4_gemv_row_1024.sv` passes q_proj row 0 with
-  `row_sum_q26 = -3482169`.
-- `tb_q4_gemv_tile_1024.sv` passes q_proj rows 0..3 with Q26 outputs
-  `[-3482169, 7403300, 4069596, -6026990]`.
-- `tb_q4_gemv_projection_1024.sv` passes two repeated 4-row projection tiles.
-- `tb_q4_gemv_projection_1024_real.sv` passes real q_proj rows 0..15 with exact
-  Q26 outputs and reported 284 waited cycles after start.
-- Icarus elaboration passes for default-width q_proj-style
-  `OUT_FEATURES=2048`, k/v-style `OUT_FEATURES=1024`, and explicit
-  `ACT_WIDTH=16` compatibility.
-
-RMSNorm RTL checks:
-
-- `tb_rmsnorm_sum_squares_1024.sv` passes an 8-element smoke vector with
-  `sum_squares = 31457454`.
-- `tb_fixed_sqrt_u64.sv` passes integer and Q20-style square-root vectors with
-  24-cycle normal latency.
-- `tb_fixed_udiv.sv` passes integer, RMSNorm-style `2^26 / rms_q10`, and
-  divide-by-zero vectors.
-- `tb_rmsnorm_apply_1024.sv` passes nominal multiply-scale vectors and
-  saturation vectors.
-- `tb_rmsnorm_1024.sv` passes 8-element end-to-end +/-1.0 and +/-2.0 vectors
-  with expected sum, mean, inv_rms, and Q12 outputs.
-- `tb_rmsnorm_1024_real.sv` passes the real Layer 0 input_layernorm last-token
-  vector exactly. The exported expected debug values are `sum_squares=589959`,
-  `mean_square=576`, `sqrt_radicand=577`, `rms_q10=24`, `inv_rms=2796202`,
-  `saturation=0`, and output `max_abs_diff=0`. The real-vector simulation
-  reported 2104 waited cycles after start.
-- VCD inspection confirmed expected handshakes for sqrt/divider/apply and the
-  top-level `START_SUM -> START_SQRT -> START_DIV -> START_APPLY -> DONE`
-  ordering.
-
-## Open Gaps
-
-- RMSNorm has real Layer 0 input_layernorm validation, but not yet broader
-  coverage for `post_attention_layernorm`, `q_norm`, `k_norm`, or final norm.
-- GEMV projection has real q_proj rows 0..15 validation, but not yet broad
-  q/k/v/o/MLP coverage.
-- RoPE now has real Layer 0 last-token validation, but not yet broader
-  position/layer coverage or a streaming/memory-mapped wrapper.
-- KV cache address generation exists, but append/read FSMs and DDR4/AXI
-  integration are still pending.
-- Attention score/softmax/value accumulation, residual add, SiLU, MLP
-  elementwise multiply, final LM-head scan, and greedy argmax are still
-  pending.
-- Current RTL uses flattened vectors for bring-up. Memory-mapped or streaming
-  PS/PL integration is still a later step.
 
 Stable reference prompt:
 
@@ -251,59 +61,168 @@ Known greedy checkpoints:
 - After feeding `' a'` back into cached decode: token id `26291`, text
   `' fascinating'`
 
-## Hardware Bring-Up Snapshot
+## RTL Status
 
-The first PS-to-PL AXI communication checkpoint is successful.
+The current hand-written RTL bring-up stack includes:
 
-Development direction:
+- Q4 GEMV:
+  - `q4_dot_product_64.sv`
+  - `q4_gemv_row_1024.sv`
+  - `q4_gemv_tile_1024.sv`
+  - `q4_gemv_projection_1024.sv`
+- RMSNorm:
+  - `rmsnorm_sum_squares_1024.sv`
+  - `fixed_sqrt_u64.sv`
+  - `fixed_udiv.sv`
+  - `rmsnorm_apply_1024.sv`
+  - `rmsnorm_1024.sv`
+- RoPE:
+  - `rope_qk_layer_128.sv`
+- KV cache address generation:
+  - `kv_cache_addr_gen.sv`
 
-- Keep the project PL-first and RTL-first.
-- Use hand-written Verilog/SystemVerilog for PL compute blocks by default.
-- Keep PS-side bare-metal code as orchestration, loading, control, and
-  validation support.
+Current fixed-point direction:
 
-Current hardware checkpoint:
+- Large weights: project custom Q4 weight-only format from `Q4_FORMAT.md`
+- Q4 scales: current bring-up uses unsigned 16-bit `Q2.14`
+- RMSNorm/residual input: signed 24-bit `Q14.10`
+- RMSNorm output and Q/K/RoPE path: signed 24-bit `Q12.12`
+- RMSNorm gamma: unsigned 16-bit `UQ8.8`
+- KV cache first RTL storage plan: signed 24-bit `Q12.12` padded to 32-bit
+  DDR words
+
+Latest local RTL/software validation state:
+
+- Existing Icarus simulation set under `FPGA_Project/sim/` passed in the latest
+  full local recheck.
+- Q4 GEMV real-vector RTL checks pass for Layer 0 q_proj rows 0 through 15.
+- RMSNorm real-vector RTL check passes for the Layer 0 input_layernorm
+  last-token vector.
+- RoPE real-vector RTL check passes for the Layer 0 last-token Q/K vector.
+- `kv_cache_addr_gen.sv` passes context-256 and context-512 address smoke
+  vectors.
+- Python FP32 module vectors and Q4 GEMV vectors pass their current verifiers.
+
+## Hardware Bring-Up Status
+
+PS-to-PL DDR4 access is complete as a hardware checkpoint.
+
+Current Vivado/Vitis artifacts:
 
 - Vivado project: `FPGA_Project/Vivado_Project/LLM_FPGA.xpr`
-- Exported XSA: `FPGA_Project/Vivado_Project/llm_system_axi_bram_smoke.xsa`
-- Vivado version/part: 2025.1.1, `xczu2eg-sfvc784-2-i`
-- AXI smoke path:
-  `M_AXI_HPM0_LPD -> SmartConnect -> AXI BRAM Controller -> Block Memory`
-- AXI BRAM range: `0x8000_0000` through `0x8000_1FFF` (8 KiB)
-- Vitis app source: `FPGA_Project/software/axi_bram_smoke/main.c`
-- Confirmed run: 32-bit writes/reads pass at offsets `0x0`, `0x4`, `0x8`,
-  `0x400`, and `0x1FFC`
+- Current exported hardware handoff:
+  `FPGA_Project/Vivado_Project/llm_system_pl_ddr4_aux_reset_fix.xsa`
+- Current generated bitstream:
+  `FPGA_Project/Vivado_Project/LLM_FPGA.runs/impl_1/llm_system_wrapper.bit`
+- Current Vitis platform:
+  `Vitis_Workspace/llm_pl_ddr4_aux_reset_fix_platform/`
+- Durable standalone smoke-test source:
+  `FPGA_Project/software/pl_ddr4_smoke/main.c`
+- Current Vitis workspace app copy:
+  `Vitis_Workspace/pl_ddr4_smoke_app/src/main.c`
 
-Important bring-up notes:
+Current PS-to-PL memory fabric:
 
-- Boot mode used for the successful run: `0000` JTAG boot.
-- Serial path: CH340 USB-UART, 115200 baud, UART0 on MIO42/MIO43.
-- Board initialization used TCL / `psu_init.tcl`, not FSBL.
-- AXI BRAM Controller must stay single-port for the current connected BRAM
-  topology.
-- Earlier Vitis path/bitstream issues were fixed by regenerating the platform,
-  rebuilding the app, and pointing launch config at the platform bitstream.
+```text
+M_AXI_HPM0_FPD
+  -> AXI SmartConnect
+      M00_AXI -> AXI BRAM Controller -> Block Memory Generator
+      M01_AXI -> AXI Clock Converter -> ddr4_0/C0_DDR4_S_AXI
+      M02_AXI -> AXI GPIO DDR4 status register
+```
+
+Current address map:
+
+| Space / IP | Base | High | Size | Status |
+| --- | ---: | ---: | ---: | --- |
+| PS DDR low memory | `0x0000_0000` | `0x7FEF_FFFF` | about 2 GiB minus reserved top window | exported in current BSP |
+| AXI BRAM smoke memory | `0xA000_0000` | `0xA000_1FFF` | 8 KiB | passed in current hardware smoke |
+| DDR4 status AXI GPIO | `0xA001_0000` | `0xA001_FFFF` | 64 KiB | passed in current hardware smoke |
+| PL DDR4 | `0x4_0000_0000` | `0x4_1FFF_FFFF` | 512 MiB | passed in current hardware smoke |
+
+DDR4 status GPIO bit layout at `0xA001_0000`:
+
+| Bit | Signal | Good Value |
+| ---: | --- | ---: |
+| 0 | `ddr4_0/c0_init_calib_complete` | `1` |
+| 1 | `ddr4_0/c0_ddr4_ui_clk_sync_rst` | `0` |
+| 2 | `proc_sys_reset_0/peripheral_aresetn` | `1` |
+
+The good DDR4 status word is therefore `0x5`.
+
+Current reset wiring:
+
+- `ddr4_0/c0_ddr4_ui_clk_sync_rst` feeds the DDR UI-domain
+  `proc_sys_reset_0/ext_reset_in`.
+- `proc_sys_reset_0/aux_reset_in` is tied high because
+  `proc_sys_reset_0` treats that input as active-low.
+- `proc_sys_reset_0/mb_debug_sys_rst` is tied low.
+- `proc_sys_reset_0/peripheral_aresetn` drives the DDR-side reset release path,
+  including `ddr4_0/c0_ddr4_aresetn` and the AXI Clock Converter M_AXI-side
+  reset.
+
+Current board-run result:
+
+- Boot mode: JTAG boot (`0000`)
+- Serial path: CH340 USB-UART on COM110, 115200 baud
+- Vitis launch style: `psu_init.tcl` enabled, FSBL initialization disabled
+- AXI BRAM smoke passed at:
+  - `0x0_A0000000`
+  - `0x0_A0000004`
+  - `0x0_A0000008`
+  - `0x0_A0000400`
+  - `0x0_A0001FFC`
+- DDR4 status reported:
+  `DDR4 status raw 0x5 calib_complete=1 ui_reset=0 axi_resetn=1`
+- PL DDR4 smoke passed at:
+  - `0x4_00000000`
+  - `0x4_00000004`
+  - `0x4_00001000`
+  - `0x4_10000000`
+  - `0x4_1FFFFFFC`
+
+This proves the first PS-to-PL DDR4 path through
+`M_AXI_HPM0_FPD -> axi_smc -> axi_clock_converter_0 -> ddr4_0/C0_DDR4_S_AXI`
+is working for 32-bit standalone smoke-test accesses.
+
+Previous useful checkpoint:
+
+- The earlier BRAM-only hardware checkpoint used `M_AXI_HPM0_LPD` and
+  `0x8000_0000` through `0x8000_1FFF`.
+- The current integrated PL DDR4 design uses `M_AXI_HPM0_FPD`; the BRAM smoke
+  aperture moved to `0xA000_0000`.
+
+## Open Gaps
+
+- PL DDR4 is accessible from PS, but there is not yet a real PL data mover,
+  AXI master, DMA path, or compute kernel consuming PL DDR4 data.
+- The memory-map layout for full Q4 artifacts, KV cache, activation buffers,
+  RoPE tables, and debug regions is still draft.
+- RMSNorm, GEMV, RoPE, and KV address RTL blocks are validated in focused
+  simulations, but they are not yet integrated into a streaming or memory-
+  mapped one-token datapath.
+- Attention score/softmax/value accumulation, residual add, SiLU, MLP
+  elementwise multiply, final LM-head scan, and greedy argmax are still
+  pending in RTL.
+- Cache coherency, bulk transfer strategy, and any future DMA policy are still
+  open. The current proven path is direct PS memory-mapped 32-bit access.
 
 ## Immediate Next Step
 
-Next phase: continue the attention front-end now that RoPE has a real-vector
-RTL check.
+Start the first small PL DDR4-backed data movement step for the accelerator
+path.
 
-1. Plan the KV cache append/read FSMs around `kv_cache_addr_gen.sv`, using
-   RoPE-applied K and fixed-point V cache values as the first cache payloads.
-2. Decide the first V-cache fixed-point export/check path, because K is stored
-   after RoPE while V is stored from the reshaped/transposed `v_proj` output.
-3. Optionally extend `17_export_rmsnorm_fixed_vectors.py` and
-   `tb_rmsnorm_1024_real.sv` beyond Layer 0 `input_layernorm` to cover
-   `post_attention_layernorm` and final norm cases.
-4. Extend GEMV projection vectors beyond q_proj rows 0..15 when useful:
-   q/k/v projection tiles first, then o_proj and MLP gate/up/down projections.
-5. Keep PS-side C minimal until these PL compute blocks have stable standalone
-   simulation evidence. The PS should remain orchestration/control, not model
-   compute.
-6. Continue refining `FPGA_MEMORY_MAP.md` when PL DDR4 is instantiated,
-   especially PL DDR4 base/range, usable capacity, PS-to-PL transfer path, and
-   Q4/KV/activation budgets.
+Recommended next slice:
+
+1. Reserve a tiny test-vector staging area inside the draft PL DDR4 map.
+2. Write a standalone PS loader that places a small structured test buffer
+   there, using `UINTPTR` for 64-bit PL DDR4 addresses.
+3. Read the same buffer back from PS and record exact pass/fail evidence.
+4. Use that buffer contract as the first staging path for Q4 vector/artifact
+   experiments before connecting a PL RTL reader.
+
+Keep this step narrow. The goal is not full-model loading yet; it is to turn
+the proven PL DDR4 aperture into a stable software/hardware data contract.
 
 ## Practical Notes
 

@@ -150,13 +150,34 @@ Current user-reported FPGA target:
 - Device: `XCZU2EG`
 - Vivado project part: `xczu2eg-sfvc784-2-i`
 - Vivado version: 2025.1
+- Board/material: ALIENTEK/ATK MPSoC-P4 V1.4 reference material, schematic
+  title `ATK_DFZU2EG_ZU4EV_1V4`
 - PS DDR: 2 GB
-- PL DDR4: 0.5 GB
+- PL DDR4: 0.5 GB / nominal 512 MiB, confirmed as real PL-side DDR4 wiring on
+  FPGA Bank 64
+- PL DDR4 physical interface: x16 DDR4, `VCCO_64` at `DDR_1V2`,
+  `INTERNAL_VREF 0.6`, two DQS pairs, two DM/DBI pins, 100 MHz differential
+  PL reference clock on AE5/AF5
+- PL DDR4 physical board marking reported on 2026-06-03: `SEC 325`,
+  `K4A4G16`, `BCTD`, `6WC0150SC`, matching the Samsung `K4A4G165WF-BCTD`
+  4Gb x16 DDR4 datasheet in the board material directory. The schematic
+  page-18 `MT40A256M16GE-083E` label is treated as an alternate/library
+  placeholder for the populated board unless later BOM evidence says otherwise.
+- PS-to-PL PL DDR4 access checkpoint passed on 2026-06-07. The current
+  reset-fix design maps AXI BRAM at `0xA000_0000` through `0xA000_1FFF`, DDR4
+  status GPIO at `0xA001_0000`, and PL DDR4 at `0x4_0000_0000` through
+  `0x4_1FFF_FFFF`. The standalone smoke app reported DDR4 status `0x5`
+  (`calib_complete=1`, `ui_reset=0`, `axi_resetn=1`) and exact write/readback
+  matches at the PL DDR4 base, near-base, middle, and final aligned word.
+- PS DDR capacity check: the schematic uses four x16 DDR4 devices across
+  `PS_DDR4_DQ[63:0]`; with the same 4Gb-class devices this gives 16Gb total,
+  matching the 2 GB PS DDR target.
 - First KV cache context target for memory-map planning: 256 tokens
 
-The first memory-map planning document is `FPGA_MEMORY_MAP.md`. The dual-memory
-target means the first hardware architecture should distinguish PS-owned
-runtime/staging memory from PL-side accelerator storage. The PL DDR4 is too
+The memory-map planning document is `FPGA_MEMORY_MAP.md`. The dual-memory
+target distinguishes PS-owned runtime/staging memory from PL-side accelerator
+storage. The base PS-to-PL PL DDR4 aperture is now hardware-proven, but the
+accelerator layout inside that aperture is still draft. The PL DDR4 is too
 small for the complete BF16 baseline weights, so the first deployable PL
 weight-storage path must be the project custom Q4 weight-only format plus KV
 cache and activation buffers, subject to the detailed capacity budget in the
@@ -334,12 +355,21 @@ and Q2.14 scales, the default 24-bit path derives:
 
 ## Immediate Technical Direction
 
-The current phase is FPGA bring-up:
+The PS-to-PL memory bring-up phase has reached its first hardware checkpoint:
+AXI BRAM, DDR4 status GPIO, and PL DDR4 are all reachable from PS in the
+current standalone smoke app.
 
-1. Run the PS-side AXI BRAM write/read smoke test at `0x8000_0000`.
-2. Add and map PL DDR4 only after the PS-to-PL AXI path is proven.
-3. Bring up small hand-written RTL compute blocks against the exported FP32
-   vectors, starting with RMSNorm and GEMV.
+The next phase is to turn the proven PL DDR4 aperture into a small accelerator
+data contract:
+
+1. Define a tiny structured PL DDR4 staging buffer for test vectors and Q4
+   bring-up artifacts.
+2. Write/read that staging buffer from a standalone PS app using 64-bit
+   `UINTPTR` addresses.
+3. Use the same buffer contract as the first source/sink for a hand-written PL
+   RTL reader or data-movement block.
+4. Then connect the existing RTL compute blocks to memory-backed test data in
+   small steps.
 
 Keep the exact next action in `CURRENT_STATE.md`; keep detailed address
 planning in `FPGA_MEMORY_MAP.md`.

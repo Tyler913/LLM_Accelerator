@@ -1,0 +1,68 @@
+# MPSoC-P4 PL DDR4 constraints for llm_system_wrapper.
+# Source mapping: vendor MPSoC_P4_IO.xdc / 24_ddr4_rw ddr4_pin.xdc.
+
+set_property BITSTREAM.GENERAL.COMPRESS TRUE [current_design]
+
+# 100 MHz differential PL reference clock for the DDR4 MIG.
+create_clock -period 10.000 -name pl_ddr4_ref_clk [get_ports {C0_SYS_CLK_0_clk_p}]
+set_property IOSTANDARD DIFF_HSTL_I_12 [get_ports {C0_SYS_CLK_0_clk_p}]
+set_property IOSTANDARD DIFF_HSTL_I_12 [get_ports {C0_SYS_CLK_0_clk_n}]
+set_property PACKAGE_PIN AE5 [get_ports {C0_SYS_CLK_0_clk_p}]
+set_property PACKAGE_PIN AF5 [get_ports {C0_SYS_CLK_0_clk_n}]
+
+# PL DDR4 interface on FPGA Bank 64.
+set_property INTERNAL_VREF 0.6 [get_iobanks 64]
+
+set_property PACKAGE_PIN AH4 [get_ports {C0_DDR4_0_odt[0]}]
+set_property PACKAGE_PIN AE8 [get_ports {C0_DDR4_0_bg[0]}]
+
+set_property PACKAGE_PIN AB5 [get_ports {C0_DDR4_0_adr[16]}]
+set_property PACKAGE_PIN AB7 [get_ports {C0_DDR4_0_adr[15]}]
+set_property PACKAGE_PIN AF6 [get_ports {C0_DDR4_0_adr[14]}]
+set_property PACKAGE_PIN AD9 [get_ports {C0_DDR4_0_adr[13]}]
+set_property PACKAGE_PIN AC6 [get_ports {C0_DDR4_0_adr[12]}]
+set_property PACKAGE_PIN AH9 [get_ports {C0_DDR4_0_adr[11]}]
+set_property PACKAGE_PIN AE7 [get_ports {C0_DDR4_0_adr[10]}]
+set_property PACKAGE_PIN AC9 [get_ports {C0_DDR4_0_adr[9]}]
+set_property PACKAGE_PIN AH8 [get_ports {C0_DDR4_0_adr[8]}]
+set_property PACKAGE_PIN AE9 [get_ports {C0_DDR4_0_adr[7]}]
+set_property PACKAGE_PIN AH7 [get_ports {C0_DDR4_0_adr[6]}]
+set_property PACKAGE_PIN AD7 [get_ports {C0_DDR4_0_adr[5]}]
+set_property PACKAGE_PIN AF7 [get_ports {C0_DDR4_0_adr[4]}]
+set_property PACKAGE_PIN AC8 [get_ports {C0_DDR4_0_adr[3]}]
+set_property PACKAGE_PIN AF8 [get_ports {C0_DDR4_0_adr[2]}]
+set_property PACKAGE_PIN AB8 [get_ports {C0_DDR4_0_adr[1]}]
+set_property PACKAGE_PIN AG8 [get_ports {C0_DDR4_0_adr[0]}]
+
+set_property PACKAGE_PIN AD2 [get_ports {C0_DDR4_0_dqs_t[1]}]
+set_property PACKAGE_PIN AD1 [get_ports {C0_DDR4_0_dqs_c[1]}]
+set_property PACKAGE_PIN AE2 [get_ports {C0_DDR4_0_dqs_t[0]}]
+set_property PACKAGE_PIN AF2 [get_ports {C0_DDR4_0_dqs_c[0]}]
+
+set_property PACKAGE_PIN AC4 [get_ports {C0_DDR4_0_dq[15]}]
+set_property PACKAGE_PIN AC3 [get_ports {C0_DDR4_0_dq[14]}]
+set_property PACKAGE_PIN AB4 [get_ports {C0_DDR4_0_dq[13]}]
+set_property PACKAGE_PIN AB3 [get_ports {C0_DDR4_0_dq[12]}]
+set_property PACKAGE_PIN AB2 [get_ports {C0_DDR4_0_dq[11]}]
+set_property PACKAGE_PIN AC2 [get_ports {C0_DDR4_0_dq[10]}]
+set_property PACKAGE_PIN AB1 [get_ports {C0_DDR4_0_dq[9]}]
+set_property PACKAGE_PIN AC1 [get_ports {C0_DDR4_0_dq[8]}]
+set_property PACKAGE_PIN AG3 [get_ports {C0_DDR4_0_dq[7]}]
+set_property PACKAGE_PIN AH3 [get_ports {C0_DDR4_0_dq[6]}]
+set_property PACKAGE_PIN AE3 [get_ports {C0_DDR4_0_dq[5]}]
+set_property PACKAGE_PIN AF3 [get_ports {C0_DDR4_0_dq[4]}]
+set_property PACKAGE_PIN AH2 [get_ports {C0_DDR4_0_dq[3]}]
+set_property PACKAGE_PIN AH1 [get_ports {C0_DDR4_0_dq[2]}]
+set_property PACKAGE_PIN AF1 [get_ports {C0_DDR4_0_dq[1]}]
+set_property PACKAGE_PIN AG1 [get_ports {C0_DDR4_0_dq[0]}]
+
+set_property PACKAGE_PIN AB6 [get_ports {C0_DDR4_0_cs_n[0]}]
+set_property PACKAGE_PIN AG6 [get_ports {C0_DDR4_0_ck_t[0]}]
+set_property PACKAGE_PIN AG5 [get_ports {C0_DDR4_0_ck_c[0]}]
+set_property PACKAGE_PIN AE4 [get_ports {C0_DDR4_0_cke[0]}]
+set_property PACKAGE_PIN AG9 [get_ports {C0_DDR4_0_reset_n}]
+set_property PACKAGE_PIN AD4 [get_ports {C0_DDR4_0_act_n}]
+set_property PACKAGE_PIN AC7 [get_ports {C0_DDR4_0_ba[1]}]
+set_property PACKAGE_PIN AH6 [get_ports {C0_DDR4_0_ba[0]}]
+set_property PACKAGE_PIN AD5 [get_ports {C0_DDR4_0_dm_n[1]}]
+set_property PACKAGE_PIN AG4 [get_ports {C0_DDR4_0_dm_n[0]}]
