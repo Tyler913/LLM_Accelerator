@@ -8,11 +8,12 @@ This document defines the first FPGA-visible memory layout for the Qwen3
 from draft accelerator subregions that still need real RTL data-movement and
 kernel integration.
 
-The descriptor-based tensor staging format for PL DDR4 is `QMAP_FORMAT.md`.
-Q4 quantization and packing semantics remain in `Q4_FORMAT.md`.
+The descriptor-based tensor staging format for PL DDR4 is
+`Source/QMAP_FORMAT.md`. Q4 quantization and packing semantics remain in
+`Source/Q4_FORMAT.md`.
 
-For the current project state, read `PROJECT_CONTEXT.md` and
-`CURRENT_STATE.md` first.
+For the current project state, read `Source/PROJECT_CONTEXT.md` and
+`Source/CURRENT_STATE.md` first.
 
 ## Hardware Target
 
@@ -174,7 +175,7 @@ High-level split:
   Python vectors as golden references.
 - Matrix layout: QMAP descriptors record logical shape and physical byte
   strides. Row-major contiguous Q4 groups remain the first GEMV bring-up
-  layout from `Q4_FORMAT.md`.
+  layout from `Source/Q4_FORMAT.md`.
 - Cache coherency rule between PS and PL: TODO. For the current standalone
   smoke tests, use direct memory-mapped accesses plus explicit cache
   flush/invalidate handling where the app touches cached regions.
@@ -309,7 +310,7 @@ write/read 32-bit words:
 
 First descriptor-based staging contract:
 
-- Format: QMAP v1, documented in `QMAP_FORMAT.md`.
+- Format: QMAP v1, documented in `Source/QMAP_FORMAT.md`.
 - First QMAP image base: `0x4_1B10_0000`.
 - First QMAP image: Layer 0 `q_proj` row 0 group 0 dot64 vector.
 - Header: `0x4_1B10_0000`.
@@ -379,8 +380,9 @@ matrices. RMSNorm gamma vectors, Q4 scales, metadata, activations,
 accumulators, and KV cache may use separate explicitly chosen formats, but they
 do not permit a BF16/FP32 full-weight PL DDR4 layout.
 
-The current Verilog-facing Q4 v0 format is documented in `Q4_FORMAT.md`.
-The DDR descriptor/image contract is documented in `QMAP_FORMAT.md`.
+The current Verilog-facing Q4 v0 format is documented in
+`Source/Q4_FORMAT.md`. The DDR descriptor/image contract is documented in
+`Source/QMAP_FORMAT.md`.
 Current bring-up artifact scope:
 
 ```text
@@ -429,7 +431,7 @@ Open decisions:
   exact packing, scale placement, and validation tolerance.
 - Use row-major, column-major, or tiled layout for GEMV?
 - Pack two signed int4 values per byte in low/high nibble order as defined in
-  `Q4_FORMAT.md` for the first QMAP images.
+  `Source/Q4_FORMAT.md` for the first QMAP images.
 - Scale placement: current Q4 v0 artifact stores separate scale arrays; QMAP
   should initially use separate scale descriptors, with interleaving left as a
   deliberate later optimization.

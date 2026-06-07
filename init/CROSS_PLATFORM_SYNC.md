@@ -176,4 +176,4 @@ When adding a new required large artifact, update:
 - `init/git-hooks/pre-commit` if the artifact introduces a new large-file
   extension or path pattern that should be blocked from Git
 - this runbook
-- `CURRENT_STATE.md`
+- `Source/CURRENT_STATE.md`

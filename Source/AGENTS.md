@@ -1,7 +1,7 @@
 # Agent Instructions
 
-Before making changes in this repository, read `PROJECT_CONTEXT.md` and
-`CURRENT_STATE.md`.
+Before making changes in this repository, read `Source/PROJECT_CONTEXT.md` and
+`Source/CURRENT_STATE.md`.
 
 Hard rules:
 
@@ -27,13 +27,15 @@ Hard rules:
 
 Project workflow notes:
 
-- Keep `CURRENT_STATE.md` updated automatically after meaningful progress.
+- Core project handoff Markdown files live under `Source/`; the root
+  `README.md` is the entry point.
+- Keep `Source/CURRENT_STATE.md` updated automatically after meaningful progress.
   Meaningful progress includes a new script, a successful or failed validation,
   an important tensor/shape/memory finding, a model/quantization/design
   decision, a blocker, or a changed next-step plan.
-- Update `PROJECT_CONTEXT.md` when the new information is durable project
-  context rather than just current progress. Update `AGENTS.md` only when the
-  workflow rules themselves change.
+- Update `Source/PROJECT_CONTEXT.md` when the new information is durable project
+  context rather than just current progress. Update `Source/AGENTS.md` only
+  when the workflow rules themselves change.
 - Do not paste long chat transcripts into project docs. Summarize the finding,
   evidence, command, result, and next action in a form future work can reuse.
 - Write repository code, code comments, docstrings, script output labels, and

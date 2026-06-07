@@ -3,9 +3,9 @@
 Last updated: 2026-06-07
 
 This file is the concise working-state handoff. For durable project context,
-read `PROJECT_CONTEXT.md` first. For detailed address planning, read
-`FPGA_MEMORY_MAP.md`. For descriptor-based PL DDR4 tensor staging, read
-`QMAP_FORMAT.md`. For workflow rules, read `AGENTS.md`.
+read `Source/PROJECT_CONTEXT.md` first. For detailed address planning, read
+`Source/FPGA_MEMORY_MAP.md`. For descriptor-based PL DDR4 tensor staging, read
+`Source/QMAP_FORMAT.md`. For workflow rules, read `Source/AGENTS.md`.
 
 ## Current Goal
 
@@ -85,7 +85,8 @@ The current hand-written RTL bring-up stack includes:
 
 Current fixed-point direction:
 
-- Large weights: project custom Q4 weight-only format from `Q4_FORMAT.md`
+- Large weights: project custom Q4 weight-only format from
+  `Source/Q4_FORMAT.md`
 - Q4 scales: current bring-up uses unsigned 16-bit `Q2.14`
 - RMSNorm/residual input: signed 24-bit `Q14.10`
 - RMSNorm output and Q/K/RoPE path: signed 24-bit `Q12.12`
@@ -258,8 +259,10 @@ the proven PL DDR4 aperture into a stable software/hardware tensor contract.
 - Treat BF16/FP32 model data as software reference and validation input only.
   The first PL DDR4 weight layout and GEMV datapaths must assume custom Q4
   weight-only storage for large weights.
-- Keep Q4 quantization semantics in `Q4_FORMAT.md` and DDR tensor placement in
-  `QMAP_FORMAT.md`.
+- Core project handoff Markdown files live under `Source/`; the root
+  `README.md` remains the entry point.
+- Keep Q4 quantization semantics in `Source/Q4_FORMAT.md` and DDR tensor
+  placement in `Source/QMAP_FORMAT.md`.
 - Keep PS-side code as orchestration/support only. Do not move model math for
   prefill or decode back into PS unless the project direction explicitly
   changes.
@@ -268,5 +271,5 @@ the proven PL DDR4 aperture into a stable software/hardware tensor contract.
   platform/application/build outputs from the Vivado hardware export.
 - Do not use broad staging commands such as `git add .` unless explicitly
   requested.
-- Keep `CURRENT_STATE.md` concise. Store detailed validation logic in scripts
-  and summarize only durable results here.
+- Keep `Source/CURRENT_STATE.md` concise. Store detailed validation logic in
+  scripts and summarize only durable results here.

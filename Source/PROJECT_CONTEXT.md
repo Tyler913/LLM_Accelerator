@@ -8,7 +8,7 @@ Hummingbird+ paper:
   Prototype to Edge Product`
 
 For the current working state and immediate next step, read
-`CURRENT_STATE.md` after this file.
+`Source/CURRENT_STATE.md` after this file.
 
 ## Long-Term Goal
 
@@ -177,7 +177,7 @@ Current user-reported FPGA target:
   matching the 2 GB PS DDR target.
 - First KV cache context target for memory-map planning: 256 tokens
 
-The memory-map planning document is `FPGA_MEMORY_MAP.md`. The dual-memory
+The memory-map planning document is `Source/FPGA_MEMORY_MAP.md`. The dual-memory
 target distinguishes PS-owned runtime/staging memory from PL-side accelerator
 storage. The base PS-to-PL PL DDR4 aperture is now hardware-proven, but the
 accelerator layout inside that aperture is still draft. The PL DDR4 is too
@@ -266,9 +266,10 @@ deployable PL implementation. Do not build a first PL DDR4 storage plan that
 requires full BF16/FP32 model weights.
 
 The Verilog-facing Q4 v0 format and current Layer 0 Q/K/V artifact are
-documented in `Q4_FORMAT.md`.
+documented in `Source/Q4_FORMAT.md`.
 
-Descriptor-based PL DDR4 tensor staging is documented in `QMAP_FORMAT.md`.
+Descriptor-based PL DDR4 tensor staging is documented in
+`Source/QMAP_FORMAT.md`.
 QMAP v1 is the intended bridge between generated Q4 artifacts, PS loaders, and
 future PL readers. It starts with the real Layer 0 `q_proj` row 0 group 0
 dot64 vector, then scales by adding tensor descriptors and larger payloads
@@ -382,8 +383,8 @@ contract:
 The first two steps are complete. The next durable hardware-facing task is a
 narrow PL-side QMAP descriptor reader.
 
-Keep the exact next action in `CURRENT_STATE.md`; keep detailed address
-planning in `FPGA_MEMORY_MAP.md`.
+Keep the exact next action in `Source/CURRENT_STATE.md`; keep detailed address
+planning in `Source/FPGA_MEMORY_MAP.md`.
 
 ## Python Environment Rule
 
@@ -400,6 +401,8 @@ user explicitly changes the rule.
 
 - Preserve model artifacts and paper files unless the user explicitly asks to
   remove them.
+- Core project handoff Markdown files live under `Source/`; the root
+  `README.md` remains the entry point.
 - Keep large model weights and generated FPGA/model artifacts out of normal Git
   history.
 - Use `init/CROSS_PLATFORM_SYNC.md` and `init/` scripts to restore assets on

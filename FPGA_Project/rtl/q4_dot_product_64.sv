@@ -3,7 +3,7 @@
 // Q4 dot-product kernel for one quantization group.
 //
 // This module is the first Verilog target for the Q4 v0 format documented in
-// Q4_FORMAT.md. It should match:
+// Source/Q4_FORMAT.md. It should match:
 //
 //   artifacts/test_vectors/qwen3_0p6b_q4_v0/q_proj_row0_group0_dot64.npz
 //

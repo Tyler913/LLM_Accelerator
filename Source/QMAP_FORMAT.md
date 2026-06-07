@@ -4,8 +4,8 @@ Status: draft v1 descriptor format for PL DDR4 tensor staging and future
 full-model artifact layout. The first dot64 image has passed PS
 load/readback on hardware.
 
-For Q4 quantization semantics, read `Q4_FORMAT.md`. For physical PL DDR4
-placement, read `FPGA_MEMORY_MAP.md`.
+For Q4 quantization semantics, read `Source/Q4_FORMAT.md`. For physical PL
+DDR4 placement, read `Source/FPGA_MEMORY_MAP.md`.
 
 ## Purpose
 
@@ -25,7 +25,7 @@ row, a projection tile, all Layer 0 Q/K/V projections, or the full model by
 adding descriptors and increasing tensor shapes.
 
 QMAP describes where data is and how to interpret it. It does not define the
-math for Q4 itself; that contract stays in `Q4_FORMAT.md`.
+math for Q4 itself; that contract stays in `Source/Q4_FORMAT.md`.
 
 ## Design Rules
 

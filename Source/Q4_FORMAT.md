@@ -3,9 +3,10 @@
 Status: Q4 v0 is defined for the first Verilog-facing Layer 0 Q/K/V GEMV
 bring-up. It is not yet a full-model quantization artifact.
 
-For overall project state, read `PROJECT_CONTEXT.md` and `CURRENT_STATE.md`.
-For physical memory placement, read `FPGA_MEMORY_MAP.md`. For descriptor-based
-PL DDR4 tensor staging, read `QMAP_FORMAT.md`.
+For overall project state, read `Source/PROJECT_CONTEXT.md` and
+`Source/CURRENT_STATE.md`. For physical memory placement, read
+`Source/FPGA_MEMORY_MAP.md`. For descriptor-based PL DDR4 tensor staging, read
+`Source/QMAP_FORMAT.md`.
 
 ## Scope
 
@@ -41,7 +42,8 @@ Qwen3-0.6B-Base/python_each_module/14_verify_q4_gemv_vectors.py
 This document defines Q4 quantization, packing, and fixed-point math semantics.
 It does not define the full PL DDR4 image layout by itself.
 
-The first descriptor-based PL DDR4 staging contract is `QMAP_FORMAT.md`.
+The first descriptor-based PL DDR4 staging contract is
+`Source/QMAP_FORMAT.md`.
 QMAP v1 describes tensors with a fixed header, a tensor descriptor table, and
 payload data. The first QMAP image will stage the real Layer 0
 `q_proj` row 0 group 0 dot64 vector from
@@ -49,10 +51,10 @@ payload data. The first QMAP image will stage the real Layer 0
 
 Keep this split clear:
 
-- `Q4_FORMAT.md`: how Q4 weights, scales, activations, and expected integer
-  math are interpreted.
-- `QMAP_FORMAT.md`: where those tensors live in PL DDR4 and how software or PL
-  readers discover them.
+- `Source/Q4_FORMAT.md`: how Q4 weights, scales, activations, and expected
+  integer math are interpreted.
+- `Source/QMAP_FORMAT.md`: where those tensors live in PL DDR4 and how software
+  or PL readers discover them.
 
 ## Why This Scope
 
