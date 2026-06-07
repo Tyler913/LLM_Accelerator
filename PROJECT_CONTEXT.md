@@ -169,6 +169,9 @@ Current user-reported FPGA target:
   `0x4_1FFF_FFFF`. The standalone smoke app reported DDR4 status `0x5`
   (`calib_complete=1`, `ui_reset=0`, `axi_resetn=1`) and exact write/readback
   matches at the PL DDR4 base, near-base, middle, and final aligned word.
+- QMAP dot64 PS load/readback passed on 2026-06-07. The app wrote the
+  1536-byte first QMAP image to `0x4_1B10_0000`, read it back exactly, and
+  checked the QMAP header, four descriptors, and selected payload values.
 - PS DDR capacity check: the schematic uses four x16 DDR4 devices across
   `PS_DDR4_DQ[63:0]`; with the same 4Gb-class devices this gives 16Gb total,
   matching the 2 GB PS DDR target.
@@ -265,6 +268,12 @@ requires full BF16/FP32 model weights.
 The Verilog-facing Q4 v0 format and current Layer 0 Q/K/V artifact are
 documented in `Q4_FORMAT.md`.
 
+Descriptor-based PL DDR4 tensor staging is documented in `QMAP_FORMAT.md`.
+QMAP v1 is the intended bridge between generated Q4 artifacts, PS loaders, and
+future PL readers. It starts with the real Layer 0 `q_proj` row 0 group 0
+dot64 vector, then scales by adding tensor descriptors and larger payloads
+rather than replacing the layout with one-off packets.
+
 Do not start with GGUF, GPTQ, AWQ, FP8, or Q4_K hardware parsing.
 
 The required first custom Q4 format:
@@ -359,17 +368,19 @@ The PS-to-PL memory bring-up phase has reached its first hardware checkpoint:
 AXI BRAM, DDR4 status GPIO, and PL DDR4 are all reachable from PS in the
 current standalone smoke app.
 
-The next phase is to turn the proven PL DDR4 aperture into a small accelerator
-data contract:
+The proven PL DDR4 aperture now has a small QMAP-backed accelerator data
+contract:
 
-1. Define a tiny structured PL DDR4 staging buffer for test vectors and Q4
-   bring-up artifacts.
-2. Write/read that staging buffer from a standalone PS app using 64-bit
-   `UINTPTR` addresses.
-3. Use the same buffer contract as the first source/sink for a hand-written PL
-   RTL reader or data-movement block.
+1. Generate and verify the first QMAP v1 image from the Q4 dot64 vector.
+2. Write/read that QMAP image from a standalone PS app using 64-bit `UINTPTR`
+   addresses at `0x4_1B10_0000`.
+3. Use the same descriptor contract as the first source/sink for a
+   hand-written PL RTL reader or data-movement block.
 4. Then connect the existing RTL compute blocks to memory-backed test data in
    small steps.
+
+The first two steps are complete. The next durable hardware-facing task is a
+narrow PL-side QMAP descriptor reader.
 
 Keep the exact next action in `CURRENT_STATE.md`; keep detailed address
 planning in `FPGA_MEMORY_MAP.md`.

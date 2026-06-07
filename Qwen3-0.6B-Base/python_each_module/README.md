@@ -41,5 +41,7 @@ Script map:
 - `18_export_rope_fixed_vectors.py`: exports real Layer 0 last-token Q/K,
   cos/sin, and fixed-point RoPE expected hex vectors for the
   `rope_qk_layer_128` RTL testbench
+- `19_export_qmap_dot64_image.py`: exports the first QMAP v1 binary PL DDR4
+  staging image and optional C header from the Q4 dot64 vector
 - `run_all_module_validations.py`: runs the core validation scripts `01`-`10`
   in order

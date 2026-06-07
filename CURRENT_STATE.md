@@ -4,7 +4,8 @@ Last updated: 2026-06-07
 
 This file is the concise working-state handoff. For durable project context,
 read `PROJECT_CONTEXT.md` first. For detailed address planning, read
-`FPGA_MEMORY_MAP.md`. For workflow rules, read `AGENTS.md`.
+`FPGA_MEMORY_MAP.md`. For descriptor-based PL DDR4 tensor staging, read
+`QMAP_FORMAT.md`. For workflow rules, read `AGENTS.md`.
 
 ## Current Goal
 
@@ -47,6 +48,7 @@ conda run -n llm_fpga python Qwen3-0.6B-Base/pc_testing/10_manual_full_model_cac
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/run_all_module_validations.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/14_verify_q4_gemv_vectors.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/16_profile_rmsnorm_ranges.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/19_export_qmap_dot64_image.py --c-header FPGA_Project/software/qmap_load_smoke/qmap_dot64_image.h
 ```
 
 Stable reference prompt:
@@ -102,6 +104,12 @@ Latest local RTL/software validation state:
 - `kv_cache_addr_gen.sv` passes context-256 and context-512 address smoke
   vectors.
 - Python FP32 module vectors and Q4 GEMV vectors pass their current verifiers.
+- `19_export_qmap_dot64_image.py` exports the first QMAP v1 PL DDR4 staging
+  image from `q_proj_row0_group0_dot64.npz` and self-checks the header,
+  descriptor table, and payload bytes.
+- `qmap_load_smoke_app` passed on hardware. It writes the embedded 1536-byte
+  QMAP dot64 image to PL DDR4 at `0x4_1B10_0000`, reads it back exactly, and
+  checks the QMAP header, four descriptors, and payload spot values.
 
 ## Hardware Bring-Up Status
 
@@ -118,8 +126,14 @@ Current Vivado/Vitis artifacts:
   `Vitis_Workspace/llm_pl_ddr4_aux_reset_fix_platform/`
 - Durable standalone smoke-test source:
   `FPGA_Project/software/pl_ddr4_smoke/main.c`
+- Durable QMAP load/readback smoke-test source:
+  `FPGA_Project/software/qmap_load_smoke/main.c`
+- Embedded QMAP dot64 C header for that smoke app:
+  `FPGA_Project/software/qmap_load_smoke/qmap_dot64_image.h`
 - Current Vitis workspace app copy:
   `Vitis_Workspace/pl_ddr4_smoke_app/src/main.c`
+- Current QMAP Vitis workspace app copy:
+  `Vitis_Workspace/qmap_load_smoke_app/main.c`
 
 Current PS-to-PL memory fabric:
 
@@ -180,6 +194,15 @@ Current board-run result:
   - `0x4_00001000`
   - `0x4_10000000`
   - `0x4_1FFFFFFC`
+- QMAP load/readback smoke passed:
+  - image SHA256:
+    `b56319cf576fe8486e3586ee49a4194323cdfe4f4e6208c8b6057e741e5978d4`
+  - image base: `0x4_1B10_0000`
+  - image size: `0x600` / 1536 bytes
+  - descriptor table: `0x4_1B10_0100`
+  - payload base: `0x4_1B10_0500`
+  - descriptor count/capacity: `4` / `8`
+  - byte-for-byte PS readback compare: passed
 
 This proves the first PS-to-PL DDR4 path through
 `M_AXI_HPM0_FPD -> axi_smc -> axi_clock_converter_0 -> ddr4_0/C0_DDR4_S_AXI`
@@ -196,8 +219,11 @@ Previous useful checkpoint:
 
 - PL DDR4 is accessible from PS, but there is not yet a real PL data mover,
   AXI master, DMA path, or compute kernel consuming PL DDR4 data.
-- The memory-map layout for full Q4 artifacts, KV cache, activation buffers,
-  RoPE tables, and debug regions is still draft.
+- QMAP v1 now defines the first descriptor-based PL DDR4 staging contract. The
+  dot64 image exporter and standalone PS loader/readback app have passed on
+  hardware. A PL descriptor reader is not built yet.
+- The full-model memory-map layout for Q4 artifacts, KV cache, activation
+  buffers, RoPE tables, and debug regions is still draft.
 - RMSNorm, GEMV, RoPE, and KV address RTL blocks are validated in focused
   simulations, but they are not yet integrated into a streaming or memory-
   mapped one-token datapath.
@@ -209,20 +235,21 @@ Previous useful checkpoint:
 
 ## Immediate Next Step
 
-Start the first small PL DDR4-backed data movement step for the accelerator
+Start the first QMAP-backed PL DDR4 data movement step for the accelerator
 path.
 
 Recommended next slice:
 
-1. Reserve a tiny test-vector staging area inside the draft PL DDR4 map.
-2. Write a standalone PS loader that places a small structured test buffer
-   there, using `UINTPTR` for 64-bit PL DDR4 addresses.
-3. Read the same buffer back from PS and record exact pass/fail evidence.
-4. Use that buffer contract as the first staging path for Q4 vector/artifact
-   experiments before connecting a PL RTL reader.
+1. Design the first narrow PL-side QMAP descriptor reader.
+2. Keep the first PL reader focused on fetching and decoding QMAP header fields
+   and descriptor slots from `0x4_1B10_0000`.
+3. Simulate that reader against the known QMAP header/descriptor contents
+   before integrating any AXI master or compute datapath.
+4. After descriptor parsing works, connect the reader to payload fetch for the
+   activation, Q4 weight, and scale tensors, then to `q4_dot_product_64`.
 
 Keep this step narrow. The goal is not full-model loading yet; it is to turn
-the proven PL DDR4 aperture into a stable software/hardware data contract.
+the proven PL DDR4 aperture into a stable software/hardware tensor contract.
 
 ## Practical Notes
 
@@ -231,6 +258,8 @@ the proven PL DDR4 aperture into a stable software/hardware data contract.
 - Treat BF16/FP32 model data as software reference and validation input only.
   The first PL DDR4 weight layout and GEMV datapaths must assume custom Q4
   weight-only storage for large weights.
+- Keep Q4 quantization semantics in `Q4_FORMAT.md` and DDR tensor placement in
+  `QMAP_FORMAT.md`.
 - Keep PS-side code as orchestration/support only. Do not move model math for
   prefill or decode back into PS unless the project direction explicitly
   changes.

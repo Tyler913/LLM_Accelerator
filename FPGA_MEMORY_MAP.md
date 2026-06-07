@@ -1,12 +1,15 @@
 # FPGA Memory Map
 
-Status: working draft, updated through the successful PS-to-PL PL DDR4
-smoke-test hardware run on 2026-06-07
+Status: working draft, updated through the successful PS-to-PL QMAP
+load/readback hardware run on 2026-06-07
 
 This document defines the first FPGA-visible memory layout for the Qwen3
 0.6B accelerator bring-up. It distinguishes hardware-proven base apertures
 from draft accelerator subregions that still need real RTL data-movement and
 kernel integration.
+
+The descriptor-based tensor staging format for PL DDR4 is `QMAP_FORMAT.md`.
+Q4 quantization and packing semantics remain in `Q4_FORMAT.md`.
 
 For the current project state, read `PROJECT_CONTEXT.md` and
 `CURRENT_STATE.md` first.
@@ -69,6 +72,8 @@ Completed hardware checkpoint:
 - The current Vitis platform is `llm_pl_ddr4_aux_reset_fix_platform`.
 - The standalone smoke app proved PS read/write access to the current AXI BRAM
   aperture, DDR4 status GPIO, and PL DDR4 aperture on hardware.
+- The QMAP load/readback smoke app proved that PS can place the first 1536-byte
+  QMAP v1 dot64 image at `0x4_1B10_0000` in PL DDR4 and read it back exactly.
 
 ## Current Address Map
 
@@ -165,10 +170,11 @@ High-level split:
 - Endianness: little-endian for PS-side scalar accesses.
 - Scalar format: unsigned 32-bit words for the current BRAM and PL DDR4
   smoke-test reads/writes.
-- Vector format: TODO for accelerator data; keep exported Python vectors as the
-  reference until a hardware transfer format is fixed.
-- Matrix layout: TODO; row-major remains the working candidate for first GEMV
-  bring-up.
+- Vector format: QMAP v1 for structured PL DDR4 tensor staging; keep exported
+  Python vectors as golden references.
+- Matrix layout: QMAP descriptors record logical shape and physical byte
+  strides. Row-major contiguous Q4 groups remain the first GEMV bring-up
+  layout from `Q4_FORMAT.md`.
 - Cache coherency rule between PS and PL: TODO. For the current standalone
   smoke tests, use direct memory-mapped accesses plus explicit cache
   flush/invalidate handling where the app touches cached regions.
@@ -269,13 +275,13 @@ PL_DDR4_HIGH = 0x4_1FFF_FFFF
 
 | Region | Base | Size | Owner | Contents | Status |
 | --- | ---: | ---: | --- | --- | --- |
-| Header / memory-map metadata | `0x4_0000_0000` | 1 MiB | PS/PL | magic, version, checksums, layout table | draft |
+| Header / memory-map metadata | `0x4_0000_0000` | 1 MiB | PS/PL | QMAP headers, descriptor tables, version/checksum metadata | draft |
 | Weight region | `0x4_0010_0000` | 320 MiB | PS load, PL read | required Q4 weights and scales | draft |
 | KV cache region | `0x4_1410_0000` | 32 MiB | PL read/write | per-layer K/V cache, context 256 first | draft |
 | Activation buffers | `0x4_1610_0000` | 64 MiB | PL read/write | hidden, normed, q/k/v, attention, MLP scratch, debug snapshots | draft |
 | RoPE table | `0x4_1A10_0000` | 8 MiB | PS load or PL read | cos/sin table if precomputed | draft |
 | Logits / argmax scratch | `0x4_1A90_0000` | 8 MiB | PL write, PS read | LM-head tile output and final token id | draft |
-| Test-vector staging | `0x4_1B10_0000` | 32 MiB | PS load, PL read/write | optional RTL bring-up data | draft |
+| Test-vector staging | `0x4_1B10_0000` | 32 MiB | PS load, PL read/write | QMAP v1 test images and optional RTL bring-up data | first QMAP image passed PS load/readback |
 | Reserved | `0x4_1D10_0000` | 47 MiB | PS/PL | expansion room within nominal 512 MiB | draft |
 
 Draft relative coverage:
@@ -300,6 +306,22 @@ write/read 32-bit words:
   0x4_10000000 <- 0x24681357
   0x4_1FFFFFFC <- 0xDD44AA55
 ```
+
+First descriptor-based staging contract:
+
+- Format: QMAP v1, documented in `QMAP_FORMAT.md`.
+- First QMAP image base: `0x4_1B10_0000`.
+- First QMAP image: Layer 0 `q_proj` row 0 group 0 dot64 vector.
+- Header: `0x4_1B10_0000`.
+- Descriptor table: `0x4_1B10_0100`.
+- Payload base: `0x4_1B10_0500`.
+- Initial purpose: PS writes and reads back a structured tensor image before a
+  PL RTL reader consumes the same descriptor contract.
+- Hardware result: `qmap_load_smoke_app` passed on 2026-06-07. It wrote the
+  1536-byte image with SHA256
+  `b56319cf576fe8486e3586ee49a4194323cdfe4f4e6208c8b6057e741e5978d4`,
+  read it back byte-for-byte, and checked the QMAP header, four descriptors,
+  and selected payload values.
 
 ## Capacity Budget Worksheet
 
@@ -346,7 +368,10 @@ Current capacity read:
 
 ## Weight Layout
 
-TODO: Define this before generating full-model Q4 artifacts.
+Draft: use QMAP descriptors for both small bring-up images and future
+full-model Q4 artifacts. Do not invent a one-off fixed packet layout for the
+dot64 test; it should be the first small instance of the same descriptor
+scheme.
 
 Large model weights stored in PL DDR4 must use the project custom Q4
 weight-only format. This includes embedding/LM-head and all projection/MLP
@@ -355,6 +380,7 @@ accumulators, and KV cache may use separate explicitly chosen formats, but they
 do not permit a BF16/FP32 full-weight PL DDR4 layout.
 
 The current Verilog-facing Q4 v0 format is documented in `Q4_FORMAT.md`.
+The DDR descriptor/image contract is documented in `QMAP_FORMAT.md`.
 Current bring-up artifact scope:
 
 ```text
@@ -369,17 +395,17 @@ layout: row-major, per-output-row contiguous 64-column groups
 
 | Field | Type | Description | Status |
 | --- | --- | --- | --- |
-| magic | TODO | identifies this artifact format | TODO |
-| format_version | TODO | memory-map/weight-format version | TODO |
-| source_model | TODO | model source and revision | TODO |
-| quant_format | TODO | e.g. custom_groupwise_symmetric_q4 | TODO |
-| group_size | TODO | expected initial value: 64 | TODO |
-| scale_dtype | TODO | current Q4 v0 bring-up uses unsigned 16-bit fixed-point Q2.14 | TODO |
-| checksum | TODO | artifact integrity check | TODO |
+| magic | `u32` | QMAP magic `0x50414D51` / ASCII `QMAP` | draft v1 |
+| format_version | `u32` | QMAP version, current value `1` | draft v1 |
+| descriptor_table_addr | `u64` | physical address of fixed-size tensor descriptors | draft v1 |
+| payload_base_addr | `u64` | first payload byte address | draft v1 |
+| image_bytes | `u64` | total occupied image bytes | draft v1 |
+| checksum32 | `u32` | optional descriptor/payload checksum; `0` if unused | open |
 
 ### Per-Layer Weight Order
 
-Fill in exact offsets and sizes after choosing packing and alignment.
+Fill in exact tensor ids, offsets, and sizes after extending QMAP from the
+first dot64 image to row, tile, projection, layer, and full-model images.
 
 | Layer Item | Shape | Format | Offset | Size | Notes |
 | --- | --- | --- | ---: | ---: | --- |
@@ -402,11 +428,13 @@ Open decisions:
 - Embedding/LM head are part of the required Q4 weight path; decide only the
   exact packing, scale placement, and validation tolerance.
 - Use row-major, column-major, or tiled layout for GEMV?
-- Pack two signed int4 values per byte in low/high nibble order:
-- Scale placement: current Q4 v0 artifact stores separate scale arrays;
-  final PL DDR interleaving is still open:
+- Pack two signed int4 values per byte in low/high nibble order as defined in
+  `Q4_FORMAT.md` for the first QMAP images.
+- Scale placement: current Q4 v0 artifact stores separate scale arrays; QMAP
+  should initially use separate scale descriptors, with interleaving left as a
+  deliberate later optimization.
 - Alignment per matrix:
-- Checksum granularity:
+- Checksum granularity and checksum algorithm:
 
 ## KV Cache Layout
 
@@ -572,8 +600,9 @@ Current state and open questions:
 
 - Direct PS memory-mapped access to PL DDR4 through `M_AXI_HPM0_FPD` is proven
   for standalone 32-bit smoke-test writes/readbacks.
-- The next step is to define a small structured PL DDR4 staging buffer and use
-  it for Q4 vector/artifact bring-up.
+- The first QMAP v1 dot64 PL DDR4 staging image has passed PS load/readback.
+- The next step is a narrow PL-side QMAP descriptor reader simulation, followed
+  by payload fetch and connection to the Q4 dot64 datapath.
 - Decide later whether DMA is needed for faster bulk copies.
 - Future cache coherency policy is still open for PS buffers, PL masters, DMA,
   or cached runtime paths.
@@ -604,14 +633,21 @@ Bring-up order:
      of `0x4_0000_0000` through `0x4_1FFF_FFFF`
    - use `UINTPTR` or another 64-bit-capable address type in C
    - status: passed in current hardware with exact read-back matches
-3. RMSNorm RTL block reads `input_hidden`, `norm_weight`, and `eps`; compare
+3. Export and verify a QMAP v1 dot64 staging image from
+   `q_proj_row0_group0_dot64.npz`; status: passed in Python exporter.
+4. PS writes and reads back that QMAP image at `0x4_1B10_0000`.
+   - status: passed on hardware with exact 1536-byte readback, expected header,
+     four descriptors, and payload spot checks.
+5. A future PL reader consumes QMAP descriptors and streams payloads into the
+   existing Q4 dot64 datapath.
+6. RMSNorm RTL block reads `input_hidden`, `norm_weight`, and `eps`; compare
    with `expected_output`.
-4. Q4 GEMV RTL block starts from the 64-value dot-product smoke vector in
+7. Q4 GEMV RTL block starts from the 64-value dot-product smoke vector in
    `qwen3_0p6b_q4_v0/q_proj_row0_group0_dot64.npz`, then expands to full
    Layer 0 Q/K/V using `qkv_layer0_last_token_q4.npz`.
-5. Extend vectors and memory regions for RoPE, KV cache, attention, MLP, and
+8. Extend vectors and memory regions for RoPE, KV cache, attention, MLP, and
    complete Layer 0.
-6. Use FP32 vectors as golden references, but design GEMV/weight-storage RTL
+9. Use FP32 vectors as golden references, but design GEMV/weight-storage RTL
    around the required Q4 path from the start. The current Q4 v0 artifact is
    the first packed-weight contract; extend it before scaling beyond Layer 0
    Q/K/V.
@@ -623,6 +659,7 @@ Pass/fail fields to record:
 | PS-to-PL AXI BRAM | direct pattern test at `0xA000_0000` | exact match | exact match | passed |
 | DDR4 status GPIO | direct read at `0xA001_0000` | exact expected status `0x5` | exact expected status `0x5` | passed |
 | PS-to-PL PL DDR4 | direct pattern test at `0x4_0000_0000`, `0x4_0000_0004`, `0x4_0000_1000`, `0x4_1000_0000`, and `0x4_1FFF_FFFC` | exact match | exact match | passed |
+| QMAP dot64 load/readback | `q_proj_row0_group0_dot64.qmap.bin` at `0x4_1B10_0000` | exact 1536-byte readback | exact header/descriptor/payload spot checks | passed |
 | RMSNorm | `rmsnorm_layer0_last_token.npz` | TODO | TODO | TODO |
 | Q4 Q GEMV | `qwen3_0p6b_q4_v0/qkv_layer0_last_token_q4.npz` | 0.22418976 | 0.01856172 | passed in Python verifier |
 | Q4 K GEMV | `qwen3_0p6b_q4_v0/qkv_layer0_last_token_q4.npz` | 0.12317824 | 0.01752916 | passed in Python verifier |
@@ -646,3 +683,5 @@ Pass/fail fields to record:
 | 2026-06-04 | Generate PL DDR4 bitstream and XSA | Synthesis, implementation, and bitstream generation pass for `llm_system_wrapper.bit`; routed timing meets constraints with WNS `0.572 ns`, route status reports `0` routing errors, and routed DRC has warnings but no errors; exported XSA is `FPGA_Project/Vivado_Project/llm_system_pl_ddr4_smoke.xsa`; Vitis platform/application and board readback remained pending at that time |
 | 2026-06-07 | Add DDR4 readiness status GPIO | Adds PS-readable `0xA001_0000` AXI GPIO with `calib_complete`, `ui_reset`, and `axi_resetn` status bits; expected good status is `0x5` |
 | 2026-06-07 | Prove PS-to-PL DDR4 hardware path | Final reset-fix XSA `llm_system_pl_ddr4_aux_reset_fix.xsa` and platform `llm_pl_ddr4_aux_reset_fix_platform` pass board smoke: BRAM at `0xA000_0000`, status GPIO at `0xA001_0000`, and PL DDR4 at `0x4_0000_0000` through `0x4_1FFF_FFFF` all read/write as expected |
+| 2026-06-07 | Define QMAP v1 staging contract | Adds descriptor-based PL DDR4 tensor staging for the first dot64 Q4 image and future scalable model artifacts |
+| 2026-06-07 | Prove QMAP dot64 PS load/readback | `qmap_load_smoke_app` writes the 1536-byte QMAP image to `0x4_1B10_0000`, reads it back exactly, and checks header, descriptor, and payload fields |
