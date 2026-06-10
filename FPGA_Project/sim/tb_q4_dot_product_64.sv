@@ -88,7 +88,9 @@ module tb_q4_dot_product_64;
 
     initial begin
         wavefile = "FPGA_Project/wave/q4_dot_product_64.vcd";
-        void'($value$plusargs("wavefile=%s", wavefile));
+        if (!$value$plusargs("wavefile=%s", wavefile)) begin
+            wavefile = "FPGA_Project/wave/q4_dot_product_64.vcd";
+        end
         $dumpfile(wavefile);
         $dumpvars(0, tb_q4_dot_product_64);
     end

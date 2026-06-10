@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-06-07
+Last updated: 2026-06-10
 
 This file is the concise working-state handoff. For durable project context,
 read `Source/PROJECT_CONTEXT.md` first. For detailed address planning, read
@@ -82,6 +82,14 @@ The current hand-written RTL bring-up stack includes:
   - `rope_qk_layer_128.sv`
 - KV cache address generation:
   - `kv_cache_addr_gen.sv`
+- QMAP/DDR data movement bring-up:
+  - `qmap_defs.svh`
+  - `qmap_header_reader.sv`
+  - `qmap_descriptor_reader.sv`
+  - `qmap_dot64_reader.sv`
+  - `qmap_dot64_payload_fetcher.sv`
+  - `qmap_dot64_compute_path.sv`
+  - `axi4_read_master.sv`
 
 Current fixed-point direction:
 
@@ -111,6 +119,30 @@ Latest local RTL/software validation state:
 - `qmap_load_smoke_app` passed on hardware. It writes the embedded 1536-byte
   QMAP dot64 image to PL DDR4 at `0x4_1B10_0000`, reads it back exactly, and
   checks the QMAP header, four descriptors, and payload spot values.
+- `qmap_dot64_reader.sv` passes RTL simulation against the generated
+  `qmap_dot64_image_words32.hex` memory image. It issues the project-local
+  memory request/response reads, decodes the QMAP header, and captures the four
+  dot64 descriptor slots for activation, packed Q4 weight, Q2.14 scale, and
+  expected/debug result tensors.
+- `qmap_dot64_payload_fetcher.sv` passes RTL simulation after
+  `qmap_dot64_reader.sv`. It uses the descriptor base/nbytes fields to fetch
+  the activation vector, packed Q4 weight group, Q2.14 scale, and expected
+  partial/scaled debug values from the same generated QMAP memory image.
+- `qmap_dot64_compute_path.sv` passes the first QMAP-backed dot64 compute
+  wrapper simulation. This synthesizable wrapper owns the sequence:
+  `qmap_dot64_reader.sv`, then `qmap_dot64_payload_fetcher.sv`, then
+  `q4_dot_product_64.sv`. It compares the computed partial sum and scaled Q26
+  result against the QMAP expected/debug payload. The matched values are
+  `partial_sum=24751` and `scaled_sum_q26=3019622`.
+- `axi4_read_master.sv` passes a focused RTL smoke simulation for one aligned
+  4-beat AXI4 read burst. This is the first read-only adapter from the
+  project-local memory request/response interface toward a future Vivado AXI
+  master integration.
+- `tb_qmap_dot64_compute_path_axi4.sv` passes the first AXI-backed QMAP dot64
+  compute simulation. The path is `qmap_dot64_compute_path.sv ->
+  axi4_read_master.sv -> AXI read memory model`, with the memory model loaded
+  from `qmap_dot64_image_words32.hex`. The simulation observed 9 AXI read
+  bursts and matched `partial_sum=24751`, `scaled_sum_q26=3019622`.
 
 ## Hardware Bring-Up Status
 
@@ -218,11 +250,16 @@ Previous useful checkpoint:
 
 ## Open Gaps
 
-- PL DDR4 is accessible from PS, but there is not yet a real PL data mover,
-  AXI master, DMA path, or compute kernel consuming PL DDR4 data.
+- PL DDR4 is accessible from PS. The first simulation-only PL QMAP descriptor
+  reader, payload fetcher, Q4 dot64 compute chain, and read-only AXI4 adapter
+  now exist. The QMAP dot64 compute wrapper has passed through the AXI read
+  adapter in simulation, but it is not yet integrated into the Vivado block
+  design or validated against real PL DDR4 on hardware.
 - QMAP v1 now defines the first descriptor-based PL DDR4 staging contract. The
   dot64 image exporter and standalone PS loader/readback app have passed on
-  hardware. A PL descriptor reader is not built yet.
+  hardware. The first PL descriptor reader, payload fetcher, and Q4 dot64
+  compute hookup are now wrapped in a synthesizable dot64 smoke controller.
+  This wrapper is a bring-up micro-kernel, not the final full-model scheduler.
 - The full-model memory-map layout for Q4 artifacts, KV cache, activation
   buffers, RoPE tables, and debug regions is still draft.
 - RMSNorm, GEMV, RoPE, and KV address RTL blocks are validated in focused
@@ -236,21 +273,24 @@ Previous useful checkpoint:
 
 ## Immediate Next Step
 
-Start the first QMAP-backed PL DDR4 data movement step for the accelerator
-path.
+Prepare the Vivado block-design integration for the AXI-backed QMAP dot64
+smoke path.
 
 Recommended next slice:
 
-1. Design the first narrow PL-side QMAP descriptor reader.
-2. Keep the first PL reader focused on fetching and decoding QMAP header fields
-   and descriptor slots from `0x4_1B10_0000`.
-3. Simulate that reader against the known QMAP header/descriptor contents
-   before integrating any AXI master or compute datapath.
-4. After descriptor parsing works, connect the reader to payload fetch for the
-   activation, Q4 weight, and scale tensors, then to `q4_dot_product_64`.
+1. Package or add the RTL sources needed for the smoke path in Vivado:
+   `qmap_dot64_compute_path.sv`, QMAP readers/fetcher, `q4_dot_product_64.sv`,
+   and `axi4_read_master.sv`.
+2. Add a small control/status surface so PS can start the smoke path and read
+   done/error/compare/result registers.
+3. Connect the AXI read master to the existing PL DDR4 MIG path in the block
+   design.
+4. Re-run synthesis, implementation, bitstream, hardware export, and a Vitis
+   smoke app that loads the QMAP image then starts the PL read/compute path.
 
-Keep this step narrow. The goal is not full-model loading yet; it is to turn
-the proven PL DDR4 aperture into a stable software/hardware tensor contract.
+Keep this step narrow. The next proof should still be simulation-first; board
+integration comes after the controller wrapper and AXI read adapter chain are
+stable in RTL.
 
 ## Practical Notes
 
