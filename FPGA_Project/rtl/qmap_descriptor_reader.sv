@@ -8,26 +8,26 @@ module qmap_descriptor_reader #(
     parameter int SLOT_INDEX_WIDTH = 8
 )
 (
-    input  logic                          i_clk,
-    input  logic                          i_rst_n,
+    input  wire logic                          i_clk,
+    input  wire logic                          i_rst_n,
 
-    input  logic                          i_start,
-    input  logic [ADDR_WIDTH-1 : 0]       i_descriptor_table_addr,
-    input  logic [SLOT_INDEX_WIDTH-1 : 0] i_slot_index,
+    input  wire logic                          i_start,
+    input  wire logic [ADDR_WIDTH-1 : 0]       i_descriptor_table_addr,
+    input  wire logic [SLOT_INDEX_WIDTH-1 : 0] i_slot_index,
 
     output logic                          o_busy,
     output logic                          o_done,
     output logic                          o_error,
 
     output logic                          o_mem_req_valid,
-    input  logic                          i_mem_req_ready,
+    input  wire logic                          i_mem_req_ready,
     output logic [ADDR_WIDTH-1 : 0]       o_mem_req_addr,
     output logic [15 : 0]                 o_mem_req_len_bytes,
 
-    input  logic                          i_mem_rsp_valid,
+    input  wire logic                          i_mem_rsp_valid,
     output logic                          o_mem_rsp_ready,
-    input  logic [31 : 0]                 i_mem_rsp_data,
-    input  logic                          i_mem_rsp_last,
+    input  wire logic [31 : 0]                 i_mem_rsp_data,
+    input  wire logic                          i_mem_rsp_last,
 
     output logic [31 : 0]                 o_tensor_id,
     output logic [31 : 0]                 o_role,

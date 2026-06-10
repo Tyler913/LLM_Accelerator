@@ -43,21 +43,21 @@ module rope_qk_layer_128 #(
     parameter int OUTPUT_SHIFT     = IN_FRAC + TRIG_FRAC - OUT_FRAC
 )
 (
-    input  logic                                            i_clk,
-    input  logic                                            i_rst_n,
+    input  wire logic                                            i_clk,
+    input  wire logic                                            i_rst_n,
 
     // Start a new RoPE transaction when the module is not busy.
     // Keep q/k/cos/sin inputs stable until o_done is asserted.
-    input  logic                                            i_start,
+    input  wire logic                                            i_start,
 
     // Flattened little-element-endian Q and K heads:
     // q[head][dim] is i_q_flat[(head*HEAD_DIM + dim)*IN_WIDTH +: IN_WIDTH].
-    input  logic [NUM_Q_HEADS*HEAD_DIM*IN_WIDTH-1 : 0]      i_q_flat,
-    input  logic [NUM_K_HEADS*HEAD_DIM*IN_WIDTH-1 : 0]      i_k_flat,
+    input  wire logic [NUM_Q_HEADS*HEAD_DIM*IN_WIDTH-1 : 0]      i_q_flat,
+    input  wire logic [NUM_K_HEADS*HEAD_DIM*IN_WIDTH-1 : 0]      i_k_flat,
 
     // Full 128-lane cos/sin vectors for the current position.
-    input  logic [HEAD_DIM*TRIG_WIDTH-1 : 0]                i_cos_flat,
-    input  logic [HEAD_DIM*TRIG_WIDTH-1 : 0]                i_sin_flat,
+    input  wire logic [HEAD_DIM*TRIG_WIDTH-1 : 0]                i_cos_flat,
+    input  wire logic [HEAD_DIM*TRIG_WIDTH-1 : 0]                i_sin_flat,
 
     output logic                                            o_busy,
     output logic                                            o_done,

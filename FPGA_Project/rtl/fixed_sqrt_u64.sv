@@ -17,15 +17,15 @@ module fixed_sqrt_u64 #(
     parameter int ITERATION_W     = (ITERATION_COUNT <= 1) ? 1 : $clog2(ITERATION_COUNT)
 )
 (
-    input  logic                         i_clk,
-    input  logic                         i_rst_n,
+    input  wire logic                         i_clk,
+    input  wire logic                         i_rst_n,
 
     // Start a new square-root transaction when the module is not busy.
     // Keep i_radicand stable until o_done is asserted.
-    input  logic                         i_start,
+    input  wire logic                         i_start,
 
     // Unsigned fixed-point radicand.
-    input  logic [IN_WIDTH-1 : 0]        i_radicand,
+    input  wire logic [IN_WIDTH-1 : 0]        i_radicand,
 
     // Busy is high after start is accepted and before the root is ready.
     output logic                         o_busy,

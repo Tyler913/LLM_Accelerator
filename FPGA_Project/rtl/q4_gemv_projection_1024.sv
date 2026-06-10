@@ -40,24 +40,24 @@ module q4_gemv_projection_1024 # (
     parameter int ROW_ACC_WIDTH = SCALED_WIDTH + $clog2(GROUP_COUNT) + 2
 )
 (
-    input  logic                                              i_clk,
-    input  logic                                              i_rst_n,
+    input  wire logic                                              i_clk,
+    input  wire logic                                              i_rst_n,
 
     // Start a new projection transaction when the controller is not busy.
     // Keep activation, weights, and scales stable until o_done is asserted.
-    input  logic                                              i_start,
+    input  wire logic                                              i_start,
 
     // Shared INPUT_SIZE signed fixed-point activation vector.
-    input  logic [INPUT_SIZE*ACT_WIDTH-1 : 0]                 i_activation_flat,
+    input  wire logic [INPUT_SIZE*ACT_WIDTH-1 : 0]                 i_activation_flat,
 
     // Full packed Q4 projection matrix. Row r is:
     // i_weight_packed_flat[INPUT_SIZE*WEIGHT_WIDTH*r +:
     //                      INPUT_SIZE*WEIGHT_WIDTH].
-    input  logic [OUT_FEATURES*INPUT_SIZE*WEIGHT_WIDTH-1 : 0] i_weight_packed_flat,
+    input  wire logic [OUT_FEATURES*INPUT_SIZE*WEIGHT_WIDTH-1 : 0] i_weight_packed_flat,
 
     // Full scale matrix. Row r contains GROUP_COUNT unsigned Q2.14 scales:
     // i_scale_flat[GROUP_COUNT*SCALE_WIDTH*r +: GROUP_COUNT*SCALE_WIDTH].
-    input  logic [OUT_FEATURES*GROUP_COUNT*SCALE_WIDTH-1 : 0] i_scale_flat,
+    input  wire logic [OUT_FEATURES*GROUP_COUNT*SCALE_WIDTH-1 : 0] i_scale_flat,
 
     // Busy is high after start is accepted and before the projection is ready.
     output logic                                              o_busy,

@@ -5,7 +5,7 @@
     "cell_name": "xlconcat_0",
     "component_reference": "xilinx.com:ip:xlconcat:2.1",
     "ip_revision": "7",
-    "gen_directory": "../../../../../../LLM_FPGA.gen/sources_1/bd/llm_system/ip/llm_system_xlconcat_0_0",
+    "gen_directory": ".",
     "parameters": {
       "component_parameters": {
         "Component_Name": [ { "value": "llm_system_xlconcat_0_0", "resolve_type": "user", "usage": "all" } ],
@@ -288,8 +288,9 @@
       "runtime_parameters": {
         "IPCONTEXT": [ { "value": "IP_Integrator" } ],
         "IPREVISION": [ { "value": "7" } ],
+        "LOCKEDBYUSER": [ { "value": "TRUE" } ],
         "MANAGED": [ { "value": "TRUE" } ],
-        "OUTPUTDIR": [ { "value": "../../../../../../LLM_FPGA.gen/sources_1/bd/llm_system/ip/llm_system_xlconcat_0_0" } ],
+        "OUTPUTDIR": [ { "value": "." } ],
         "SELECTEDSIMMODEL": [ { "value": "" } ],
         "SHAREDDIR": [ { "value": "../../ipshared" } ],
         "SWVERSION": [ { "value": "2025.1.1" } ],

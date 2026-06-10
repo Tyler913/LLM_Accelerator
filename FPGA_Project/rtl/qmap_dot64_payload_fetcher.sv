@@ -15,33 +15,33 @@ module qmap_dot64_payload_fetcher #(
     parameter int SCALE_WIDTH   = 16
 )
 (
-    input  logic                                             i_clk,
-    input  logic                                             i_rst_n,
+    input  wire logic                                             i_clk,
+    input  wire logic                                             i_rst_n,
 
-    input  logic                                             i_start,
+    input  wire logic                                             i_start,
 
-    input  logic [ADDR_WIDTH-1 : 0]                          i_activation_base_addr,
-    input  logic [63 : 0]                                    i_activation_nbytes,
-    input  logic [ADDR_WIDTH-1 : 0]                          i_weight_base_addr,
-    input  logic [63 : 0]                                    i_weight_nbytes,
-    input  logic [ADDR_WIDTH-1 : 0]                          i_scale_base_addr,
-    input  logic [63 : 0]                                    i_scale_nbytes,
-    input  logic [ADDR_WIDTH-1 : 0]                          i_expected_base_addr,
-    input  logic [63 : 0]                                    i_expected_nbytes,
+    input  wire logic [ADDR_WIDTH-1 : 0]                          i_activation_base_addr,
+    input  wire logic [63 : 0]                                    i_activation_nbytes,
+    input  wire logic [ADDR_WIDTH-1 : 0]                          i_weight_base_addr,
+    input  wire logic [63 : 0]                                    i_weight_nbytes,
+    input  wire logic [ADDR_WIDTH-1 : 0]                          i_scale_base_addr,
+    input  wire logic [63 : 0]                                    i_scale_nbytes,
+    input  wire logic [ADDR_WIDTH-1 : 0]                          i_expected_base_addr,
+    input  wire logic [63 : 0]                                    i_expected_nbytes,
 
     output logic                                             o_busy,
     output logic                                             o_done,
     output logic                                             o_error,
 
     output logic                                             o_mem_req_valid,
-    input  logic                                             i_mem_req_ready,
+    input  wire logic                                             i_mem_req_ready,
     output logic [ADDR_WIDTH-1 : 0]                          o_mem_req_addr,
     output logic [15 : 0]                                    o_mem_req_len_bytes,
 
-    input  logic                                             i_mem_rsp_valid,
+    input  wire logic                                             i_mem_rsp_valid,
     output logic                                             o_mem_rsp_ready,
-    input  logic [31 : 0]                                    i_mem_rsp_data,
-    input  logic                                             i_mem_rsp_last,
+    input  wire logic [31 : 0]                                    i_mem_rsp_data,
+    input  wire logic                                             i_mem_rsp_last,
 
     output logic [GROUP_SIZE*ACT_WIDTH-1 : 0]                o_activation_flat,
     output logic [GROUP_SIZE*WEIGHT_WIDTH-1 : 0]             o_weight_packed,

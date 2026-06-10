@@ -21,16 +21,16 @@ module rmsnorm_sum_squares_1024 #(
     parameter int ELEMENT_INDEX_W  = (INPUT_SIZE <= 1) ? 1 : $clog2(INPUT_SIZE)
 )
 (
-    input  logic                                      i_clk,
-    input  logic                                      i_rst_n,
+    input  wire logic                                      i_clk,
+    input  wire logic                                      i_rst_n,
 
     // Start a new sum-of-squares transaction when the module is not busy.
     // Keep i_input_flat stable until o_done is asserted.
-    input  logic                                      i_start,
+    input  wire logic                                      i_start,
 
     // INPUT_SIZE signed fixed-point values, flattened little-element-endian:
     // element i is i_input_flat[IN_WIDTH*i +: IN_WIDTH].
-    input  logic [INPUT_SIZE*IN_WIDTH-1 : 0]          i_input_flat,
+    input  wire logic [INPUT_SIZE*IN_WIDTH-1 : 0]          i_input_flat,
 
     // Busy is high after start is accepted and before the result is ready.
     output logic                                      o_busy,

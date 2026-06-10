@@ -35,18 +35,18 @@ module rmsnorm_1024 #(
     parameter int EPS_Q20          = 1
 )
 (
-    input  logic                                      i_clk,
-    input  logic                                      i_rst_n,
+    input  wire logic                                      i_clk,
+    input  wire logic                                      i_rst_n,
 
     // Start a new RMSNorm transaction when the module is not busy.
     // Keep input and gamma buses stable until o_done is asserted.
-    input  logic                                      i_start,
+    input  wire logic                                      i_start,
 
     // INPUT_SIZE signed fixed-point values, flattened little-element-endian.
-    input  logic [INPUT_SIZE*IN_WIDTH-1 : 0]          i_input_flat,
+    input  wire logic [INPUT_SIZE*IN_WIDTH-1 : 0]          i_input_flat,
 
     // INPUT_SIZE unsigned gamma values, flattened little-element-endian.
-    input  logic [INPUT_SIZE*GAMMA_WIDTH-1 : 0]       i_gamma_flat,
+    input  wire logic [INPUT_SIZE*GAMMA_WIDTH-1 : 0]       i_gamma_flat,
 
     output logic                                      o_busy,
     output logic                                      o_done,

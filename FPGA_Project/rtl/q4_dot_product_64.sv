@@ -38,23 +38,23 @@ module q4_dot_product_64 # (
     parameter int SCALED_WIDTH  = PARTIAL_WIDTH + SCALE_WIDTH
 )
 (
-    input  logic                                         i_clk,
-    input  logic                                         i_rst_n,
+    input  wire logic                                         i_clk,
+    input  wire logic                                         i_rst_n,
 
     // Start a new dot-product transaction when the module is not busy.
     // Keep activation_flat_i, weight_packed_i, and scale_q2_14_i stable until
     // done_o is asserted.
-    input  logic                                         i_start,
+    input  wire logic                                         i_start,
 
     // GROUP_SIZE signed fixed-point activations, flattened little-element-endian:
     // element j is activation_flat_i[ACT_WIDTH*j +: ACT_WIDTH].
-    input  logic        [GROUP_SIZE*ACT_WIDTH-1 : 0]     i_activation_flat,
+    input  wire logic        [GROUP_SIZE*ACT_WIDTH-1 : 0]     i_activation_flat,
 
     // 64 signed int4 Q4 weights packed into 32 bytes.
-    input  logic        [GROUP_SIZE*WEIGHT_WIDTH-1 : 0]  i_weight_packed,
+    input  wire logic        [GROUP_SIZE*WEIGHT_WIDTH-1 : 0]  i_weight_packed,
 
     // Unsigned Q2.14 scale for this 64-weight group.
-    input  logic        [SCALE_WIDTH-1 : 0]              i_scale_q2_14,
+    input  wire logic        [SCALE_WIDTH-1 : 0]              i_scale_q2_14,
 
     // Busy is high after start is accepted and before the result is ready.
     output logic                                         o_busy,

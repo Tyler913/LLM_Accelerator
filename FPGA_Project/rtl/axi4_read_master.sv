@@ -13,16 +13,16 @@ module axi4_read_master #(
     parameter int DATA_WIDTH = 32
 )
 (
-    input  logic                    i_clk,
-    input  logic                    i_rst_n,
+    input  wire logic                    i_clk,
+    input  wire logic                    i_rst_n,
 
-    input  logic                    i_req_valid,
+    input  wire logic                    i_req_valid,
     output logic                    o_req_ready,
-    input  logic [ADDR_WIDTH-1 : 0] i_req_addr,
-    input  logic [15 : 0]           i_req_len_bytes,
+    input  wire logic [ADDR_WIDTH-1 : 0] i_req_addr,
+    input  wire logic [15 : 0]           i_req_len_bytes,
 
     output logic                    o_rsp_valid,
-    input  logic                    i_rsp_ready,
+    input  wire logic                    i_rsp_ready,
     output logic [DATA_WIDTH-1 : 0] o_rsp_data,
     output logic                    o_rsp_last,
 
@@ -36,12 +36,12 @@ module axi4_read_master #(
     output logic [2 : 0]            o_m_axi_arprot,
     output logic [3 : 0]            o_m_axi_arcache,
     output logic                    o_m_axi_arvalid,
-    input  logic                    i_m_axi_arready,
+    input  wire logic                    i_m_axi_arready,
 
-    input  logic [DATA_WIDTH-1 : 0] i_m_axi_rdata,
-    input  logic [1 : 0]            i_m_axi_rresp,
-    input  logic                    i_m_axi_rlast,
-    input  logic                    i_m_axi_rvalid,
+    input  wire logic [DATA_WIDTH-1 : 0] i_m_axi_rdata,
+    input  wire logic [1 : 0]            i_m_axi_rresp,
+    input  wire logic                    i_m_axi_rlast,
+    input  wire logic                    i_m_axi_rvalid,
     output logic                    o_m_axi_rready
 );
 

@@ -32,24 +32,24 @@ module q4_gemv_row_1024 # (
     parameter int ROW_ACC_WIDTH = SCALED_WIDTH + $clog2(GROUP_COUNT) + 2
 )
 (
-    input  logic                                        i_clk,
-    input  logic                                        i_rst_n,
+    input  wire logic                                        i_clk,
+    input  wire logic                                        i_rst_n,
 
     // Start a new one-row GEMV transaction when the module is not busy.
     // Keep all input buses stable until o_done is asserted.
-    input  logic                                        i_start,
+    input  wire logic                                        i_start,
 
     // INPUT_SIZE signed fixed-point activations, flattened little-element-endian:
     // element j is i_activation_flat[ACT_WIDTH*j +: ACT_WIDTH].
-    input  logic        [INPUT_SIZE*ACT_WIDTH-1 : 0]    i_activation_flat,
+    input  wire logic        [INPUT_SIZE*ACT_WIDTH-1 : 0]    i_activation_flat,
 
     // 1024 signed int4 Q4 weights for one output row. Two weights are packed
     // per byte using the same low-nibble/even-index rule as q4_dot_product_64.
-    input  logic        [INPUT_SIZE*WEIGHT_WIDTH-1 : 0] i_weight_packed,
+    input  wire logic        [INPUT_SIZE*WEIGHT_WIDTH-1 : 0] i_weight_packed,
 
     // One unsigned Q2.14 scale per 64-weight group:
     // group g is i_scale_flat[SCALE_WIDTH*g +: SCALE_WIDTH].
-    input  logic        [GROUP_COUNT*SCALE_WIDTH-1 : 0] i_scale_flat,
+    input  wire logic        [GROUP_COUNT*SCALE_WIDTH-1 : 0] i_scale_flat,
 
     // Busy is high after start is accepted and before the row result is ready.
     output logic                                        o_busy,

@@ -33,12 +33,12 @@ module kv_cache_addr_gen #(
     parameter int DIM_INDEX_W      = (HEAD_DIM <= 1) ? 1 : $clog2(HEAD_DIM)
 )
 (
-    input  logic [ADDR_WIDTH-1 : 0]         i_base_addr,
-    input  logic [LAYER_INDEX_W-1 : 0]      i_layer_id,
-    input  logic                            i_kv_kind,
-    input  logic [HEAD_INDEX_W-1 : 0]       i_head_id,
-    input  logic [POSITION_INDEX_W-1 : 0]   i_position,
-    input  logic [DIM_INDEX_W-1 : 0]        i_dim,
+    input  wire logic [ADDR_WIDTH-1 : 0]         i_base_addr,
+    input  wire logic [LAYER_INDEX_W-1 : 0]      i_layer_id,
+    input  wire logic                            i_kv_kind,
+    input  wire logic [HEAD_INDEX_W-1 : 0]       i_head_id,
+    input  wire logic [POSITION_INDEX_W-1 : 0]   i_position,
+    input  wire logic [DIM_INDEX_W-1 : 0]        i_dim,
 
     output logic                            o_valid,
     output logic [ADDR_WIDTH-1 : 0]         o_offset_bytes,

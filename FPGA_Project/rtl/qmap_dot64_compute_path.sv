@@ -28,11 +28,11 @@ module qmap_dot64_compute_path #(
     parameter int SCALED_WIDTH     = PARTIAL_WIDTH + SCALE_WIDTH
 )
 (
-    input  logic                                  i_clk,
-    input  logic                                  i_rst_n,
+    input  wire logic                                  i_clk,
+    input  wire logic                                  i_rst_n,
 
-    input  logic                                  i_start,
-    input  logic [ADDR_WIDTH-1 : 0]               i_qmap_base_addr,
+    input  wire logic                                  i_start,
+    input  wire logic [ADDR_WIDTH-1 : 0]               i_qmap_base_addr,
 
     output logic                                  o_busy,
     output logic                                  o_done,
@@ -40,14 +40,14 @@ module qmap_dot64_compute_path #(
     output logic                                  o_compare_match,
 
     output logic                                  o_mem_req_valid,
-    input  logic                                  i_mem_req_ready,
+    input  wire logic                                  i_mem_req_ready,
     output logic [ADDR_WIDTH-1 : 0]               o_mem_req_addr,
     output logic [15 : 0]                         o_mem_req_len_bytes,
 
-    input  logic                                  i_mem_rsp_valid,
+    input  wire logic                                  i_mem_rsp_valid,
     output logic                                  o_mem_rsp_ready,
-    input  logic [31 : 0]                         i_mem_rsp_data,
-    input  logic                                  i_mem_rsp_last,
+    input  wire logic [31 : 0]                         i_mem_rsp_data,
+    input  wire logic                                  i_mem_rsp_last,
 
     output logic signed [63 : 0]                  o_partial_sum,
     output logic signed [63 : 0]                  o_scaled_sum_q26,

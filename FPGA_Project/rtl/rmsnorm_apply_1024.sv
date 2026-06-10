@@ -31,21 +31,21 @@ module rmsnorm_apply_1024 #(
     parameter int ELEMENT_INDEX_W  = (INPUT_SIZE <= 1) ? 1 : $clog2(INPUT_SIZE)
 )
 (
-    input  logic                                      i_clk,
-    input  logic                                      i_rst_n,
+    input  wire logic                                      i_clk,
+    input  wire logic                                      i_rst_n,
 
     // Start a new apply transaction when the module is not busy.
     // Keep inputs stable until o_done is asserted.
-    input  logic                                      i_start,
+    input  wire logic                                      i_start,
 
     // INPUT_SIZE signed fixed-point values, flattened little-element-endian.
-    input  logic [INPUT_SIZE*IN_WIDTH-1 : 0]          i_input_flat,
+    input  wire logic [INPUT_SIZE*IN_WIDTH-1 : 0]          i_input_flat,
 
     // INPUT_SIZE unsigned gamma values, flattened little-element-endian.
-    input  logic [INPUT_SIZE*GAMMA_WIDTH-1 : 0]       i_gamma_flat,
+    input  wire logic [INPUT_SIZE*GAMMA_WIDTH-1 : 0]       i_gamma_flat,
 
     // Shared unsigned inv_rms for this vector.
-    input  logic [INV_RMS_WIDTH-1 : 0]                i_inv_rms,
+    input  wire logic [INV_RMS_WIDTH-1 : 0]                i_inv_rms,
 
     output logic                                      o_busy,
     output logic                                      o_done,

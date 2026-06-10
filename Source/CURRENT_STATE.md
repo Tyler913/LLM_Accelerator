@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-06-10
+Last updated: 2026-06-11
 
 This file is the concise working-state handoff. For durable project context,
 read `Source/PROJECT_CONTEXT.md` first. For detailed address planning, read
@@ -90,6 +90,8 @@ The current hand-written RTL bring-up stack includes:
   - `qmap_dot64_payload_fetcher.sv`
   - `qmap_dot64_compute_path.sv`
   - `axi4_read_master.sv`
+  - `qmap_dot64_axi_smoke_top.sv`
+  - `qmap_dot64_axi_smoke_bd.v`
 
 Current fixed-point direction:
 
@@ -143,6 +145,21 @@ Latest local RTL/software validation state:
   axi4_read_master.sv -> AXI read memory model`, with the memory model loaded
   from `qmap_dot64_image_words32.hex`. The simulation observed 9 AXI read
   bursts and matched `partial_sum=24751`, `scaled_sum_q26=3019622`.
+- `qmap_dot64_axi_smoke_top.sv` is the Vivado-facing top for the first PL-side
+  QMAP dot64 hardware smoke path. It wraps `qmap_dot64_compute_path.sv` and
+  `axi4_read_master.sv`, exposes a conventional AXI master port for Block
+  Design integration, and provides sticky PS-visible status/result outputs.
+  Its focused simulation passes with status `0xA`, 9 AXI read bursts,
+  `partial_sum_low32=24751`, and `scaled_sum_q26_low32=3019622`.
+- `qmap_dot64_axi_smoke_bd.v` is the Block Design friendly wrapper for that
+  smoke path. It has fixed-width Verilog ports and no parameters/includes at
+  the BD-facing boundary, then instantiates `qmap_dot64_axi_smoke_top.sv`
+  internally. Its AXI/clock interface metadata currently uses the existing
+  Vivado PS PL clock frequency, `96,968,727 Hz`, to match
+  `zynq_ultra_ps_e_0/pl_clk0` and `axi_smc/S01_AXI`.
+- RTL source files now use explicit `input wire logic` ports. This keeps
+  `default_nettype none` enabled while satisfying Vivado 2025.1 synthesis,
+  which rejects plain `input logic` as an implicit net in this flow.
 
 ## Hardware Bring-Up Status
 
@@ -278,14 +295,16 @@ smoke path.
 
 Recommended next slice:
 
-1. Package or add the RTL sources needed for the smoke path in Vivado:
-   `qmap_dot64_compute_path.sv`, QMAP readers/fetcher, `q4_dot_product_64.sv`,
-   and `axi4_read_master.sv`.
-2. Add a small control/status surface so PS can start the smoke path and read
-   done/error/compare/result registers.
-3. Connect the AXI read master to the existing PL DDR4 MIG path in the block
-   design.
-4. Re-run synthesis, implementation, bitstream, hardware export, and a Vitis
+1. Add the RTL sources needed for the smoke path in Vivado, including
+   `qmap_dot64_axi_smoke_bd.v`, `qmap_dot64_axi_smoke_top.sv`, and their
+   dependencies.
+2. Use `qmap_dot64_axi_smoke_bd.v` as the single RTL module added to the Block
+   Design.
+3. Add AXI GPIO control/status/result registers so PS can drive `i_start` /
+   `i_clear` and read sticky done/error/compare/result values.
+4. Connect the top-level AXI master port to the existing PL DDR4 MIG path in
+   the block design.
+5. Re-run synthesis, implementation, bitstream, hardware export, and a Vitis
    smoke app that loads the QMAP image then starts the PL read/compute path.
 
 Keep this step narrow. The next proof should still be simulation-first; board

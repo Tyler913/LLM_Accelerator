@@ -16,15 +16,15 @@ module fixed_udiv #(
     parameter int ITERATION_W       = (ITERATION_COUNT <= 1) ? 1 : $clog2(ITERATION_COUNT)
 )
 (
-    input  logic                                  i_clk,
-    input  logic                                  i_rst_n,
+    input  wire logic                                  i_clk,
+    input  wire logic                                  i_rst_n,
 
     // Start a new division transaction when the module is not busy.
     // Keep numerator and denominator stable until o_done is asserted.
-    input  logic                                  i_start,
+    input  wire logic                                  i_start,
 
-    input  logic [NUMERATOR_WIDTH-1 : 0]          i_numerator,
-    input  logic [DENOMINATOR_WIDTH-1 : 0]        i_denominator,
+    input  wire logic [NUMERATOR_WIDTH-1 : 0]          i_numerator,
+    input  wire logic [DENOMINATOR_WIDTH-1 : 0]        i_denominator,
 
     // Busy is high after start is accepted and before the quotient is ready.
     output logic                                  o_busy,
