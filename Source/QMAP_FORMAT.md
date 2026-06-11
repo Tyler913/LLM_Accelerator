@@ -1,8 +1,8 @@
 # QMAP Format
 
 Status: draft v1 descriptor format for PL DDR4 tensor staging and future
-full-model artifact layout. The first dot64 image has passed PS
-load/readback on hardware.
+full-model artifact layout. The first dot64 image has passed both PS
+load/readback and PL AXI-master read/compute hardware smoke tests.
 
 For Q4 quantization semantics, read `Source/Q4_FORMAT.md`. For physical PL
 DDR4 placement, read `Source/FPGA_MEMORY_MAP.md`.
@@ -230,13 +230,99 @@ tensor 4:
 
 Hardware validation:
 
-- App: `qmap_load_smoke_app`.
+- Apps: `qmap_load_smoke_app`, then `qmap_pl_compute_smoke_app`.
 - Image base: `0x4_1B10_0000`.
 - Image size: 1536 bytes / `0x600`.
 - Image SHA256:
   `b56319cf576fe8486e3586ee49a4194323cdfe4f4e6208c8b6057e741e5978d4`.
 - Result: PS wrote the image into PL DDR4, read it back byte-for-byte, and
   checked the header, four descriptor slots, and selected payload values.
+- PL master result: PS loaded the same image, started
+  `qmap_dot64_axi_smoke_0`, and PL read the QMAP image from real PL DDR4
+  through AXI. The board run reported status `0xA`, partial sum `0x60AF`,
+  and scaled Q26 sum `0x2E1366`.
+
+## Second Instance: Row1024 Smoke
+
+The second QMAP image extends the same descriptor structure from one dot64
+group to one complete Layer 0 `q_proj` output row. It is still a smoke image,
+but it is the first descriptor-driven shape that matches a real GEMV row:
+
+```text
+row_sum_q26 =
+  sum_group0_to_15(
+    sum_j activation[group*64+j] * q4_weight[row, group*64+j]
+    * scale_q2_14[row, group]
+  )
+```
+
+Recommended placement:
+
+```text
+qmap_base      = 0x4_1B20_0000
+payload_base   = 0x4_1B20_0500
+image_bytes    = 0x0000_1000
+```
+
+Descriptor table:
+
+| Tensor Id | Role | Dtype | Shape | Payload Address | Bytes | Notes |
+| ---: | --- | --- | --- | ---: | ---: | --- |
+| `1` | activation | `I16_Q4_12` | `[1024]` | `0x4_1B20_0500` | 2048 | full normalized activation vector |
+| `2` | Q4 weight | `PACKED_Q4_S4` | `[1, 1024]` logical | `0x4_1B20_0D00` | 512 | `q_proj` row 0, all 16 groups |
+| `3` | Q4 scale | `U16_Q2_14` | `[1, 16]` | `0x4_1B20_0F00` | 32 | one scale per 64-column group |
+| `4` | expected | `I64` | `[1]` | `0x4_1B20_0F40` | 8 | debug-only expected row Q26 sum |
+
+Expected descriptor metadata:
+
+```text
+tensor 1:
+  aux0 = 1      # q_proj
+  aux1 = 0      # layer index
+  aux2 = 0      # row start
+  aux3 = 0      # group start
+
+tensor 2:
+  aux0 = 1      # q_proj
+  aux1 = 0
+  aux2 = 0
+  aux3 = 0
+  group_size = 64
+  scale_tensor_id = 3
+  strides_bytes[0] = 512
+  strides_bytes[1] = 0
+
+tensor 3:
+  aux0 = 1
+  aux1 = 0
+  aux2 = 0
+  aux3 = 0
+  strides_bytes[0] = 32
+  strides_bytes[1] = 2
+
+tensor 4:
+  flags includes QMAP_TENSOR_F_DEBUG_ONLY
+```
+
+The row1024 smoke reader must not assume that one tensor fits in one AXI
+burst. With a 32-bit AXI data path, the 2048-byte activation payload requires
+two 1024-byte reads when using the current one-burst `axi4_read_master`.
+
+Local validation:
+
+- Exporter: `Qwen3-0.6B-Base/python_each_module/20_export_qmap_row1024_image.py`.
+- Binary image: `artifacts/test_vectors/qwen3_0p6b_qmap_v1/q_proj_row0_row1024.qmap.bin`.
+- Simulation hex:
+  `FPGA_Project/sim/vectors/qmap_row1024_image_words32.hex`.
+- Image SHA256:
+  `2065fb798848e2779847f2b2055bb6ce51b50fd23547e66de43aa758374a917d`.
+- Expected row result:
+  `row_sum_q26_int64 = -3482169`, low 32-bit word `0xFFCA_DDC7`.
+- RTL simulation result:
+  `qmap_row1024_compute_path.sv` passed the QMAP-backed row1024 chain.
+- AXI simulation result:
+  `qmap_row1024_axi_smoke_top.sv` passed with 10 AXI read bursts, status
+  `0xA`, and row result `-3482169`.
 
 ## Scale-Up Path
 

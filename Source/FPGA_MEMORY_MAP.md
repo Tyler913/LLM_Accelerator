@@ -350,6 +350,23 @@ First descriptor-based staging contract:
   observes PL status `0xA`, and reads back `partial_sum_low32=0x60AF` plus
   `scaled_sum_q26_low32=0x2E1366`.
 
+Second descriptor-based staging image:
+
+- Second QMAP image base: `0x4_1B20_0000`.
+- Second QMAP image: Layer 0 `q_proj` row 0 full row1024 vector.
+- Header: `0x4_1B20_0000`.
+- Descriptor table: `0x4_1B20_0100`.
+- Payload base: `0x4_1B20_0500`.
+- Image size: `0x1000` / 4096 bytes.
+- Payloads:
+  - activation `[1024]` at `0x4_1B20_0500`, 2048 bytes
+  - packed Q4 weight `[1,1024]` at `0x4_1B20_0D00`, 512 bytes
+  - Q2.14 scales `[1,16]` at `0x4_1B20_0F00`, 32 bytes
+  - expected row Q26 sum at `0x4_1B20_0F40`, 8 bytes
+- Local RTL result: `qmap_row1024_compute_path.sv` and
+  `qmap_row1024_axi_smoke_top.sv` pass simulation. The AXI smoke top uses 10
+  read bursts and reports status `0xA`, with row sum `-3482169`.
+
 ## Capacity Budget Worksheet
 
 Use this section to prove that the planned PL DDR4 layout fits before building

@@ -157,6 +157,18 @@ Latest local RTL/software validation state:
   internally. Its AXI/clock interface metadata currently uses the existing
   Vivado PS PL clock frequency, `96,968,727 Hz`, to match
   `zynq_ultra_ps_e_0/pl_clk0` and `axi_smc/S01_AXI`.
+- `20_export_qmap_row1024_image.py` exports the second QMAP v1 image,
+  `q_proj` Layer 0 row 0 row1024, at `0x4_1B20_0000`. The image is 4096 bytes,
+  stores activation `[1024]`, packed Q4 weight `[1,1024]`, scale `[1,16]`,
+  and expected row sum debug payload. The expected result is
+  `row_sum_q26_int64=-3482169`.
+- `qmap_row1024_compute_path.sv` passes RTL simulation against
+  `qmap_row1024_image_words32.hex`. It reads QMAP descriptors, fetches the
+  full row payloads, runs `q4_gemv_row_1024.sv`, and matches the expected row
+  sum.
+- `qmap_row1024_axi_smoke_top.sv` and `qmap_row1024_axi_smoke_bd.v` are ready
+  as the next Vivado-facing smoke top. The AXI simulation passes with 10 read
+  bursts, status `0xA`, and row result `-3482169`.
 - RTL source files now use explicit `input wire logic` ports. This keeps
   `default_nettype none` enabled while satisfying Vivado 2025.1 synthesis,
   which rejects plain `input logic` as an implicit net in this flow.
@@ -326,16 +338,18 @@ Previous useful checkpoint:
 
 ## Immediate Next Step
 
-Plan the next scale-up step after the passing QMAP dot64 PL master smoke.
+Bring the row1024 smoke path onto the board after reviewing the new RTL and
+QMAP image.
 
 Recommended next slice:
 
-1. Keep the passing dot64 design as the board smoke baseline.
-2. Extend the descriptor-driven PL read/compute path from one dot64 group to a
-   larger Q4 GEMV row or row tile.
-3. Keep the same principle: PS loads a QMAP image into PL DDR4, PL reads it
-   through AXI, PL performs the math, and PS only starts/polls/validates.
-4. Decide the next QMAP image shape before adding more Vivado wiring.
+1. Keep the passing dot64 hardware design as the board smoke baseline.
+2. Add or swap in `qmap_row1024_axi_smoke_bd.v` in the Vivado block design.
+3. Reuse the same principle: PS loads the row1024 QMAP image into PL DDR4, PL
+   reads it through AXI, PL performs the row GEMV math, and PS only
+   starts/polls/validates.
+4. After row1024 passes on hardware, scale to a small row tile rather than a
+   full projection at once.
 
 ## Practical Notes
 
