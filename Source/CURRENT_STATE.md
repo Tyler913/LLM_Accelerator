@@ -163,16 +163,23 @@ Latest local RTL/software validation state:
 
 ## Hardware Bring-Up Status
 
-PS-to-PL DDR4 access is complete as a hardware checkpoint.
+PS-to-PL DDR4 access is complete as a hardware checkpoint. The first
+PL-initiated QMAP dot64 read/compute smoke design has also been integrated into
+the Vivado block design, synthesized, implemented, bitstream-generated, and
+exported for Vitis, and passed on hardware.
 
 Current Vivado/Vitis artifacts:
 
 - Vivado project: `FPGA_Project/Vivado_Project/LLM_FPGA.xpr`
 - Current exported hardware handoff:
-  `FPGA_Project/Vivado_Project/llm_system_pl_ddr4_aux_reset_fix.xsa`
+  `FPGA_Project/Vivado_Project/llm_system_qmap_dot64_pl_master.xsa`
 - Current generated bitstream:
   `FPGA_Project/Vivado_Project/LLM_FPGA.runs/impl_1/llm_system_wrapper.bit`
 - Current Vitis platform:
+  `Vitis_Workspace/llm_qmap_dot64_pl_master_platform/`
+- Current Vitis PL compute smoke app:
+  `Vitis_Workspace/qmap_pl_compute_smoke_app/`
+- Previous proven PS-to-PL DDR4 platform:
   `Vitis_Workspace/llm_pl_ddr4_aux_reset_fix_platform/`
 - Durable standalone smoke-test source:
   `FPGA_Project/software/pl_ddr4_smoke/main.c`
@@ -180,10 +187,16 @@ Current Vivado/Vitis artifacts:
   `FPGA_Project/software/qmap_load_smoke/main.c`
 - Embedded QMAP dot64 C header for that smoke app:
   `FPGA_Project/software/qmap_load_smoke/qmap_dot64_image.h`
+- Durable QMAP PL compute smoke-test source:
+  `FPGA_Project/software/qmap_pl_compute_smoke/main.c`
+- Durable QMAP PL compute embedded image header:
+  `FPGA_Project/software/qmap_pl_compute_smoke/qmap_dot64_image.h`
 - Current Vitis workspace app copy:
   `Vitis_Workspace/pl_ddr4_smoke_app/src/main.c`
 - Current QMAP Vitis workspace app copy:
   `Vitis_Workspace/qmap_load_smoke_app/main.c`
+- Current QMAP PL compute Vitis workspace app copy:
+  `Vitis_Workspace/qmap_pl_compute_smoke_app/main.c`
 
 Current PS-to-PL memory fabric:
 
@@ -193,6 +206,11 @@ M_AXI_HPM0_FPD
       M00_AXI -> AXI BRAM Controller -> Block Memory Generator
       M01_AXI -> AXI Clock Converter -> ddr4_0/C0_DDR4_S_AXI
       M02_AXI -> AXI GPIO DDR4 status register
+      additional AXI GPIO slaves for QMAP dot64 control/status/result
+
+qmap_dot64_axi_smoke_0/M_AXI
+  -> AXI SmartConnect S01_AXI
+      -> AXI Clock Converter -> ddr4_0/C0_DDR4_S_AXI
 ```
 
 Current address map:
@@ -202,6 +220,8 @@ Current address map:
 | PS DDR low memory | `0x0000_0000` | `0x7FEF_FFFF` | about 2 GiB minus reserved top window | exported in current BSP |
 | AXI BRAM smoke memory | `0xA000_0000` | `0xA000_1FFF` | 8 KiB | passed in current hardware smoke |
 | DDR4 status AXI GPIO | `0xA001_0000` | `0xA001_FFFF` | 64 KiB | passed in current hardware smoke |
+| QMAP dot64 control/status AXI GPIO | `0xA002_0000` | `0xA002_FFFF` | 64 KiB | passed in current PL master hardware smoke |
+| QMAP dot64 result AXI GPIO | `0xA003_0000` | `0xA003_FFFF` | 64 KiB | passed in current PL master hardware smoke |
 | PL DDR4 | `0x4_0000_0000` | `0x4_1FFF_FFFF` | 512 MiB | passed in current hardware smoke |
 
 DDR4 status GPIO bit layout at `0xA001_0000`:
@@ -229,7 +249,11 @@ Current board-run result:
 
 - Boot mode: JTAG boot (`0000`)
 - Serial path: CH340 USB-UART on COM110, 115200 baud
-- Vitis launch style: `psu_init.tcl` enabled, FSBL initialization disabled
+- Previous PS-to-PL DDR4 smoke launch style: `psu_init.tcl` enabled, FSBL
+  initialization disabled
+- Current QMAP PL master launch style: FSBL initialization enabled,
+  `psu_init.tcl` disabled. This avoids a DAP transaction error while polling
+  PS DDR PHY register `0xFD080030` in `psu_init.tcl`.
 - AXI BRAM smoke passed at:
   - `0x0_A0000000`
   - `0x0_A0000004`
@@ -253,10 +277,23 @@ Current board-run result:
   - payload base: `0x4_1B10_0500`
   - descriptor count/capacity: `4` / `8`
   - byte-for-byte PS readback compare: passed
+- QMAP dot64 PL master smoke passed:
+  - PS writes the same embedded QMAP image to `0x4_1B10_0000`
+  - QMAP readback compare passes for 1536 bytes
+  - PS clears and starts the PL compute path through the control GPIO at
+    `0xA002_0000`
+  - final PL status is `0xA`
+  - result GPIO values at `0xA003_0000` are
+    `partial_sum_low32=0x60AF` and `scaled_sum_q26_low32=0x2E1366`
 
 This proves the first PS-to-PL DDR4 path through
 `M_AXI_HPM0_FPD -> axi_smc -> axi_clock_converter_0 -> ddr4_0/C0_DDR4_S_AXI`
 is working for 32-bit standalone smoke-test accesses.
+
+It also proves the first PL AXI master read path from real PL DDR4 into the
+QMAP/Q4 dot64 compute chain:
+`qmap_dot64_axi_smoke_0/M_AXI -> axi_smc -> axi_clock_converter_0 ->
+ddr4_0/C0_DDR4_S_AXI`.
 
 Previous useful checkpoint:
 
@@ -267,11 +304,10 @@ Previous useful checkpoint:
 
 ## Open Gaps
 
-- PL DDR4 is accessible from PS. The first simulation-only PL QMAP descriptor
-  reader, payload fetcher, Q4 dot64 compute chain, and read-only AXI4 adapter
-  now exist. The QMAP dot64 compute wrapper has passed through the AXI read
-  adapter in simulation, but it is not yet integrated into the Vivado block
-  design or validated against real PL DDR4 on hardware.
+- PL DDR4 is accessible from PS. The first PL QMAP descriptor reader, payload
+  fetcher, Q4 dot64 compute chain, and read-only AXI4 adapter are now wrapped
+  for Vivado, integrated into the block design, and passed board validation
+  against real PL DDR4.
 - QMAP v1 now defines the first descriptor-based PL DDR4 staging contract. The
   dot64 image exporter and standalone PS loader/readback app have passed on
   hardware. The first PL descriptor reader, payload fetcher, and Q4 dot64
@@ -290,26 +326,16 @@ Previous useful checkpoint:
 
 ## Immediate Next Step
 
-Prepare the Vivado block-design integration for the AXI-backed QMAP dot64
-smoke path.
+Plan the next scale-up step after the passing QMAP dot64 PL master smoke.
 
 Recommended next slice:
 
-1. Add the RTL sources needed for the smoke path in Vivado, including
-   `qmap_dot64_axi_smoke_bd.v`, `qmap_dot64_axi_smoke_top.sv`, and their
-   dependencies.
-2. Use `qmap_dot64_axi_smoke_bd.v` as the single RTL module added to the Block
-   Design.
-3. Add AXI GPIO control/status/result registers so PS can drive `i_start` /
-   `i_clear` and read sticky done/error/compare/result values.
-4. Connect the top-level AXI master port to the existing PL DDR4 MIG path in
-   the block design.
-5. Re-run synthesis, implementation, bitstream, hardware export, and a Vitis
-   smoke app that loads the QMAP image then starts the PL read/compute path.
-
-Keep this step narrow. The next proof should still be simulation-first; board
-integration comes after the controller wrapper and AXI read adapter chain are
-stable in RTL.
+1. Keep the passing dot64 design as the board smoke baseline.
+2. Extend the descriptor-driven PL read/compute path from one dot64 group to a
+   larger Q4 GEMV row or row tile.
+3. Keep the same principle: PS loads a QMAP image into PL DDR4, PL reads it
+   through AXI, PL performs the math, and PS only starts/polls/validates.
+4. Decide the next QMAP image shape before adding more Vivado wiring.
 
 ## Practical Notes
 

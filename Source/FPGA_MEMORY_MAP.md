@@ -1,7 +1,7 @@
 # FPGA Memory Map
 
-Status: working draft, updated through the successful PS-to-PL QMAP
-load/readback hardware run on 2026-06-07
+Status: working draft, updated through the QMAP dot64 PL AXI master bitstream
+and Vitis smoke-app preparation on 2026-06-11
 
 This document defines the first FPGA-visible memory layout for the Qwen3
 0.6B accelerator bring-up. It distinguishes hardware-proven base apertures
@@ -75,13 +75,27 @@ Completed hardware checkpoint:
   aperture, DDR4 status GPIO, and PL DDR4 aperture on hardware.
 - The QMAP load/readback smoke app proved that PS can place the first 1536-byte
   QMAP v1 dot64 image at `0x4_1B10_0000` in PL DDR4 and read it back exactly.
+- The current PL AXI master handoff is
+  `FPGA_Project/Vivado_Project/llm_system_qmap_dot64_pl_master.xsa`.
+- The current PL AXI master Vitis platform is
+  `Vitis_Workspace/llm_qmap_dot64_pl_master_platform/`.
+- The QMAP dot64 PL master smoke app proved that PL can read the QMAP image
+  from real PL DDR4 through its AXI master and produce the expected Q4 dot64
+  result.
 
 ## Current Address Map
 
 This section is the source of truth for the current Vivado block design and
 successful board smoke test.
 
-Current reset-fix hardware handoff:
+Current QMAP dot64 PL master hardware handoff:
+
+```text
+FPGA_Project/Vivado_Project/llm_system_qmap_dot64_pl_master.xsa
+```
+
+Previous reset-fix hardware handoff, kept as the PS-to-PL DDR4 proven
+checkpoint:
 
 ```text
 FPGA_Project/Vivado_Project/llm_system_pl_ddr4_aux_reset_fix.xsa
@@ -98,6 +112,8 @@ FPGA_Project/Vivado_Project/llm_system_axi_bram_smoke.xsa
 | PS DDR low memory | PS DDR | `0x0000_0000` | `0x7FEF_FFFF` | about 2 GiB minus reserved top window | exported in current standalone BSP |
 | AXI BRAM memory | `M_AXI_HPM0_FPD` -> AXI SmartConnect `M00_AXI` -> AXI BRAM Controller `S_AXI` | `0xA000_0000` | `0xA000_1FFF` | 8 KiB | passed current hardware smoke |
 | DDR4 status AXI GPIO | `M_AXI_HPM0_FPD` -> AXI SmartConnect `M02_AXI` -> AXI GPIO `S_AXI` | `0xA001_0000` | `0xA001_FFFF` | 64 KiB | passed current hardware smoke |
+| QMAP dot64 control/status AXI GPIO | PS `M_AXI_HPM0_FPD` -> AXI SmartConnect -> AXI GPIO `S_AXI` | `0xA002_0000` | `0xA002_FFFF` | 64 KiB | passed PL master hardware smoke |
+| QMAP dot64 result AXI GPIO | PS `M_AXI_HPM0_FPD` -> AXI SmartConnect -> AXI GPIO `S_AXI` | `0xA003_0000` | `0xA003_FFFF` | 64 KiB | passed PL master hardware smoke |
 | PL DDR4 | `M_AXI_HPM0_FPD` -> AXI SmartConnect `M01_AXI` -> AXI Clock Converter -> `ddr4_0/C0_DDR4_S_AXI` | `0x4_0000_0000` | `0x4_1FFF_FFFF` | 512 MiB | passed current hardware smoke |
 
 Current PS-to-PL fabric:
@@ -108,6 +124,11 @@ M_AXI_HPM0_FPD
       M00_AXI -> AXI BRAM Controller -> Block Memory Generator
       M01_AXI -> AXI Clock Converter -> DDR4 MIG C0_DDR4_S_AXI
       M02_AXI -> AXI GPIO DDR4 status register
+      additional AXI GPIO slaves for QMAP dot64 control/status/result
+
+qmap_dot64_axi_smoke_0/M_AXI
+  -> AXI SmartConnect S01_AXI
+      -> AXI Clock Converter -> DDR4 MIG C0_DDR4_S_AXI
 ```
 
 Confirmed block-design and BSP facts:
@@ -282,7 +303,7 @@ PL_DDR4_HIGH = 0x4_1FFF_FFFF
 | Activation buffers | `0x4_1610_0000` | 64 MiB | PL read/write | hidden, normed, q/k/v, attention, MLP scratch, debug snapshots | draft |
 | RoPE table | `0x4_1A10_0000` | 8 MiB | PS load or PL read | cos/sin table if precomputed | draft |
 | Logits / argmax scratch | `0x4_1A90_0000` | 8 MiB | PL write, PS read | LM-head tile output and final token id | draft |
-| Test-vector staging | `0x4_1B10_0000` | 32 MiB | PS load, PL read/write | QMAP v1 test images and optional RTL bring-up data | first QMAP image passed PS load/readback |
+| Test-vector staging | `0x4_1B10_0000` | 32 MiB | PS load, PL read/write | QMAP v1 test images and optional RTL bring-up data | first QMAP image passed PS load/readback and PL master dot64 read/compute |
 | Reserved | `0x4_1D10_0000` | 47 MiB | PS/PL | expansion room within nominal 512 MiB | draft |
 
 Draft relative coverage:
@@ -316,13 +337,18 @@ First descriptor-based staging contract:
 - Header: `0x4_1B10_0000`.
 - Descriptor table: `0x4_1B10_0100`.
 - Payload base: `0x4_1B10_0500`.
-- Initial purpose: PS writes and reads back a structured tensor image before a
-  PL RTL reader consumes the same descriptor contract.
+- Initial purpose: PS writes and reads back a structured tensor image, then the
+  PL QMAP dot64 read/compute smoke path consumes the same descriptor contract
+  through its AXI master.
 - Hardware result: `qmap_load_smoke_app` passed on 2026-06-07. It wrote the
   1536-byte image with SHA256
   `b56319cf576fe8486e3586ee49a4194323cdfe4f4e6208c8b6057e741e5978d4`,
   read it back byte-for-byte, and checked the QMAP header, four descriptors,
   and selected payload values.
+- PL master hardware result: `qmap_pl_compute_smoke_app` passed on
+  2026-06-11. It loads the same image, starts `qmap_dot64_axi_smoke_0`,
+  observes PL status `0xA`, and reads back `partial_sum_low32=0x60AF` plus
+  `scaled_sum_q26_low32=0x2E1366`.
 
 ## Capacity Budget Worksheet
 
@@ -553,20 +579,25 @@ TODO:
 
 ## Control Register Map
 
-TODO: Fill this after choosing AXI4-Lite or another control path.
+TODO: Fill the final accelerator register map after choosing AXI4-Lite or
+another long-term control path.
 
 Current AXI BRAM and DDR4 status GPIO ranges are not the final accelerator
-control register map. They are only used to verify that PS can access PL
-memory-mapped slaves and observe DDR4 readiness:
+control register map. The QMAP dot64 GPIOs are also temporary smoke-test
+registers for the first PL AXI master read/compute path:
 
 | Smoke-Test Item | Address | Width | Access | Description |
 | --- | ---: | ---: | --- | --- |
 | BRAM word 0 | `0xA000_0000` | 32 | R/W | first pattern-test word |
 | BRAM word N | `0xA000_0000 + 4*N` | 32 | R/W | valid for `0 <= N < 2048` |
 | DDR4 status | `0xA001_0000` | 3 useful bits | R | `bit0=calib_complete`, `bit1=ui_reset`, `bit2=axi_resetn`; good value is `0x5` |
+| QMAP dot64 control | `0xA002_0000` | 2 useful bits | W | AXI GPIO channel 1: `bit0=i_start`, `bit1=i_clear`; pulse the bit high then return to zero |
+| QMAP dot64 status | `0xA002_0008` | 4 useful bits | R | AXI GPIO channel 2: `bit0=busy`, `bit1=done_sticky`, `bit2=error_sticky`, `bit3=compare_match_sticky`; expected pass value is `0xA` |
+| QMAP dot64 partial result | `0xA003_0000` | 32 | R | AXI GPIO channel 1: `partial_sum_low32`; expected smoke value is `0x0000_60AF` / `24751` |
+| QMAP dot64 scaled result | `0xA003_0008` | 32 | R | AXI GPIO channel 2: `scaled_sum_q26_low32`; expected smoke value is `0x002E_1366` / `3019622` |
 
 Future accelerator control should probably use AXI4-Lite registers separate
-from this temporary BRAM aperture.
+from these temporary smoke apertures.
 
 | Register | Offset | Width | Access | Description |
 | --- | ---: | ---: | --- | --- |
@@ -603,8 +634,11 @@ Current state and open questions:
 - Direct PS memory-mapped access to PL DDR4 through `M_AXI_HPM0_FPD` is proven
   for standalone 32-bit smoke-test writes/readbacks.
 - The first QMAP v1 dot64 PL DDR4 staging image has passed PS load/readback.
-- The next step is a narrow PL-side QMAP descriptor reader simulation, followed
-  by payload fetch and connection to the Q4 dot64 datapath.
+- The first PL-side QMAP descriptor reader, payload fetcher, Q4 dot64 datapath,
+  AXI4 read master adapter, and Vivado-facing smoke top have passed simulation.
+- `qmap_pl_compute_smoke_app` passed on the board, proving the PL AXI master
+  can read the QMAP image from real PL DDR4 and return the expected dot64
+  results through the temporary GPIOs.
 - Decide later whether DMA is needed for faster bulk copies.
 - Future cache coherency policy is still open for PS buffers, PL masters, DMA,
   or cached runtime paths.
@@ -640,8 +674,11 @@ Bring-up order:
 4. PS writes and reads back that QMAP image at `0x4_1B10_0000`.
    - status: passed on hardware with exact 1536-byte readback, expected header,
      four descriptors, and payload spot checks.
-5. A future PL reader consumes QMAP descriptors and streams payloads into the
-   existing Q4 dot64 datapath.
+5. Build and run `qmap_pl_compute_smoke_app` so the PL AXI master consumes the
+   QMAP descriptors from real PL DDR4 and streams payloads into the existing Q4
+   dot64 datapath.
+   - status: passed on hardware with PL status `0xA` and expected result GPIO
+     values.
 6. RMSNorm RTL block reads `input_hidden`, `norm_weight`, and `eps`; compare
    with `expected_output`.
 7. Q4 GEMV RTL block starts from the 64-value dot-product smoke vector in
@@ -662,6 +699,7 @@ Pass/fail fields to record:
 | DDR4 status GPIO | direct read at `0xA001_0000` | exact expected status `0x5` | exact expected status `0x5` | passed |
 | PS-to-PL PL DDR4 | direct pattern test at `0x4_0000_0000`, `0x4_0000_0004`, `0x4_0000_1000`, `0x4_1000_0000`, and `0x4_1FFF_FFFC` | exact match | exact match | passed |
 | QMAP dot64 load/readback | `q_proj_row0_group0_dot64.qmap.bin` at `0x4_1B10_0000` | exact 1536-byte readback | exact header/descriptor/payload spot checks | passed |
+| QMAP dot64 PL master compute | `q_proj_row0_group0_dot64.qmap.bin` at `0x4_1B10_0000` | exact PL status `0xA` | exact GPIO results `0x60AF` / `0x2E1366` | passed |
 | RMSNorm | `rmsnorm_layer0_last_token.npz` | TODO | TODO | TODO |
 | Q4 Q GEMV | `qwen3_0p6b_q4_v0/qkv_layer0_last_token_q4.npz` | 0.22418976 | 0.01856172 | passed in Python verifier |
 | Q4 K GEMV | `qwen3_0p6b_q4_v0/qkv_layer0_last_token_q4.npz` | 0.12317824 | 0.01752916 | passed in Python verifier |
@@ -687,3 +725,5 @@ Pass/fail fields to record:
 | 2026-06-07 | Prove PS-to-PL DDR4 hardware path | Final reset-fix XSA `llm_system_pl_ddr4_aux_reset_fix.xsa` and platform `llm_pl_ddr4_aux_reset_fix_platform` pass board smoke: BRAM at `0xA000_0000`, status GPIO at `0xA001_0000`, and PL DDR4 at `0x4_0000_0000` through `0x4_1FFF_FFFF` all read/write as expected |
 | 2026-06-07 | Define QMAP v1 staging contract | Adds descriptor-based PL DDR4 tensor staging for the first dot64 Q4 image and future scalable model artifacts |
 | 2026-06-07 | Prove QMAP dot64 PS load/readback | `qmap_load_smoke_app` writes the 1536-byte QMAP image to `0x4_1B10_0000`, reads it back exactly, and checks header, descriptor, and payload fields |
+| 2026-06-11 | Prepare QMAP dot64 PL AXI master board smoke | Adds temporary control/status GPIO at `0xA002_0000`, result GPIO at `0xA003_0000`, generated/exported `llm_system_qmap_dot64_pl_master.xsa`, and prepared `qmap_pl_compute_smoke_app` to load QMAP, start PL compute, and check status/result |
+| 2026-06-11 | Prove QMAP dot64 PL AXI master hardware path | `qmap_pl_compute_smoke_app` passes on board: DDR4 status `0x5`, QMAP readback passes for 1536 bytes, PL status `0xA`, partial sum `0x60AF`, scaled sum `0x2E1366` |
