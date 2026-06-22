@@ -22,6 +22,7 @@ module q4_gemv_row_1024 # (
     parameter int INPUT_SIZE    = 1024,
     parameter int GROUP_SIZE    = 64,
     parameter int GROUP_COUNT   = INPUT_SIZE / GROUP_SIZE,
+    parameter int GROUP_PARALLEL = 4,
     parameter int ACT_WIDTH     = 24,
     parameter int ACT_FRAC      = 12,
     parameter int WEIGHT_WIDTH  = 4,
@@ -62,24 +63,31 @@ module q4_gemv_row_1024 # (
     output logic signed [ROW_ACC_WIDTH-1 : 0]           o_row_sum_q26
 );
 
-    // Parallel 16-group controller.
+    // Batched group controller.
     //
     // Current structure:
     // 1. IDLE: wait for i_start.
-    // 2. PARALLEL_COMPUTE: pulse all 16 q4_dot_product_64 instances and wait
-    //    until every instance asserts done.
-    // 3. ACCUMULATE: register the combinational sum of the 16 scaled Q26 group
-    //    results into o_row_sum_q26.
-    // 4. DONE: o_row_sum_q26 is valid for the row.
+    // 2. START_BATCH: pulse up to GROUP_PARALLEL q4_dot_product_64 instances.
+    // 3. WAIT_BATCH: wait until the active group lanes complete.
+    // 4. ACCUMULATE: add that batch's scaled Q26 sum into o_row_sum_q26.
+    // 5. DONE: o_row_sum_q26 is valid for the row.
 
-    localparam IDLE             = 2'd0;
-    localparam PARALLEL_COMPUTE = 2'd1;
-    localparam ACCUMULATE       = 2'd2;
-    localparam DONE             = 2'd3;
+    localparam int GROUP_PARALLEL_LOCAL = (GROUP_PARALLEL > GROUP_COUNT) ? GROUP_COUNT : GROUP_PARALLEL;
+    localparam int BATCH_COUNT          = (GROUP_COUNT + GROUP_PARALLEL_LOCAL - 1) / GROUP_PARALLEL_LOCAL;
+    localparam int BATCH_INDEX_WIDTH    = (BATCH_COUNT <= 1) ? 1 : $clog2(BATCH_COUNT);
+    localparam int GROUP_INDEX_WIDTH    = (GROUP_COUNT <= 1) ? 1 : $clog2(GROUP_COUNT);
 
-    logic [1:0] current_state;
-    logic [1:0] next_state;
-    logic       parallel_compute_done;
+    localparam IDLE        = 3'd0;
+    localparam START_BATCH = 3'd1;
+    localparam WAIT_BATCH  = 3'd2;
+    localparam ACCUMULATE  = 3'd3;
+    localparam DONE        = 3'd4;
+
+    logic [2:0] current_state;
+    logic [2:0] next_state;
+    logic       batch_compute_done;
+    logic       last_batch;
+    logic [BATCH_INDEX_WIDTH-1 : 0] batch_index;
 
     
     always_ff @(posedge i_clk or negedge i_rst_n) begin
@@ -106,14 +114,20 @@ module q4_gemv_row_1024 # (
             case (current_state)
                 IDLE: begin
                     if (i_start == 1'b1) begin
-                        next_state = PARALLEL_COMPUTE;
+                        next_state = START_BATCH;
                         o_busy     = 1'b1;
                         o_done     = 1'b0;
                     end
                 end
 
-                PARALLEL_COMPUTE: begin
-                    if (parallel_compute_done == 1'b1) begin
+                START_BATCH: begin
+                    next_state = WAIT_BATCH;
+                    o_busy     = 1'b1;
+                    o_done     = 1'b0;
+                end
+
+                WAIT_BATCH: begin
+                    if (batch_compute_done == 1'b1) begin
                         next_state = ACCUMULATE;
                     end
                     o_busy     = 1'b1;
@@ -121,7 +135,12 @@ module q4_gemv_row_1024 # (
                 end
 
                 ACCUMULATE: begin
-                    next_state = DONE;
+                    if (last_batch == 1'b1) begin
+                        next_state = DONE;
+                    end
+                    else begin
+                        next_state = START_BATCH;
+                    end
                     o_busy     = 1'b1;
                     o_done     = 1'b0;
                 end
@@ -143,19 +162,46 @@ module q4_gemv_row_1024 # (
 
 
     logic                              instant_start;
-    logic        [GROUP_COUNT-1 : 0]   instant_busy;
-    logic        [GROUP_COUNT-1 : 0]   instant_done;
-    logic signed [PARTIAL_WIDTH-1 : 0] instant_partial_sum    [GROUP_COUNT];
-    logic signed [SCALED_WIDTH-1 : 0]  instant_scaled_sum_q26 [GROUP_COUNT];
-    logic signed [ROW_ACC_WIDTH-1 : 0] row_instant_scaled_sum;
+    logic        [GROUP_PARALLEL_LOCAL-1 : 0]   instant_busy;
+    logic        [GROUP_PARALLEL_LOCAL-1 : 0]   instant_done;
+    logic        [GROUP_PARALLEL_LOCAL-1 : 0]   instant_lane_valid;
+    logic        [GROUP_PARALLEL_LOCAL-1 : 0]   instant_done_effective;
+    logic signed [PARTIAL_WIDTH-1 : 0]          instant_partial_sum    [GROUP_PARALLEL_LOCAL];
+    logic signed [SCALED_WIDTH-1 : 0]           instant_scaled_sum_q26 [GROUP_PARALLEL_LOCAL];
+    logic signed [ROW_ACC_WIDTH-1 : 0]          batch_scaled_sum;
 
-    assign parallel_compute_done = &instant_done;
-    assign instant_start         = (current_state == IDLE) && (i_start == 1'b1);
+    assign batch_compute_done = &instant_done_effective;
+    assign instant_start      = (current_state == START_BATCH);
+    assign last_batch         = (batch_index == (BATCH_COUNT - 1));
 
     genvar group_index;
 
     generate
-        for (group_index = 0 ; group_index < GROUP_COUNT ; group_index = group_index + 1) begin : gen_q4_dot_product_64
+        for (group_index = 0 ; group_index < GROUP_PARALLEL_LOCAL ; group_index = group_index + 1) begin : gen_q4_dot_product_64
+            localparam int LANE_INDEX = group_index;
+            logic [GROUP_INDEX_WIDTH : 0] active_group_index;
+            logic [GROUP_SIZE*ACT_WIDTH-1 : 0] lane_activation_flat;
+            logic [GROUP_SIZE*WEIGHT_WIDTH-1 : 0] lane_weight_packed;
+            logic [SCALE_WIDTH-1 : 0] lane_scale_q2_14;
+
+            assign active_group_index =
+                (batch_index * GROUP_PARALLEL_LOCAL) + LANE_INDEX;
+            assign instant_lane_valid[group_index] = (active_group_index < GROUP_COUNT);
+            assign instant_done_effective[group_index] =
+                instant_lane_valid[group_index] ? instant_done[group_index] : 1'b1;
+            assign lane_activation_flat =
+                instant_lane_valid[group_index] ?
+                i_activation_flat[active_group_index*GROUP_SIZE*ACT_WIDTH +: GROUP_SIZE*ACT_WIDTH] :
+                'd0;
+            assign lane_weight_packed =
+                instant_lane_valid[group_index] ?
+                i_weight_packed[active_group_index*GROUP_SIZE*WEIGHT_WIDTH +: GROUP_SIZE*WEIGHT_WIDTH] :
+                'd0;
+            assign lane_scale_q2_14 =
+                instant_lane_valid[group_index] ?
+                i_scale_flat[active_group_index*SCALE_WIDTH +: SCALE_WIDTH] :
+                'd0;
+
             q4_dot_product_64 #(
                 .GROUP_SIZE    (GROUP_SIZE),
                 .ACT_WIDTH     (ACT_WIDTH),
@@ -170,10 +216,10 @@ module q4_gemv_row_1024 # (
                 .i_clk             (i_clk),
                 .i_rst_n           (i_rst_n),
 
-                .i_start           (instant_start),
-                .i_activation_flat (i_activation_flat[group_index*GROUP_SIZE*ACT_WIDTH +: GROUP_SIZE*ACT_WIDTH]),
-                .i_weight_packed   (i_weight_packed[group_index*GROUP_SIZE*WEIGHT_WIDTH +: GROUP_SIZE*WEIGHT_WIDTH]),
-                .i_scale_q2_14     (i_scale_flat[group_index*SCALE_WIDTH +: SCALE_WIDTH]),
+                .i_start           (instant_start && instant_lane_valid[group_index]),
+                .i_activation_flat (lane_activation_flat),
+                .i_weight_packed   (lane_weight_packed),
+                .i_scale_q2_14     (lane_scale_q2_14),
 
                 .o_busy            (instant_busy[group_index]),
                 .o_done            (instant_done[group_index]),
@@ -186,24 +232,48 @@ module q4_gemv_row_1024 # (
     integer i;
 
     always @* begin
-        row_instant_scaled_sum = 'd0;
+        batch_scaled_sum = 'd0;
 
-        for (i = 0 ; i < GROUP_COUNT ; i = i + 1) begin
-            row_instant_scaled_sum = row_instant_scaled_sum + $signed({{(ROW_ACC_WIDTH-SCALED_WIDTH){instant_scaled_sum_q26[i][SCALED_WIDTH-1]}}, instant_scaled_sum_q26[i]});
+        for (i = 0 ; i < GROUP_PARALLEL_LOCAL ; i = i + 1) begin
+            if (instant_lane_valid[i] == 1'b1) begin
+                batch_scaled_sum = batch_scaled_sum + $signed({{(ROW_ACC_WIDTH-SCALED_WIDTH){instant_scaled_sum_q26[i][SCALED_WIDTH-1]}}, instant_scaled_sum_q26[i]});
+            end
         end
     end
 
     always_ff @(posedge i_clk or negedge i_rst_n) begin
         if (i_rst_n == 1'b0) begin
             o_row_sum_q26 <= 'd0;
+            batch_index   <= 'd0;
         end
         else begin
             case (current_state)
-                IDLE:             o_row_sum_q26 <= 'd0;
-                PARALLEL_COMPUTE: o_row_sum_q26 <= 'd0;
-                ACCUMULATE:       o_row_sum_q26 <= row_instant_scaled_sum;
-                DONE:             o_row_sum_q26 <= o_row_sum_q26;
-                default:          o_row_sum_q26 <= 'd0;
+                IDLE: begin
+                    o_row_sum_q26 <= 'd0;
+                    batch_index   <= 'd0;
+                end
+                START_BATCH: begin
+                    o_row_sum_q26 <= o_row_sum_q26;
+                    batch_index   <= batch_index;
+                end
+                WAIT_BATCH: begin
+                    o_row_sum_q26 <= o_row_sum_q26;
+                    batch_index   <= batch_index;
+                end
+                ACCUMULATE: begin
+                    o_row_sum_q26 <= o_row_sum_q26 + batch_scaled_sum;
+                    if (last_batch == 1'b0) begin
+                        batch_index <= batch_index + 1'b1;
+                    end
+                end
+                DONE: begin
+                    o_row_sum_q26 <= o_row_sum_q26;
+                    batch_index   <= batch_index;
+                end
+                default: begin
+                    o_row_sum_q26 <= 'd0;
+                    batch_index   <= 'd0;
+                end
             endcase
         end
     end

@@ -173,7 +173,8 @@ module tb_q4_gemv_row_1024;
 
     initial begin
         wavefile = "FPGA_Project/wave/q4_gemv_row_1024.vcd";
-        void'($value$plusargs("wavefile=%s", wavefile));
+        if ($value$plusargs("wavefile=%s", wavefile)) begin
+        end
         $dumpfile(wavefile);
         $dumpvars(0, tb_q4_gemv_row_1024);
     end
@@ -197,7 +198,7 @@ module tb_q4_gemv_row_1024;
         @(negedge clk);
         start = 1'b0;
 
-        while ((done != 1'b1) && (cycle_count < 120)) begin
+        while ((done != 1'b1) && (cycle_count < 600)) begin
             @(posedge clk);
             cycle_count++;
         end

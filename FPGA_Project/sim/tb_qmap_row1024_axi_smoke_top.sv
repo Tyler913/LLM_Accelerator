@@ -224,8 +224,8 @@ module tb_qmap_row1024_axi_smoke_top;
             $finish(1);
         end
 
-        if (burst_count != 10) begin
-            $display("FAIL: expected 10 AXI read bursts");
+        if (burst_count != 18) begin
+            $display("FAIL: expected 18 AXI read bursts");
             $finish(1);
         end
 

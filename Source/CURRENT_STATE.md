@@ -164,10 +164,10 @@ Latest local RTL/software validation state:
   `row_sum_q26_int64=-3482169`.
 - `qmap_row1024_compute_path.sv` passes RTL simulation against
   `qmap_row1024_image_words32.hex`. It reads QMAP descriptors, fetches the
-  full row payloads, runs `q4_gemv_row_1024.sv`, and matches the expected row
-  sum.
+  row payloads in 4-group batches, runs `q4_gemv_row_1024.sv`, and matches the
+  expected row sum.
 - `qmap_row1024_axi_smoke_top.sv` and `qmap_row1024_axi_smoke_bd.v` are ready
-  as the next Vivado-facing smoke top. The AXI simulation passes with 10 read
+  as the next Vivado-facing smoke top. The AXI simulation passes with 18 read
   bursts, status `0xA`, and row result `-3482169`.
 - RTL source files now use explicit `input wire logic` ports. This keeps
   `default_nettype none` enabled while satisfying Vivado 2025.1 synthesis,
@@ -335,6 +335,11 @@ Previous useful checkpoint:
   pending in RTL.
 - Cache coherency, bulk transfer strategy, and any future DMA policy are still
   open. The current proven path is direct PS memory-mapped 32-bit access.
+- A first Vivado bring-up attempt for row1024 showed LUT over-utilization with
+  the earlier full-row payload buffering. The current row1024 RTL is now
+  resource-reduced for bring-up by fetching and computing 4 groups at a time;
+  synthesis, implementation, and bitstream generation remain the next
+  user-run Vivado checks.
 
 ## Immediate Next Step
 

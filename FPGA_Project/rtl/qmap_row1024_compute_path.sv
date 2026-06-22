@@ -6,16 +6,17 @@
 //
 // This is the next level above qmap_dot64_compute_path:
 //   1. read QMAP header/descriptors
-//   2. fetch activation[1024], packed Q4 weight row[1,1024], scale[1,16],
-//      and expected row Q26 debug value
-//   3. run q4_gemv_row_1024
-//   4. compare the computed row sum against the QMAP expected payload
+//   2. fetch GROUP_PARALLEL groups at a time from activation/weight/scale
+//   3. run q4_gemv_row_1024 on that small batch
+//   4. accumulate all batch sums into the row1024 Q26 result
+//   5. compare the computed row sum against the QMAP expected payload
 module qmap_row1024_compute_path #(
     parameter int ADDR_WIDTH       = 64,
     parameter int DESCRIPTOR_SLOTS = 4,
     parameter int INPUT_SIZE       = 1024,
     parameter int GROUP_SIZE       = 64,
     parameter int GROUP_COUNT      = INPUT_SIZE / GROUP_SIZE,
+    parameter int GROUP_PARALLEL   = 4,
     parameter int ACT_WIDTH        = 16,
     parameter int ACT_FRAC         = 12,
     parameter int WEIGHT_WIDTH     = 4,
@@ -32,24 +33,29 @@ module qmap_row1024_compute_path #(
     input  wire logic                                  i_start,
     input  wire logic [ADDR_WIDTH-1 : 0]               i_qmap_base_addr,
 
-    output logic                                  o_busy,
-    output logic                                  o_done,
-    output logic                                  o_error,
-    output logic                                  o_compare_match,
+    output logic                                       o_busy,
+    output logic                                       o_done,
+    output logic                                       o_error,
+    output logic                                       o_compare_match,
 
-    output logic                                  o_mem_req_valid,
+    output logic                                       o_mem_req_valid,
     input  wire logic                                  i_mem_req_ready,
-    output logic [ADDR_WIDTH-1 : 0]               o_mem_req_addr,
-    output logic [15 : 0]                         o_mem_req_len_bytes,
+    output logic [ADDR_WIDTH-1 : 0]                    o_mem_req_addr,
+    output logic [15 : 0]                              o_mem_req_len_bytes,
 
     input  wire logic                                  i_mem_rsp_valid,
-    output logic                                  o_mem_rsp_ready,
+    output logic                                       o_mem_rsp_ready,
     input  wire logic [31 : 0]                         i_mem_rsp_data,
     input  wire logic                                  i_mem_rsp_last,
 
-    output logic signed [63 : 0]                  o_row_sum_q26,
-    output logic signed [63 : 0]                  o_expected_row_sum_q26
+    output logic signed [63 : 0]                       o_row_sum_q26,
+    output logic signed [63 : 0]                       o_expected_row_sum_q26
 );
+
+    localparam int GROUP_PARALLEL_LOCAL = (GROUP_PARALLEL > GROUP_COUNT) ? GROUP_COUNT : GROUP_PARALLEL;
+    localparam int BATCH_COUNT          = (GROUP_COUNT + GROUP_PARALLEL_LOCAL - 1) / GROUP_PARALLEL_LOCAL;
+    localparam int BATCH_INDEX_WIDTH    = (BATCH_COUNT <= 1) ? 1 : $clog2(BATCH_COUNT);
+    localparam int BATCH_INPUT_SIZE     = GROUP_PARALLEL_LOCAL * GROUP_SIZE;
 
     typedef enum logic [2 : 0] {
         S_IDLE,
@@ -117,15 +123,22 @@ module qmap_row1024_compute_path #(
     logic [31 : 0] fetcher_rsp_data;
     logic fetcher_rsp_last;
 
-    logic [INPUT_SIZE*ACT_WIDTH-1 : 0] activation_flat;
-    logic [INPUT_SIZE*WEIGHT_WIDTH-1 : 0] weight_packed;
-    logic [GROUP_COUNT*SCALE_WIDTH-1 : 0] scale_flat;
+    logic [BATCH_INPUT_SIZE*ACT_WIDTH-1 : 0] activation_flat;
+    logic [BATCH_INPUT_SIZE*WEIGHT_WIDTH-1 : 0] weight_packed;
+    logic [GROUP_PARALLEL_LOCAL*SCALE_WIDTH-1 : 0] scale_flat;
     logic signed [63 : 0] expected_row_sum_q26;
 
     logic row_start;
     logic row_done;
-    logic signed [ROW_ACC_WIDTH-1 : 0] row_sum_q26;
-    logic signed [63 : 0] row_sum_q26_ext;
+    logic signed [ROW_ACC_WIDTH-1 : 0] batch_sum_q26;
+    logic signed [63 : 0] batch_sum_q26_ext;
+    logic signed [63 : 0] accumulated_row_sum_q26;
+    logic signed [63 : 0] next_accumulated_row_sum_q26;
+
+    logic [BATCH_INDEX_WIDTH-1 : 0] batch_index;
+    logic [15 : 0] batch_group_start;
+    logic last_batch;
+    logic fetch_expected_this_batch;
 
     logic [63 : 0] activation_base_addr;
     logic [63 : 0] activation_nbytes;
@@ -150,8 +163,12 @@ module qmap_row1024_compute_path #(
     assign expected_base_addr   = desc_base_addr_flat[3*64 +: 64];
     assign expected_nbytes      = desc_nbytes_flat[3*64 +: 64];
 
-    assign row_sum_q26_ext =
-        {{(64-ROW_ACC_WIDTH){row_sum_q26[ROW_ACC_WIDTH-1]}}, row_sum_q26};
+    assign batch_sum_q26_ext =
+        {{(64-ROW_ACC_WIDTH){batch_sum_q26[ROW_ACC_WIDTH-1]}}, batch_sum_q26};
+    assign next_accumulated_row_sum_q26 = accumulated_row_sum_q26 + batch_sum_q26_ext;
+    assign batch_group_start = batch_index * GROUP_PARALLEL_LOCAL;
+    assign last_batch = (batch_index == (BATCH_COUNT - 1));
+    assign fetch_expected_this_batch = (batch_index == 'd0);
 
     assign o_mem_req_valid = (state == S_READER_WAIT) ? reader_req_valid :
                              (state == S_FETCHER_WAIT) ? fetcher_req_valid :
@@ -227,6 +244,7 @@ module qmap_row1024_compute_path #(
         .INPUT_SIZE(INPUT_SIZE),
         .GROUP_SIZE(GROUP_SIZE),
         .GROUP_COUNT(GROUP_COUNT),
+        .GROUP_PARALLEL(GROUP_PARALLEL_LOCAL),
         .ACT_WIDTH(ACT_WIDTH),
         .WEIGHT_WIDTH(WEIGHT_WIDTH),
         .SCALE_WIDTH(SCALE_WIDTH)
@@ -234,6 +252,8 @@ module qmap_row1024_compute_path #(
         .i_clk(i_clk),
         .i_rst_n(i_rst_n),
         .i_start(fetcher_start),
+        .i_group_start(batch_group_start),
+        .i_fetch_expected(fetch_expected_this_batch),
         .i_activation_base_addr(activation_base_addr),
         .i_activation_nbytes(activation_nbytes),
         .i_weight_base_addr(weight_base_addr),
@@ -260,9 +280,10 @@ module qmap_row1024_compute_path #(
     );
 
     q4_gemv_row_1024 #(
-        .INPUT_SIZE(INPUT_SIZE),
+        .INPUT_SIZE(BATCH_INPUT_SIZE),
         .GROUP_SIZE(GROUP_SIZE),
-        .GROUP_COUNT(GROUP_COUNT),
+        .GROUP_COUNT(GROUP_PARALLEL_LOCAL),
+        .GROUP_PARALLEL(GROUP_PARALLEL_LOCAL),
         .ACT_WIDTH(ACT_WIDTH),
         .ACT_FRAC(ACT_FRAC),
         .WEIGHT_WIDTH(WEIGHT_WIDTH),
@@ -271,7 +292,7 @@ module qmap_row1024_compute_path #(
         .PARTIAL_WIDTH(PARTIAL_WIDTH),
         .SCALED_WIDTH(SCALED_WIDTH),
         .ROW_ACC_WIDTH(ROW_ACC_WIDTH)
-    ) row1024 (
+    ) row1024_batch (
         .i_clk(i_clk),
         .i_rst_n(i_rst_n),
         .i_start(row_start),
@@ -280,28 +301,32 @@ module qmap_row1024_compute_path #(
         .i_scale_flat(scale_flat),
         .o_busy(),
         .o_done(row_done),
-        .o_row_sum_q26(row_sum_q26)
+        .o_row_sum_q26(batch_sum_q26)
     );
 
     always @(posedge i_clk) begin
         if (!i_rst_n) begin
-            state                  <= S_IDLE;
-            o_done                 <= 1'b0;
-            o_error                <= 1'b0;
-            o_compare_match        <= 1'b0;
-            o_row_sum_q26          <= 64'sd0;
-            o_expected_row_sum_q26 <= 64'sd0;
+            state                   <= S_IDLE;
+            batch_index             <= 'd0;
+            accumulated_row_sum_q26 <= 64'sd0;
+            o_done                  <= 1'b0;
+            o_error                 <= 1'b0;
+            o_compare_match         <= 1'b0;
+            o_row_sum_q26           <= 64'sd0;
+            o_expected_row_sum_q26  <= 64'sd0;
         end else begin
             o_done <= 1'b0;
 
             case (state)
                 S_IDLE: begin
                     if (i_start) begin
-                        o_error                <= 1'b0;
-                        o_compare_match        <= 1'b0;
-                        o_row_sum_q26          <= 64'sd0;
-                        o_expected_row_sum_q26 <= 64'sd0;
-                        state                  <= S_READER_START;
+                        batch_index             <= 'd0;
+                        accumulated_row_sum_q26 <= 64'sd0;
+                        o_error                 <= 1'b0;
+                        o_compare_match         <= 1'b0;
+                        o_row_sum_q26           <= 64'sd0;
+                        o_expected_row_sum_q26  <= 64'sd0;
+                        state                   <= S_READER_START;
                     end
                 end
 
@@ -341,11 +366,18 @@ module qmap_row1024_compute_path #(
 
                 S_ROW_WAIT: begin
                     if (row_done) begin
-                        o_row_sum_q26          <= row_sum_q26_ext;
-                        o_expected_row_sum_q26 <= expected_row_sum_q26;
-                        o_compare_match        <= (row_sum_q26_ext == expected_row_sum_q26);
-                        o_error                <= (row_sum_q26_ext != expected_row_sum_q26);
-                        state                  <= S_DONE;
+                        accumulated_row_sum_q26 <= next_accumulated_row_sum_q26;
+
+                        if (last_batch) begin
+                            o_row_sum_q26          <= next_accumulated_row_sum_q26;
+                            o_expected_row_sum_q26 <= expected_row_sum_q26;
+                            o_compare_match        <= (next_accumulated_row_sum_q26 == expected_row_sum_q26);
+                            o_error                <= (next_accumulated_row_sum_q26 != expected_row_sum_q26);
+                            state                  <= S_DONE;
+                        end else begin
+                            batch_index <= batch_index + 1'b1;
+                            state       <= S_FETCHER_START;
+                        end
                     end
                 end
 

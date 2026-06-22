@@ -23,11 +23,11 @@
       "axi_clock_converter_0": "",
       "axi_gpio_0": "",
       "xlconcat_0": "",
-      "qmap_dot64_axi_smoke_0": "",
       "axi_gpio_1": "",
       "xlslice_0": "",
       "xlslice_1": "",
-      "axi_gpio_2": ""
+      "axi_gpio_2": "",
+      "qmap_row1024_axi_smo_0": ""
     },
     "interface_ports": {
       "C0_DDR4_0": {
@@ -986,16 +986,92 @@
           }
         }
       },
-      "qmap_dot64_axi_smoke_0": {
-        "vlnv": "xilinx.com:module_ref:qmap_dot64_axi_smoke_bd:1.0",
+      "axi_gpio_1": {
+        "vlnv": "xilinx.com:ip:axi_gpio:2.0",
+        "ip_revision": "37",
+        "xci_name": "llm_system_axi_gpio_1_0",
+        "xci_path": "ip\\llm_system_axi_gpio_1_0\\llm_system_axi_gpio_1_0.xci",
+        "inst_hier_path": "axi_gpio_1",
+        "has_run_ip_tcl": "true",
+        "parameters": {
+          "C_ALL_INPUTS_2": {
+            "value": "1"
+          },
+          "C_ALL_OUTPUTS": {
+            "value": "1"
+          },
+          "C_GPIO2_WIDTH": {
+            "value": "4"
+          },
+          "C_GPIO_WIDTH": {
+            "value": "2"
+          },
+          "C_IS_DUAL": {
+            "value": "1"
+          }
+        }
+      },
+      "xlslice_0": {
+        "vlnv": "xilinx.com:ip:xlslice:1.0",
+        "ip_revision": "5",
+        "xci_name": "llm_system_xlslice_0_0",
+        "xci_path": "ip\\llm_system_xlslice_0_0\\llm_system_xlslice_0_0.xci",
+        "inst_hier_path": "xlslice_0",
+        "has_run_ip_tcl": "true",
+        "parameters": {
+          "DIN_WIDTH": {
+            "value": "2"
+          }
+        }
+      },
+      "xlslice_1": {
+        "vlnv": "xilinx.com:ip:xlslice:1.0",
+        "ip_revision": "5",
+        "xci_name": "llm_system_xlslice_1_0",
+        "xci_path": "ip\\llm_system_xlslice_1_0\\llm_system_xlslice_1_0.xci",
+        "inst_hier_path": "xlslice_1",
+        "has_run_ip_tcl": "true",
+        "parameters": {
+          "DIN_FROM": {
+            "value": "1"
+          },
+          "DIN_TO": {
+            "value": "1"
+          },
+          "DIN_WIDTH": {
+            "value": "2"
+          }
+        }
+      },
+      "axi_gpio_2": {
+        "vlnv": "xilinx.com:ip:axi_gpio:2.0",
+        "ip_revision": "37",
+        "xci_name": "llm_system_axi_gpio_2_0",
+        "xci_path": "ip\\llm_system_axi_gpio_2_0\\llm_system_axi_gpio_2_0.xci",
+        "inst_hier_path": "axi_gpio_2",
+        "has_run_ip_tcl": "true",
+        "parameters": {
+          "C_ALL_INPUTS": {
+            "value": "1"
+          },
+          "C_ALL_INPUTS_2": {
+            "value": "1"
+          },
+          "C_IS_DUAL": {
+            "value": "1"
+          }
+        }
+      },
+      "qmap_row1024_axi_smo_0": {
+        "vlnv": "xilinx.com:module_ref:qmap_row1024_axi_smoke_bd:1.0",
         "ip_revision": "1",
-        "xci_name": "llm_system_qmap_dot64_axi_smoke_0_0",
-        "xci_path": "ip\\llm_system_qmap_dot64_axi_smoke_0_0\\llm_system_qmap_dot64_axi_smoke_0_0.xci",
-        "inst_hier_path": "qmap_dot64_axi_smoke_0",
+        "xci_name": "llm_system_qmap_row1024_axi_smo_0_0",
+        "xci_path": "ip\\llm_system_qmap_row1024_axi_smo_0_0\\llm_system_qmap_row1024_axi_smo_0_0.xci",
+        "inst_hier_path": "qmap_row1024_axi_smo_0",
         "has_run_ip_tcl": "true",
         "reference_info": {
           "ref_type": "hdl",
-          "ref_name": "qmap_dot64_axi_smoke_bd",
+          "ref_name": "qmap_row1024_axi_smoke_bd",
           "boundary_crc": "0x0"
         },
         "interface_ports": {
@@ -1327,42 +1403,22 @@
             "left": "3",
             "right": "0"
           },
-          "o_partial_sum_low32": {
+          "o_row_sum_q26_low32": {
             "direction": "O",
             "left": "31",
             "right": "0"
           },
-          "o_scaled_sum_q26_low32": {
+          "o_expected_row_sum_q26_low32": {
             "direction": "O",
             "left": "31",
             "right": "0"
           },
-          "o_expected_partial_sum_low32": {
-            "direction": "O",
-            "left": "31",
-            "right": "0"
-          },
-          "o_expected_scaled_sum_q26_low32": {
-            "direction": "O",
-            "left": "31",
-            "right": "0"
-          },
-          "o_partial_sum": {
+          "o_row_sum_q26": {
             "direction": "O",
             "left": "63",
             "right": "0"
           },
-          "o_scaled_sum_q26": {
-            "direction": "O",
-            "left": "63",
-            "right": "0"
-          },
-          "o_expected_partial_sum": {
-            "direction": "O",
-            "left": "63",
-            "right": "0"
-          },
-          "o_expected_scaled_sum_q26": {
+          "o_expected_row_sum_q26": {
             "direction": "O",
             "left": "63",
             "right": "0"
@@ -1374,82 +1430,6 @@
               "range": "16E",
               "width": "32"
             }
-          }
-        }
-      },
-      "axi_gpio_1": {
-        "vlnv": "xilinx.com:ip:axi_gpio:2.0",
-        "ip_revision": "37",
-        "xci_name": "llm_system_axi_gpio_1_0",
-        "xci_path": "ip\\llm_system_axi_gpio_1_0\\llm_system_axi_gpio_1_0.xci",
-        "inst_hier_path": "axi_gpio_1",
-        "has_run_ip_tcl": "true",
-        "parameters": {
-          "C_ALL_INPUTS_2": {
-            "value": "1"
-          },
-          "C_ALL_OUTPUTS": {
-            "value": "1"
-          },
-          "C_GPIO2_WIDTH": {
-            "value": "4"
-          },
-          "C_GPIO_WIDTH": {
-            "value": "2"
-          },
-          "C_IS_DUAL": {
-            "value": "1"
-          }
-        }
-      },
-      "xlslice_0": {
-        "vlnv": "xilinx.com:ip:xlslice:1.0",
-        "ip_revision": "5",
-        "xci_name": "llm_system_xlslice_0_0",
-        "xci_path": "ip\\llm_system_xlslice_0_0\\llm_system_xlslice_0_0.xci",
-        "inst_hier_path": "xlslice_0",
-        "has_run_ip_tcl": "true",
-        "parameters": {
-          "DIN_WIDTH": {
-            "value": "2"
-          }
-        }
-      },
-      "xlslice_1": {
-        "vlnv": "xilinx.com:ip:xlslice:1.0",
-        "ip_revision": "5",
-        "xci_name": "llm_system_xlslice_1_0",
-        "xci_path": "ip\\llm_system_xlslice_1_0\\llm_system_xlslice_1_0.xci",
-        "inst_hier_path": "xlslice_1",
-        "has_run_ip_tcl": "true",
-        "parameters": {
-          "DIN_FROM": {
-            "value": "1"
-          },
-          "DIN_TO": {
-            "value": "1"
-          },
-          "DIN_WIDTH": {
-            "value": "2"
-          }
-        }
-      },
-      "axi_gpio_2": {
-        "vlnv": "xilinx.com:ip:axi_gpio:2.0",
-        "ip_revision": "37",
-        "xci_name": "llm_system_axi_gpio_2_0",
-        "xci_path": "ip\\llm_system_axi_gpio_2_0\\llm_system_axi_gpio_2_0.xci",
-        "inst_hier_path": "axi_gpio_2",
-        "has_run_ip_tcl": "true",
-        "parameters": {
-          "C_ALL_INPUTS": {
-            "value": "1"
-          },
-          "C_ALL_INPUTS_2": {
-            "value": "1"
-          },
-          "C_IS_DUAL": {
-            "value": "1"
           }
         }
       }
@@ -1509,10 +1489,10 @@
           "ddr4_0/C0_DDR4"
         ]
       },
-      "qmap_dot64_axi_smoke_0_M_AXI": {
+      "qmap_row1024_axi_smo_0_M_AXI": {
         "interface_ports": [
-          "axi_smc/S01_AXI",
-          "qmap_dot64_axi_smoke_0/M_AXI"
+          "qmap_row1024_axi_smo_0/M_AXI",
+          "axi_smc/S01_AXI"
         ]
       },
       "zynq_ultra_ps_e_0_M_AXI_HPM0_FPD": {
@@ -1558,21 +1538,21 @@
           "xlconcat_0/In2"
         ]
       },
-      "qmap_dot64_axi_smoke_0_o_partial_sum_low32": {
+      "qmap_row1024_axi_smo_0_o_expected_row_sum_q26_low32": {
         "ports": [
-          "qmap_dot64_axi_smoke_0/o_partial_sum_low32",
-          "axi_gpio_2/gpio_io_i"
-        ]
-      },
-      "qmap_dot64_axi_smoke_0_o_scaled_sum_q26_low32": {
-        "ports": [
-          "qmap_dot64_axi_smoke_0/o_scaled_sum_q26_low32",
+          "qmap_row1024_axi_smo_0/o_expected_row_sum_q26_low32",
           "axi_gpio_2/gpio2_io_i"
         ]
       },
-      "qmap_dot64_axi_smoke_0_o_status": {
+      "qmap_row1024_axi_smo_0_o_row_sum_q26_low32": {
         "ports": [
-          "qmap_dot64_axi_smoke_0/o_status",
+          "qmap_row1024_axi_smo_0/o_row_sum_q26_low32",
+          "axi_gpio_2/gpio_io_i"
+        ]
+      },
+      "qmap_row1024_axi_smo_0_o_status": {
+        "ports": [
+          "qmap_row1024_axi_smo_0/o_status",
           "axi_gpio_1/gpio2_io_i"
         ]
       },
@@ -1583,9 +1563,9 @@
           "axi_smc/aresetn",
           "axi_clock_converter_0/s_axi_aresetn",
           "axi_gpio_0/s_axi_aresetn",
-          "qmap_dot64_axi_smoke_0/aresetn",
           "axi_gpio_1/s_axi_aresetn",
-          "axi_gpio_2/s_axi_aresetn"
+          "axi_gpio_2/s_axi_aresetn",
+          "qmap_row1024_axi_smo_0/aresetn"
         ]
       },
       "rst_ps8_0_96M_peripheral_reset": {
@@ -1616,13 +1596,13 @@
       "xlslice_0_Dout": {
         "ports": [
           "xlslice_0/Dout",
-          "qmap_dot64_axi_smoke_0/i_start"
+          "qmap_row1024_axi_smo_0/i_start"
         ]
       },
       "xlslice_1_Dout": {
         "ports": [
           "xlslice_1/Dout",
-          "qmap_dot64_axi_smoke_0/i_clear"
+          "qmap_row1024_axi_smo_0/i_clear"
         ]
       },
       "zynq_ultra_ps_e_0_pl_clk0": {
@@ -1634,9 +1614,9 @@
           "rst_ps8_0_96M/slowest_sync_clk",
           "axi_clock_converter_0/s_axi_aclk",
           "axi_gpio_0/s_axi_aclk",
-          "qmap_dot64_axi_smoke_0/aclk",
           "axi_gpio_1/s_axi_aclk",
-          "axi_gpio_2/s_axi_aclk"
+          "axi_gpio_2/s_axi_aclk",
+          "qmap_row1024_axi_smo_0/aclk"
         ]
       },
       "zynq_ultra_ps_e_0_pl_resetn0": {
@@ -1682,33 +1662,29 @@
           }
         }
       },
-      "/qmap_dot64_axi_smoke_0": {
+      "/qmap_row1024_axi_smo_0": {
         "address_spaces": {
           "M_AXI": {
             "segments": {
               "SEG_axi_bram_ctrl_0_Mem0": {
                 "address_block": "/axi_bram_ctrl_0/S_AXI/Mem0",
-                "offset": "0x0000000000000000",
-                "range": "1",
-                "is_excluded": "TRUE"
+                "offset": "0x00000000A0000000",
+                "range": "8K"
               },
               "SEG_axi_gpio_0_Reg": {
                 "address_block": "/axi_gpio_0/S_AXI/Reg",
-                "offset": "0x0000000000000000",
-                "range": "1",
-                "is_excluded": "TRUE"
+                "offset": "0x00000000A0010000",
+                "range": "64K"
               },
               "SEG_axi_gpio_1_Reg": {
                 "address_block": "/axi_gpio_1/S_AXI/Reg",
                 "offset": "0x00000000A0020000",
-                "range": "64K",
-                "is_excluded": "TRUE"
+                "range": "64K"
               },
               "SEG_axi_gpio_2_Reg": {
                 "address_block": "/axi_gpio_2/S_AXI/Reg",
                 "offset": "0x00000000A0030000",
-                "range": "64K",
-                "is_excluded": "TRUE"
+                "range": "64K"
               },
               "SEG_ddr4_0_C0_DDR4_ADDRESS_BLOCK": {
                 "address_block": "/ddr4_0/C0_DDR4_MEMORY_MAP/C0_DDR4_ADDRESS_BLOCK",

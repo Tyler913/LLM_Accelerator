@@ -305,8 +305,9 @@ tensor 4:
 ```
 
 The row1024 smoke reader must not assume that one tensor fits in one AXI
-burst. With a 32-bit AXI data path, the 2048-byte activation payload requires
-two 1024-byte reads when using the current one-burst `axi4_read_master`.
+burst. With a 32-bit AXI data path, the bring-up RTL now fetches the payload in
+4-group batches so that the PL does not need to buffer the full 1024-wide row at
+once.
 
 Local validation:
 
@@ -321,7 +322,7 @@ Local validation:
 - RTL simulation result:
   `qmap_row1024_compute_path.sv` passed the QMAP-backed row1024 chain.
 - AXI simulation result:
-  `qmap_row1024_axi_smoke_top.sv` passed with 10 AXI read bursts, status
+  `qmap_row1024_axi_smoke_top.sv` passed with 18 AXI read bursts, status
   `0xA`, and row result `-3482169`.
 
 ## Scale-Up Path
