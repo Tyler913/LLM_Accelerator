@@ -279,9 +279,11 @@ Descriptor-based PL DDR4 tensor staging is documented in
 `Source/QMAP_FORMAT.md`.
 QMAP v1 is the intended bridge between generated Q4 artifacts, PS loaders, and
 future PL readers. It starts with the real Layer 0 `q_proj` row 0 group 0
-dot64 vector, has already scaled to a complete row1024 GEMV image, and should
-continue scaling by adding tensor descriptors and larger payloads rather than
-replacing the layout with one-off packets.
+dot64 vector and has already scaled to a complete row1024 GEMV image. The next
+QMAP direction is a formal inference contract, not another smoke-test packet:
+keep a persistent model manifest for loaded PL DDR4 tensors, then use runtime
+work packets to describe which tensors a PL kernel reads and which buffers it
+writes.
 
 Do not start with GGUF, GPTQ, AWQ, FP8, or Q4_K hardware parsing.
 
@@ -382,10 +384,22 @@ bring-up phase have both reached hardware checkpoints:
 3. The row1024 QMAP image can be loaded by PS, read by PL through AXI, and
    computed by the full-row Q4 GEMV RTL.
 
-The next durable hardware-facing direction is a small multi-row tile. Keep the
-same QMAP descriptor contract and scale from one `q_proj` row to a small group
-of consecutive rows before attempting a full projection, full layer, or full
-model path.
+The next durable hardware-facing direction is Layer 0 attention front-end
+integration:
+
+```text
+input_norm[1024]
+  -> q_proj/k_proj/v_proj Q4 GEMV
+  -> Q/K/V output buffers in PL DDR4
+  -> q_norm/k_norm, RoPE, KV-cache append, and attention
+```
+
+The important new capability is PL write-back. The existing row1024 hardware
+checkpoint proves the PL AXI read path and Q4 row GEMV datapath. The local
+QKV projection step now has a QMAP exporter, a descriptor-driven projection
+compute path, and an AXI write adapter passing Icarus simulation. The next
+hardware-facing task is to wrap that path into a Vivado AXI read/write top and
+prove Q/K/V output-buffer write-back from real PL DDR4.
 
 Keep the exact next action in `Source/CURRENT_STATE.md`; keep detailed address
 planning in `Source/FPGA_MEMORY_MAP.md`.

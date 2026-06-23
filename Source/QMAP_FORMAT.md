@@ -3,7 +3,8 @@
 Status: draft v1 descriptor format for PL DDR4 tensor staging and future
 full-model artifact layout. The dot64 image and the full row1024 image have
 both passed PS load/readback and PL AXI-master read/compute hardware smoke
-tests.
+tests. The first Layer 0 QKV projection work packet, local PL write-back path,
+and AXI write adapter now pass Icarus simulation.
 
 For Q4 quantization semantics, read `Source/Q4_FORMAT.md`. For physical PL
 DDR4 placement, read `Source/FPGA_MEMORY_MAP.md`.
@@ -21,9 +22,14 @@ payload data
 ```
 
 The first QMAP instances describe real Qwen3 Layer 0 `q_proj` data: first row
-0 group 0 as a dot64 vector, then row 0 as a complete row1024 GEMV. Later
-instances can describe a projection tile, all Layer 0 Q/K/V projections, or
-the full model by adding descriptors and increasing tensor shapes.
+0 group 0 as a dot64 vector, then row 0 as a complete row1024 GEMV. The
+long-term direction is not to keep making one-off test packets. QMAP should
+become the stable descriptor contract between:
+
+- persistent model artifacts stored once in PL DDR4
+- runtime work packets that tell PL which tensors to read and which buffers to
+  write for the current kernel or token step
+- optional debug/golden tensors used only during bring-up
 
 QMAP describes where data is and how to interpret it. It does not define the
 math for Q4 itself; that contract stays in `Source/Q4_FORMAT.md`.
@@ -70,6 +76,11 @@ Header size: 256 bytes.
 Bring-up images should reserve eight descriptor slots even if only a few are
 valid. This keeps the payload base stable and leaves room for adding an output
 or debug descriptor without changing the image shape.
+
+Formal runtime work packets should reserve more descriptor slots from the
+start. The first Layer 0 QKV projection packet should use at least 32
+descriptor slots, with the payload base moved after the larger descriptor
+table. A full persistent model manifest may use hundreds of descriptors.
 
 Recommended first image base:
 
@@ -132,6 +143,7 @@ descriptor_addr = descriptor_table_addr + tensor_slot * 128
 | `6` | `QMAP_ROLE_METADATA` | Extra metadata payload |
 | `7` | `QMAP_ROLE_KV_CACHE` | KV cache tensor |
 | `8` | `QMAP_ROLE_ROPE_TABLE` | RoPE cos/sin tensor |
+| `9` | `QMAP_ROLE_PARAMETER` | Small read-only model parameter such as RMSNorm gamma |
 
 ## Dtype Enum
 
@@ -151,6 +163,7 @@ descriptor_addr = descriptor_table_addr + tensor_slot * 128
 | `18` | `QMAP_DTYPE_I16_Q4_12` | Signed 16-bit fixed-point `Q4.12` |
 | `19` | `QMAP_DTYPE_I32_Q12_12` | Signed `Q12.12` value padded to 32 bits |
 | `20` | `QMAP_DTYPE_I32_Q14_10` | Signed `Q14.10` value padded to 32 bits |
+| `21` | `QMAP_DTYPE_U16_Q8_8` | Unsigned `UQ8.8` value for RMSNorm gamma |
 
 ## Tensor Flags
 
@@ -161,6 +174,23 @@ descriptor_addr = descriptor_table_addr + tensor_slot * 128
 | `2` | `QMAP_TENSOR_F_READ_ONLY` | PL should only read this tensor |
 | `3` | `QMAP_TENSOR_F_WRITE_ONLY` | PL is expected to write this tensor |
 | `4` | `QMAP_TENSOR_F_DEBUG_ONLY` | Debug/golden data, not needed for inference |
+
+## Descriptor Aux Convention
+
+The fixed descriptor fields should be enough for simple PL readers. The `aux`
+fields provide a small amount of role-specific metadata without changing the
+128-byte descriptor size:
+
+| Field | Default Meaning |
+| --- | --- |
+| `aux0` | matrix id or tensor-family id |
+| `aux1` | layer index |
+| `aux2` | row start, head index, or buffer index depending on role |
+| `aux3` | group start, column start, or position start depending on role |
+
+Do not make PL depend on descriptor slot number as the semantic meaning. Slot
+number is only a table index. Tensor identity comes from `tensor_id`, `role`,
+`aux`, and shape metadata.
 
 ## Matrix Ids
 
@@ -359,46 +389,184 @@ Hardware validation:
   returned `row_sum_q26_low32=0xFFCA_DDC7` and
   `expected_row_sum_q26_low32=0xFFCA_DDC7`, both representing `-3482169`.
 
-## Scale-Up Path
+## From Smoke Images to Inference Packets
 
-The dot64 instance scales without changing the QMAP structure:
+The dot64 and row1024 images proved the descriptor format and the PL AXI read
+path. The next step is to use the same descriptor idea for real inference data
+movement.
+
+QMAP now has two intended uses:
+
+1. Persistent model manifest
+2. Runtime work packet
+
+### Persistent Model Manifest
+
+The persistent model manifest describes tensors that are loaded once into PL
+DDR4 and reused across prompt prefill and decode:
+
+- Q4 packed weights and Q2.14 scales for embedding/LM-head, attention
+  projections, and MLP matrices
+- RMSNorm and q/k norm gamma vectors
+- optional RoPE cos/sin tables
+- fixed base addresses for KV cache, activation buffers, logits/argmax
+  scratch, and debug regions
+
+For the full Qwen3-0.6B model, the manifest will likely need hundreds of
+descriptors. That is acceptable because descriptor tables are fixed-size and
+small compared with model weights. The header `descriptor_capacity` should be
+chosen for the artifact, not kept at the bring-up value of eight.
+
+The persistent manifest should not be regenerated per token. PS loads it
+during model setup, and PL uses it as the address/shape reference for the
+runtime scheduler.
+
+### Runtime Work Packet
+
+A runtime work packet describes one PL task or a small sequence of PL tasks.
+It should not duplicate large model weights. It should point at already-loaded
+weight, scale, activation, KV-cache, and output-buffer regions using absolute
+PL DDR4 addresses in each descriptor.
+
+The first formal work packet is the Layer 0 QKV projection packet. It is the
+bridge from the proven Q4 row1024 GEMV path into the real model datapath:
 
 ```text
-dot64:
-  activation [64]
-  weight logical [1, 64]
-  scale [1, 1]
-
-row1024:
-  activation [1024]
-  weight logical [1, 1024], physical [1, 512 bytes]
-  scale [1, 16]
-
-q_proj tile:
-  activation [1024]
-  weight logical [tile_rows, 1024]
-  scale [tile_rows, 16]
-  output [tile_rows]
-
-full q_proj:
-  activation [1024]
-  weight logical [2048, 1024]
-  scale [2048, 16]
-  output [2048]
-
-full layer or full model:
-  add descriptors for q/k/v/o, MLP matrices, RMSNorm gamma, activations,
-  KV cache, RoPE table, outputs, and optional debug tensors
+input_norm[1024]
+  -> q_proj Q4 GEMV -> q_out[2048]
+  -> k_proj Q4 GEMV -> k_out[1024]
+  -> v_proj Q4 GEMV -> v_out[1024]
 ```
 
-The PL reader should therefore be designed around descriptors and tensor ids,
-not around a hard-coded 256-byte packet.
+The packet should use 32 descriptor slots initially:
+
+```text
+descriptor_capacity    = 32
+descriptor_table_addr  = qmap_base + 0x0100
+payload_base_addr      = qmap_base + 0x1100
+```
+
+Only small metadata or optional debug payloads need to live inside the packet
+image. Large tensors should live in the normal PL DDR4 weight, activation, or
+KV-cache regions and be referenced by descriptor `base_addr`.
+
+### Layer 0 QKV Projection Packet
+
+The first formal packet should describe these tensors:
+
+| Tensor Id | Role | Dtype | Shape | Flags | Notes |
+| ---: | --- | --- | --- | --- | --- |
+| `1` | metadata | `U32` | implementation-defined | read-only | layer index, selected token position, debug controls |
+| `2` | activation | `I32_Q12_12` | `[1024]` | read-only | Layer 0 normalized activation input |
+| `3` | Q4 weight | `PACKED_Q4_S4` | `[2048, 1024]` logical | read-only, packed-low-even | Layer 0 `q_proj`; row stride 512 bytes |
+| `4` | Q4 scale | `U16_Q2_14` | `[2048, 16]` | read-only | one scale per 64-column group for `q_proj` |
+| `5` | Q4 weight | `PACKED_Q4_S4` | `[1024, 1024]` logical | read-only, packed-low-even | Layer 0 `k_proj`; row stride 512 bytes |
+| `6` | Q4 scale | `U16_Q2_14` | `[1024, 16]` | read-only | one scale per 64-column group for `k_proj` |
+| `7` | Q4 weight | `PACKED_Q4_S4` | `[1024, 1024]` logical | read-only, packed-low-even | Layer 0 `v_proj`; row stride 512 bytes |
+| `8` | Q4 scale | `U16_Q2_14` | `[1024, 16]` | read-only | one scale per 64-column group for `v_proj` |
+| `9` | output | `I32_Q12_12` | `[2048]` | write-only | Q projection output buffer |
+| `10` | output | `I32_Q12_12` | `[1024]` | write-only | K projection output buffer |
+| `11` | output | `I32_Q12_12` | `[1024]` | write-only | V projection output buffer |
+| `12` | expected | implementation-defined | small spot-check tensor | read-only, debug-only | optional golden words or checksum for bring-up |
+
+Descriptor links:
+
+- tensor `3` uses `scale_tensor_id = 4`
+- tensor `5` uses `scale_tensor_id = 6`
+- tensor `7` uses `scale_tensor_id = 8`
+- output tensors are write-only and must not be used as expected/golden data
+- debug tensors must be marked `QMAP_TENSOR_F_DEBUG_ONLY`
+
+The PL QKV projection engine should treat Q, K, and V as the same operation
+over different descriptors. The matrix dimensions change, but the row GEMV
+contract stays:
+
+```text
+for each output row:
+  for each group of 64 input elements:
+    dot64(input_norm[group], packed_q4_weight[row, group])
+    scaled_sum += partial_sum * scale[row, group]
+  output[row] = convert_Q26_to_Q12_12(scaled_sum)
+  write output[row] to the descriptor-provided output buffer
+```
+
+This row loop is part of the real Q/K/V projection, not an additional smoke
+test. The critical new hardware capability is write-back through a PL AXI
+write path.
+
+Local validation:
+
+- Exporter:
+  `Qwen3-0.6B-Base/python_each_module/21_export_qmap_qkv_projection_image.py`.
+- Full packet:
+  `artifacts/test_vectors/qwen3_0p6b_qmap_v1/layer0_qkv_projection.qmap.bin`.
+- Full packet base: `0x4_0008_0000`.
+- Full packet size: `0x0022_B000`.
+- Full packet row coverage: `q_rows=2048`, `k_rows=1024`, `v_rows=1024`.
+- Full packet SHA256:
+  `97ce0445a9ba67879ce10093380f5287483550930e4fca2e8c2957ab9d3ea162`.
+- Python proof: Q/K/V Q26 recomputation from packed Q4 weights/scales matches
+  the source Q4 artifact exactly before Q26-to-I32_Q12.12 conversion.
+- Maximum Q12.12 quantization difference versus the Q4 float artifact:
+  Q `0.00024390220642089844`, K `0.00024396181106567383`,
+  V `0.00024393200874328613`.
+- Compact simulation packet:
+  `artifacts/test_vectors/qwen3_0p6b_qmap_v1/layer0_qkv_projection_sim.qmap.bin`.
+- Compact simulation packet size: `0x0000_4000`.
+- Compact simulation row coverage: `q_rows=4`, `k_rows=2`, `v_rows=2`.
+- Compact simulation packet SHA256:
+  `e50f4294bad3ff852ca18d52bf5013243ec74d5f5779093691bed16a59d09097`.
+- Simulation hex:
+  `FPGA_Project/sim/vectors/qmap_qkv_projection_image_words32.hex`.
+- Expected output hex:
+  `FPGA_Project/sim/vectors/qmap_qkv_projection_expected_words32.hex`.
+- RTL simulation result:
+  `qmap_qkv_projection_compute_path.sv` wrote all compact Q/K/V output words
+  and matched Python I32_Q12.12 expected values. The compact run used 33 read
+  requests, wrote 8 output rows, and reported no error.
+- AXI write adapter result:
+  `axi4_write_master.sv` passed a focused 4-beat aligned AXI4 write-burst
+  simulation with a valid B-channel response.
+
+The current exporter can emit self-contained images for simulation and local
+bring-up. In the later persistent-manifest flow, the same descriptors should
+point to already-loaded weight, scale, activation, and output-buffer regions
+instead of copying large model tensors into every runtime packet.
+
+## Full-Model Runtime Write-Back Policy
+
+For correctness-first inference, these runtime values should be writable in PL
+DDR4, even if later optimized versions keep some of them on chip:
+
+| Tensor Family | Shape | Suggested Dtype | Write Policy |
+| --- | --- | --- | --- |
+| hidden ping-pong buffers | `[1024]` | `I32_Q14_10` or `I32_Q12_12` by stage | write after embedding/layer output |
+| RMSNorm output | `[1024]` | `I32_Q12_12` | write for projection input and debug |
+| Q projection output | `[2048]` | `I32_Q12_12` | write for q_norm/RoPE input |
+| K projection output | `[1024]` | `I32_Q12_12` | write for k_norm/RoPE input |
+| V projection output | `[1024]` | `I32_Q12_12` | write for KV-cache append |
+| post-RoPE K cache | `[28, 8, T, 128]` | `I32_Q12_12` | append one position per layer/token |
+| V cache | `[28, 8, T, 128]` | `I32_Q12_12` | append one position per layer/token |
+| attention output before `o_proj` | `[2048]` | `I32_Q12_12` | write or stream depending on first RTL integration |
+| post-attention hidden | `[1024]` | `I32_Q14_10` or `I32_Q12_12` | write as residual result |
+| MLP gate/up/intermediate | `[3072]` | `I32_Q12_12` | write for correctness bring-up if not streamed |
+| layer output | `[1024]` | `I32_Q14_10` or `I32_Q12_12` | write to next layer input buffer |
+| logits/argmax scratch | tiled | implementation-defined | write final token id and optional debug logits |
+
+Do not require all of these tensors to be stored forever. The rule is that a
+formal packet must make every consumed or produced tensor explicit. Later RTL
+can replace DDR write-back with streaming or on-chip buffering only after the
+descriptor-level contract is clear.
+
+The PL reader and scheduler should therefore be designed around descriptors and
+tensor ids, not around a hard-coded 256-byte packet.
 
 ## Open Decisions
 
 - Exact checksum algorithm for `checksum32`.
 - Whether full-model QMAP images store absolute physical addresses only, or
   store relative offsets plus a runtime base address.
-- Final descriptor set for full Q4 model artifacts.
+- Final descriptor count/capacity for the persistent full-model manifest.
+- Exact tensor ids for the persistent full-model manifest.
 - Whether a future DMA loader should preserve the same physical QMAP image
   layout or translate it while copying into PL DDR4.

@@ -50,6 +50,7 @@ conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/14_verify_q4_gem
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/16_profile_rmsnorm_ranges.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/19_export_qmap_dot64_image.py --c-header FPGA_Project/software/qmap_load_smoke/qmap_dot64_image.h
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/20_export_qmap_row1024_image.py --c-header FPGA_Project/software/qmap_row1024_pl_compute_smoke/qmap_row1024_image.h
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/21_export_qmap_qkv_projection_image.py
 ```
 
 Stable reference prompt:
@@ -93,6 +94,8 @@ The current hand-written RTL bring-up stack includes:
   - `qmap_row1024_payload_fetcher.sv`
   - `qmap_row1024_compute_path.sv`
   - `axi4_read_master.sv`
+  - `axi4_write_master.sv`
+  - `qmap_qkv_projection_compute_path.sv`
   - `qmap_dot64_axi_smoke_top.sv`
   - `qmap_dot64_axi_smoke_bd.v`
   - `qmap_row1024_axi_smoke_top.sv`
@@ -179,6 +182,25 @@ Latest local RTL/software validation state:
   4096-byte QMAP image to `0x4_1B20_0000`, readback and header checks pass,
   PL reports status `0xA`, and both result GPIO channels return
   `0xFFCA_DDC7` / `-3482169`.
+- `21_export_qmap_qkv_projection_image.py` exports the first Layer 0 QKV
+  projection work-packet image with 12 active descriptors in a 32-slot QMAP
+  table. The full generated packet covers `q_proj[2048]`, `k_proj[1024]`,
+  and `v_proj[1024]` at `0x4_0008_0000`; Python recomputes Q/K/V Q26 from the
+  packed Q4 weights/scales and matches the Q4 artifact with zero recompute
+  diff before converting outputs to I32_Q12.12 words.
+- The compact QKV simulation packet uses the same descriptor contract with
+  `q_rows=4`, `k_rows=2`, and `v_rows=2` so Icarus can complete quickly while
+  still exercising descriptor-driven Q/K/V reads and output-buffer writes.
+- `qmap_qkv_projection_compute_path.sv` passes RTL simulation against
+  `qmap_qkv_projection_image_words32.hex` and
+  `qmap_qkv_projection_expected_words32.hex`. It reads the QMAP descriptors,
+  loads the I32_Q12.12 activation vector, loops through Q/K/V rows using
+  `q4_gemv_row_1024.sv`, converts Q26 sums to I32_Q12.12, writes Q/K/V output
+  buffers, and matches all Python expected output words. The compact run wrote
+  8 rows through the local write interface with no error.
+- `axi4_write_master.sv` passes a focused RTL smoke simulation for one aligned
+  4-beat AXI4 write burst and B-channel response. This is the first write-side
+  adapter from the project-local write stream toward Vivado AXI integration.
 - RTL source files now use explicit `input wire logic` ports. This keeps
   `default_nettype none` enabled while satisfying Vivado 2025.1 synthesis,
   which rejects plain `input logic` as an implicit net in this flow.
@@ -352,12 +374,19 @@ Previous useful checkpoint:
 - PL DDR4 is accessible from PS. The PL QMAP descriptor reader, payload
   fetcher, Q4 dot64 compute chain, row1024 compute chain, and read-only AXI4
   adapter are now wrapped for Vivado, integrated into block designs, and have
-  passed board validation against real PL DDR4.
+  passed board validation against real PL DDR4. The new QKV projection compute
+  path and AXI write adapter currently have local Icarus evidence but have not
+  yet been wrapped into a Vivado-facing AXI read/write top or run on hardware.
 - QMAP v1 now defines the first descriptor-based PL DDR4 staging contract. The
   dot64 image exporter and standalone PS loader/readback app have passed on
   hardware. The first PL descriptor reader, payload fetcher, and Q4 dot64
   compute hookup are now wrapped in a synthesizable dot64 smoke controller.
   This wrapper is a bring-up micro-kernel, not the final full-model scheduler.
+- `Source/QMAP_FORMAT.md` now defines the next formal inference direction:
+  persistent model manifests for tensors loaded once into PL DDR4, plus
+  runtime work packets for each PL kernel step. The first formal work packet is
+  Layer 0 Q/K/V projection with descriptor-provided input, weight/scale, and
+  output-buffer addresses.
 - The full-model memory-map layout for Q4 artifacts, KV cache, activation
   buffers, RoPE tables, and debug regions is still draft.
 - RMSNorm, GEMV, RoPE, and KV address RTL blocks are validated in focused
@@ -368,6 +397,10 @@ Previous useful checkpoint:
   pending in RTL.
 - Cache coherency, bulk transfer strategy, and any future DMA policy are still
   open. The current proven path is direct PS memory-mapped 32-bit access.
+- The isolated Q4 GEMV smoke-test phase is considered complete enough after the
+  QMAP dot64 and row1024 PL-master board passes. Do not spend the next project
+  step on an extra row-loop or small multi-row tile smoke test unless a future
+  integration issue makes that specific debug slice necessary.
 - A first Vivado bring-up attempt for row1024 showed LUT over-utilization with
   the earlier full-row payload buffering. The current row1024 RTL is
   resource-reduced for bring-up by fetching and computing 4 groups at a time,
@@ -376,19 +409,22 @@ Previous useful checkpoint:
 
 ## Immediate Next Step
 
-Scale from one row1024 result to a small multi-row tile.
+Promote the locally passing QKV projection path into the next hardware-facing
+integration.
 
 Recommended next slice:
 
-1. Keep the passing row1024 hardware design as the board smoke baseline.
-2. Export a small QMAP tile image for consecutive `q_proj` rows, for example
-   4 or 8 rows, using the same activation vector and per-row Q4 weights/scales.
-3. Extend the RTL path so it loops over row descriptors or row offsets and
-   accumulates one `row_sum_q26` result per row.
-4. Validate the tile in simulation first, then rebuild the Vivado smoke top and
-   run a board smoke app that checks all tile result words.
-5. Only after the small tile passes, scale toward a larger `q_proj` block and
-   then a fuller attention/MLP datapath.
+1. Keep the passing row1024 board design as the regression baseline.
+2. Build a Vivado-facing QKV AXI top that connects
+   `qmap_qkv_projection_compute_path.sv` to `axi4_read_master.sv` and
+   `axi4_write_master.sv`, with temporary PS-visible control/status/result
+   registers similar to the row1024 smoke top.
+3. Add a small PS loader/readback app for the compact QKV packet first, then
+   move to the full `q_proj/k_proj/v_proj` packet once the AXI write-back path
+   is stable.
+4. After Q/K/V projection write-back passes hardware, continue the real token
+   path: Q/K norm, RoPE, KV-cache write, attention score/value path, MLP,
+   final LM-head scan, and greedy argmax.
 
 ## Practical Notes
 

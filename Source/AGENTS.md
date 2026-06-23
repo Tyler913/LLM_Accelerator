@@ -36,6 +36,10 @@ Project workflow notes:
 - Update `Source/PROJECT_CONTEXT.md` when the new information is durable project
   context rather than just current progress. Update `Source/AGENTS.md` only
   when the workflow rules themselves change.
+- Treat the QMAP dot64 and row1024 PL-master board passes as sufficient to
+  close the isolated Q4 GEMV smoke-test phase. Do not propose additional
+  row-loop or small multi-row smoke-test detours as the default next step unless
+  they are needed to debug a specific integration blocker.
 - Do not paste long chat transcripts into project docs. Summarize the finding,
   evidence, command, result, and next action in a form future work can reuse.
 - Write repository code, code comments, docstrings, script output labels, and

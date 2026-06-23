@@ -1,8 +1,8 @@
 # FPGA Memory Map
 
 Status: working draft, updated through the QMAP row1024 PL AXI master
-bitstream, clean short-path Vitis workspace recreation, and hardware smoke pass
-on 2026-06-23
+hardware smoke pass and the local Layer 0 QKV projection packet/write-back
+simulation evidence on 2026-06-23
 
 This document defines the first FPGA-visible memory layout for the Qwen3
 0.6B accelerator bring-up. It distinguishes hardware-proven base apertures
@@ -308,13 +308,13 @@ PL_DDR4_HIGH = 0x4_1FFF_FFFF
 
 | Region | Base | Size | Owner | Contents | Status |
 | --- | ---: | ---: | --- | --- | --- |
-| Header / memory-map metadata | `0x4_0000_0000` | 1 MiB | PS/PL | QMAP headers, descriptor tables, version/checksum metadata | draft |
+| Header / memory-map metadata | `0x4_0000_0000` | 1 MiB | PS/PL | QMAP model manifest, runtime work packets, descriptor tables, version/checksum metadata | draft |
 | Weight region | `0x4_0010_0000` | 320 MiB | PS load, PL read | required Q4 weights and scales | draft |
 | KV cache region | `0x4_1410_0000` | 32 MiB | PL read/write | per-layer K/V cache, context 256 first | draft |
-| Activation buffers | `0x4_1610_0000` | 64 MiB | PL read/write | hidden, normed, q/k/v, attention, MLP scratch, debug snapshots | draft |
+| Activation buffers | `0x4_1610_0000` | 64 MiB | PL read/write | one-token hidden, normed, Q/K/V, attention, MLP scratch, debug snapshots | draft |
 | RoPE table | `0x4_1A10_0000` | 8 MiB | PS load or PL read | cos/sin table if precomputed | draft |
 | Logits / argmax scratch | `0x4_1A90_0000` | 8 MiB | PL write, PS read | LM-head tile output and final token id | draft |
-| Test-vector staging | `0x4_1B10_0000` | 32 MiB | PS load, PL read/write | QMAP v1 test images and optional RTL bring-up data | dot64 and row1024 QMAP images passed PS load/readback and PL master read/compute |
+| Test-vector staging | `0x4_1B10_0000` | 32 MiB | PS load, PL read/write | QMAP smoke images, optional exported vectors, and debug staging | dot64 and row1024 QMAP images passed PS load/readback and PL master read/compute |
 | Reserved | `0x4_1D10_0000` | 47 MiB | PS/PL | expansion room within nominal 512 MiB | draft |
 
 Draft relative coverage:
@@ -383,6 +383,36 @@ Second descriptor-based staging image:
   the row1024 PL compute path, observes PL status `0xA`, and reads back
   `row_sum_q26_low32=0xFFCA_DDC7` plus
   `expected_row_sum_q26_low32=0xFFCA_DDC7`, both representing `-3482169`.
+
+Formal QMAP inference layout draft:
+
+- Persistent model manifest base: `0x4_0000_0000`
+- Runtime work-packet base: `0x4_0008_0000`
+- Bring-up smoke images remain in the test-vector staging region.
+- The manifest describes tensors loaded once into weight, KV-cache,
+  activation, RoPE, and logits regions.
+- Runtime work packets describe the specific tensors consumed and produced by
+  one PL kernel step. The first formal packet is Layer 0 QKV projection.
+- Work packets should point to persistent tensor regions by descriptor
+  `base_addr`; they should not duplicate large Q4 weights inside each packet.
+- The current `21_export_qmap_qkv_projection_image.py` exporter can emit a
+  self-contained packet for simulation and bring-up. The full generated packet
+  uses the runtime work-packet base `0x4_0008_0000`, 12 active descriptors,
+  32 descriptor slots, and covers full Layer 0 Q/K/V row counts.
+
+The first Layer 0 QKV projection packet should reserve 32 descriptor slots and
+describe:
+
+```text
+input_norm[1024] read from activation buffers
+q_proj weight/scale read from weight region
+k_proj weight/scale read from weight region
+v_proj weight/scale read from weight region
+q_out[2048] written to activation buffers
+k_out[1024] written to activation buffers
+v_out[1024] written to activation buffers
+optional debug spot-check tensor
+```
 
 ## Capacity Budget Worksheet
 
@@ -551,32 +581,40 @@ cache element format before storage.
 
 ## Activation Buffers
 
-Logical first-version one-token buffers:
+Logical first-version one-token buffers. These are the tensors that make the
+model path reusable across RTL blocks. Exact byte offsets inside the activation
+region can be fixed when the first QKV projection exporter is written.
 
 | Buffer | Shape | Format | Location | Reuse Rule | Status |
 | --- | --- | --- | --- | --- | --- |
-| hidden_in | `[1024]` | TODO | PL DDR4 or on-chip | input to layer | TODO |
-| input_norm | `[1024]` | TODO | TODO | RMSNorm output, GEMV input | TODO |
-| q_flat | `[2048]` | TODO | TODO | Q projection output | TODO |
-| k_flat | `[1024]` | TODO | TODO | K projection output | TODO |
-| v_flat | `[1024]` | TODO | TODO | V projection output | TODO |
-| q_rope | `[16, 128]` | TODO | TODO | attention input | TODO |
-| k_rope | `[8, 128]` | TODO | TODO | cache append | TODO |
-| v_state | `[8, 128]` | TODO | TODO | cache append | TODO |
-| attn_out | `[2048]` | TODO | TODO | o_proj input | TODO |
-| layer_hidden | `[1024]` | TODO | TODO | residual result | TODO |
-| post_norm | `[1024]` | TODO | TODO | MLP input | TODO |
-| gate | `[3072]` | TODO | TODO | MLP intermediate | TODO |
-| up | `[3072]` | TODO | TODO | MLP intermediate | TODO |
-| mlp_hidden | `[3072]` | TODO | TODO | silu(gate) * up | TODO |
-| logits_tile | TODO | TODO | TODO | LM-head tile scan | TODO |
+| hidden_a | `[1024]` | `I32_Q14_10` or stage-specific `I32_Q12_12` | activation region | ping-pong layer input/output | draft |
+| hidden_b | `[1024]` | `I32_Q14_10` or stage-specific `I32_Q12_12` | activation region | ping-pong layer input/output | draft |
+| input_norm | `[1024]` | `I32_Q12_12` | activation region | RMSNorm output, Q/K/V GEMV input | next packet input |
+| q_flat | `[2048]` | `I32_Q12_12` | activation region | Q projection output, q_norm input | next packet output |
+| k_flat | `[1024]` | `I32_Q12_12` | activation region | K projection output, k_norm input | next packet output |
+| v_flat | `[1024]` | `I32_Q12_12` | activation region | V projection output, V-cache append source | next packet output |
+| q_normed | `[16, 128]` | `I32_Q12_12` | activation region or on-chip | RoPE input | draft |
+| k_normed | `[8, 128]` | `I32_Q12_12` | activation region or on-chip | RoPE input | draft |
+| q_rope | `[16, 128]` | `I32_Q12_12` | activation region or on-chip | attention input | draft |
+| k_rope | `[8, 128]` | `I32_Q12_12` | activation region or direct cache write | K-cache append source | draft |
+| v_state | `[8, 128]` | `I32_Q12_12` | activation region or direct cache write | V-cache append source | draft |
+| attn_out | `[2048]` | `I32_Q12_12` | activation region | `o_proj` input | draft |
+| o_proj_out | `[1024]` | `I32_Q12_12` | activation region | attention residual add input | draft |
+| post_attn_hidden | `[1024]` | `I32_Q14_10` or `I32_Q12_12` | activation region | post-attention residual result | draft |
+| post_norm | `[1024]` | `I32_Q12_12` | activation region | MLP input | draft |
+| gate | `[3072]` | `I32_Q12_12` | activation region or streamed | MLP intermediate | draft |
+| up | `[3072]` | `I32_Q12_12` | activation region or streamed | MLP intermediate | draft |
+| mlp_hidden | `[3072]` | `I32_Q12_12` | activation region or streamed | `silu(gate) * up` | draft |
+| layer_out | `[1024]` | `I32_Q14_10` or `I32_Q12_12` | activation region | next layer input | draft |
+| logits_tile | tile-dependent | implementation-defined | logits/argmax region | LM-head tile scan | draft |
+| output_token | `[1]` | `U32` | logits/argmax region or control register | greedy argmax result | draft |
 
 Open decisions:
 
-- Which buffers must stay on-chip for performance?
-- Which buffers can live in PL DDR4 for first correctness bring-up?
-- Use ping-pong hidden buffers between layers?
-- Debug capture points:
+- Which buffers must stay on-chip for performance after correctness is proven?
+- Which debug snapshots should be kept in PL DDR4 for board bring-up?
+- Exact activation-region byte offsets and alignment:
+- Exact conversion policy between residual formats and Q/K/V `I32_Q12_12`:
 
 ## RoPE Table
 
@@ -723,16 +761,28 @@ Bring-up order:
    into the full-row Q4 GEMV path.
    - status: passed on hardware with PL status `0xA` and result GPIO values
      `0xFFCA_DDC7` / `0xFFCA_DDC7`, representing `-3482169`.
-7. Extend row1024 to a small multi-row tile, then validate simulation and board
-   result words before scaling toward a larger `q_proj` block.
-8. RMSNorm RTL block reads `input_hidden`, `norm_weight`, and `eps`; compare
+7. Define and export the first formal Layer 0 QKV projection QMAP work packet.
+   It should reference persistent Q/K/V Q4 weights/scales, read
+   `input_norm[1024]`, and write Q/K/V output buffers in PL DDR4.
+   - status: passed locally in Python exporter. The full packet covers
+     Q/K/V rows `2048/1024/1024`; the compact simulation packet covers
+     `4/2/2` rows with the same descriptor contract.
+8. Add PL AXI write-back support so Q/K/V projection results can become inputs
+   to q_norm/k_norm, RoPE, KV-cache append, and attention.
+   - status: local RTL passed. `qmap_qkv_projection_compute_path.sv` writes
+     Q/K/V output buffers through the project-local write stream and matches
+     Python I32_Q12.12 expected words; `axi4_write_master.sv` passes a focused
+     AXI4 write-burst simulation.
+9. Wrap the QKV projection path into a Vivado-facing AXI read/write top and
+   prove compact QKV packet write-back from real PL DDR4 on hardware.
+10. RMSNorm RTL block reads `input_hidden`, `norm_weight`, and `eps`; compare
    with `expected_output`.
-9. Q4 GEMV RTL block starts from the 64-value dot-product smoke vector in
+11. Q4 GEMV RTL block starts from the 64-value dot-product smoke vector in
    `qwen3_0p6b_q4_v0/q_proj_row0_group0_dot64.npz`, then expands to full
    Layer 0 Q/K/V using `qkv_layer0_last_token_q4.npz`.
-10. Extend vectors and memory regions for RoPE, KV cache, attention, MLP, and
+12. Extend vectors and memory regions for RoPE, KV cache, attention, MLP, and
    complete Layer 0.
-11. Use FP32 vectors as golden references, but design GEMV/weight-storage RTL
+13. Use FP32 vectors as golden references, but design GEMV/weight-storage RTL
    around the required Q4 path from the start. The current Q4 v0 artifact is
    the first packed-weight contract; extend it before scaling beyond Layer 0
    Q/K/V.
@@ -747,6 +797,9 @@ Pass/fail fields to record:
 | QMAP dot64 load/readback | `q_proj_row0_group0_dot64.qmap.bin` at `0x4_1B10_0000` | exact 1536-byte readback | exact header/descriptor/payload spot checks | passed |
 | QMAP dot64 PL master compute | `q_proj_row0_group0_dot64.qmap.bin` at `0x4_1B10_0000` | exact PL status `0xA` | exact GPIO results `0x60AF` / `0x2E1366` | passed |
 | QMAP row1024 PL master compute | `q_proj_row0_row1024.qmap.bin` at `0x4_1B20_0000` | exact PL status `0xA` | exact GPIO results `0xFFCA_DDC7` / `0xFFCA_DDC7` | passed |
+| QMAP Layer 0 QKV packet export | `layer0_qkv_projection.qmap.bin` at `0x4_0008_0000` | Q/K/V Q26 recompute diff `0.0` | full row coverage `2048/1024/1024` | passed locally |
+| QMAP QKV projection RTL write-back | compact packet `q_rows=4`, `k_rows=2`, `v_rows=2` | exact I32_Q12.12 output word match | 8 writes, 33 read requests, no error | passed in Icarus |
+| AXI4 write master | one aligned 4-beat write burst | exact AW/W/B behavior | no error | passed in Icarus |
 | RMSNorm | `rmsnorm_layer0_last_token.npz` | TODO | TODO | TODO |
 | Q4 Q GEMV | `qwen3_0p6b_q4_v0/qkv_layer0_last_token_q4.npz` | 0.22418976 | 0.01856172 | passed in Python verifier |
 | Q4 K GEMV | `qwen3_0p6b_q4_v0/qkv_layer0_last_token_q4.npz` | 0.12317824 | 0.01752916 | passed in Python verifier |
@@ -775,3 +828,5 @@ Pass/fail fields to record:
 | 2026-06-11 | Prepare QMAP dot64 PL AXI master board smoke | Adds temporary control/status GPIO at `0xA002_0000`, result GPIO at `0xA003_0000`, generated/exported `llm_system_qmap_dot64_pl_master.xsa`, and prepared `qmap_pl_compute_smoke_app` to load QMAP, start PL compute, and check status/result |
 | 2026-06-11 | Prove QMAP dot64 PL AXI master hardware path | `qmap_pl_compute_smoke_app` passes on board: DDR4 status `0x5`, QMAP readback passes for 1536 bytes, PL status `0xA`, partial sum `0x60AF`, scaled sum `0x2E1366` |
 | 2026-06-23 | Prove QMAP row1024 PL AXI master hardware path | `qmap_row1024_pl_compute_smoke_app` passes on board from short Vitis workspace `F:\vws`: DDR4 status `0x5`, QMAP readback passes for 4096 bytes, header checks pass, PL status `0xA`, and both row result words are `0xFFCA_DDC7` / `-3482169` |
+| 2026-06-23 | Define formal QMAP inference-packet direction | Moves the next hardware-facing plan from extra GEMV smoke images to persistent model manifests, runtime work packets, Layer 0 QKV projection descriptors, and PL write-back into activation buffers |
+| 2026-06-23 | Add local QMAP QKV projection write-back path | Adds `21_export_qmap_qkv_projection_image.py`, `qmap_qkv_projection_compute_path.sv`, and `axi4_write_master.sv`; Python export and Icarus simulations pass against compact Q/K/V expected output words |

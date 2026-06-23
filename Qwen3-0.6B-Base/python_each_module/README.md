@@ -43,5 +43,10 @@ Script map:
   `rope_qk_layer_128` RTL testbench
 - `19_export_qmap_dot64_image.py`: exports the first QMAP v1 binary PL DDR4
   staging image and optional C header from the Q4 dot64 vector
+- `20_export_qmap_row1024_image.py`: exports the QMAP v1 row1024 Layer 0
+  `q_proj` row 0 image used by the row GEMV RTL and board smoke path
+- `21_export_qmap_qkv_projection_image.py`: exports the first Layer 0 QKV
+  projection QMAP work-packet image, plus Python Q12.12 expected words for
+  RTL write-back comparison
 - `run_all_module_validations.py`: runs the core validation scripts `01`-`10`
   in order
