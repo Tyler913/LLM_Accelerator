@@ -45,6 +45,9 @@ Project workflow notes:
 - Keep large model weights and generated FPGA/model artifacts out of normal Git
   history. Use `init/CROSS_PLATFORM_SYNC.md` and `init/` scripts to restore
   assets on new machines.
+- On Windows, prefer a short Vitis workspace path such as `F:\vws` and short
+  Vitis component names. Long workspace paths can make Vitis/CMake/Ninja fail
+  generated BSP builds when opening `.obj.d` dependency files.
 - Keep the local Git safety hook installed with
   `init/install_git_safety_hooks.sh` when possible; it blocks accidental
   commits of model weights and generated large artifacts.

@@ -204,6 +204,11 @@ Latest results against FP32 expected Q/K/V outputs:
 The verifier also confirms exact reconstruction from packed bytes and scales,
 including the `q_proj` row 0 group 0 dot64 smoke vector.
 
+Board-level Q4/QMAP bring-up has now passed both the dot64 smoke path and the
+row1024 full-row smoke path. The row1024 board run reported PL status `0xA`
+and `row_sum_q26_low32=0xFFCA_DDC7`, matching the expected `-3482169` row
+result.
+
 ## Known Tradeoffs
 
 - This is not a language-quality measurement. It validates the first hardware

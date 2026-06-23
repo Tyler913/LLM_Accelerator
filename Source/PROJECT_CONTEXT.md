@@ -172,6 +172,13 @@ Current user-reported FPGA target:
 - QMAP dot64 PS load/readback passed on 2026-06-07. The app wrote the
   1536-byte first QMAP image to `0x4_1B10_0000`, read it back exactly, and
   checked the QMAP header, four descriptors, and selected payload values.
+- QMAP dot64 PL AXI-master compute passed on hardware on 2026-06-11. The PL
+  read the QMAP image from real PL DDR4 through AXI and returned status `0xA`,
+  partial sum `0x60AF`, and scaled Q26 result `0x2E1366`.
+- QMAP row1024 PL AXI-master compute passed on hardware on 2026-06-23. The PS
+  loaded the 4096-byte row1024 image at `0x4_1B20_0000`, read it back exactly,
+  validated the header, started the PL row compute path, and read back status
+  `0xA` plus `row_sum_q26_low32=0xFFCA_DDC7`, representing `-3482169`.
 - PS DDR capacity check: the schematic uses four x16 DDR4 devices across
   `PS_DDR4_DQ[63:0]`; with the same 4Gb-class devices this gives 16Gb total,
   matching the 2 GB PS DDR target.
@@ -272,8 +279,9 @@ Descriptor-based PL DDR4 tensor staging is documented in
 `Source/QMAP_FORMAT.md`.
 QMAP v1 is the intended bridge between generated Q4 artifacts, PS loaders, and
 future PL readers. It starts with the real Layer 0 `q_proj` row 0 group 0
-dot64 vector, then scales by adding tensor descriptors and larger payloads
-rather than replacing the layout with one-off packets.
+dot64 vector, has already scaled to a complete row1024 GEMV image, and should
+continue scaling by adding tensor descriptors and larger payloads rather than
+replacing the layout with one-off packets.
 
 Do not start with GGUF, GPTQ, AWQ, FP8, or Q4_K hardware parsing.
 
@@ -365,23 +373,19 @@ and Q2.14 scales, the default 24-bit path derives:
 
 ## Immediate Technical Direction
 
-The PS-to-PL memory bring-up phase has reached its first hardware checkpoint:
-AXI BRAM, DDR4 status GPIO, and PL DDR4 are all reachable from PS in the
-current standalone smoke app.
+The PS-to-PL memory bring-up phase and the first PL AXI-master QMAP compute
+bring-up phase have both reached hardware checkpoints:
 
-The proven PL DDR4 aperture now has a small QMAP-backed accelerator data
-contract:
+1. AXI BRAM, DDR4 status GPIO, and PL DDR4 are reachable from PS.
+2. The dot64 QMAP image can be loaded by PS, read by PL through AXI, and
+   computed by the Q4 dot-product RTL.
+3. The row1024 QMAP image can be loaded by PS, read by PL through AXI, and
+   computed by the full-row Q4 GEMV RTL.
 
-1. Generate and verify the first QMAP v1 image from the Q4 dot64 vector.
-2. Write/read that QMAP image from a standalone PS app using 64-bit `UINTPTR`
-   addresses at `0x4_1B10_0000`.
-3. Use the same descriptor contract as the first source/sink for a
-   hand-written PL RTL reader or data-movement block.
-4. Then connect the existing RTL compute blocks to memory-backed test data in
-   small steps.
-
-The first two steps are complete. The next durable hardware-facing task is a
-narrow PL-side QMAP descriptor reader.
+The next durable hardware-facing direction is a small multi-row tile. Keep the
+same QMAP descriptor contract and scale from one `q_proj` row to a small group
+of consecutive rows before attempting a full projection, full layer, or full
+model path.
 
 Keep the exact next action in `Source/CURRENT_STATE.md`; keep detailed address
 planning in `Source/FPGA_MEMORY_MAP.md`.

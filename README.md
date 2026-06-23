@@ -2,6 +2,11 @@
 
 FPGA-based LLM accelerator project inspired by Hummingbird+.
 
+Latest hardware checkpoint: the QMAP row1024 PL AXI-master smoke path passed
+on board on 2026-06-23. Start with
+[Source/CURRENT_STATE.md](Source/CURRENT_STATE.md) for the current handoff and
+next step.
+
 Start here for persistent project context:
 
 - [Source/PROJECT_CONTEXT.md](Source/PROJECT_CONTEXT.md)

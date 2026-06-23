@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-06-11
+Last updated: 2026-06-23
 
 This file is the concise working-state handoff. For durable project context,
 read `Source/PROJECT_CONTEXT.md` first. For detailed address planning, read
@@ -49,6 +49,7 @@ conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/run_all_module_v
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/14_verify_q4_gemv_vectors.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/16_profile_rmsnorm_ranges.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/19_export_qmap_dot64_image.py --c-header FPGA_Project/software/qmap_load_smoke/qmap_dot64_image.h
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/20_export_qmap_row1024_image.py --c-header FPGA_Project/software/qmap_row1024_pl_compute_smoke/qmap_row1024_image.h
 ```
 
 Stable reference prompt:
@@ -89,9 +90,13 @@ The current hand-written RTL bring-up stack includes:
   - `qmap_dot64_reader.sv`
   - `qmap_dot64_payload_fetcher.sv`
   - `qmap_dot64_compute_path.sv`
+  - `qmap_row1024_payload_fetcher.sv`
+  - `qmap_row1024_compute_path.sv`
   - `axi4_read_master.sv`
   - `qmap_dot64_axi_smoke_top.sv`
   - `qmap_dot64_axi_smoke_bd.v`
+  - `qmap_row1024_axi_smoke_top.sv`
+  - `qmap_row1024_axi_smoke_bd.v`
 
 Current fixed-point direction:
 
@@ -166,9 +171,14 @@ Latest local RTL/software validation state:
   `qmap_row1024_image_words32.hex`. It reads QMAP descriptors, fetches the
   row payloads in 4-group batches, runs `q4_gemv_row_1024.sv`, and matches the
   expected row sum.
-- `qmap_row1024_axi_smoke_top.sv` and `qmap_row1024_axi_smoke_bd.v` are ready
-  as the next Vivado-facing smoke top. The AXI simulation passes with 18 read
+- `qmap_row1024_payload_fetcher.sv`, `qmap_row1024_compute_path.sv`,
+  `qmap_row1024_axi_smoke_top.sv`, and `qmap_row1024_axi_smoke_bd.v` now form
+  the Vivado-facing row1024 smoke path. The AXI simulation passes with 18 read
   bursts, status `0xA`, and row result `-3482169`.
+- The row1024 PL master smoke path has passed on hardware. PS writes the
+  4096-byte QMAP image to `0x4_1B20_0000`, readback and header checks pass,
+  PL reports status `0xA`, and both result GPIO channels return
+  `0xFFCA_DDC7` / `-3482169`.
 - RTL source files now use explicit `input wire logic` ports. This keeps
   `default_nettype none` enabled while satisfying Vivado 2025.1 synthesis,
   which rejects plain `input logic` as an implicit net in this flow.
@@ -176,21 +186,26 @@ Latest local RTL/software validation state:
 ## Hardware Bring-Up Status
 
 PS-to-PL DDR4 access is complete as a hardware checkpoint. The first
-PL-initiated QMAP dot64 read/compute smoke design has also been integrated into
-the Vivado block design, synthesized, implemented, bitstream-generated, and
-exported for Vitis, and passed on hardware.
+PL-initiated QMAP dot64 read/compute smoke design passed on hardware, and the
+row1024 QMAP read/compute smoke design has now also been integrated into the
+Vivado block design, synthesized, implemented, bitstream-generated, exported
+for Vitis, and passed on hardware.
 
 Current Vivado/Vitis artifacts:
 
 - Vivado project: `FPGA_Project/Vivado_Project/LLM_FPGA.xpr`
 - Current exported hardware handoff:
-  `FPGA_Project/Vivado_Project/llm_system_qmap_dot64_pl_master.xsa`
+  `FPGA_Project/Vivado_Project/llm_system_qmap_row1024_pl_master.xsa`
 - Current generated bitstream:
   `FPGA_Project/Vivado_Project/LLM_FPGA.runs/impl_1/llm_system_wrapper.bit`
-- Current Vitis platform:
-  `Vitis_Workspace/llm_qmap_dot64_pl_master_platform/`
-- Current Vitis PL compute smoke app:
-  `Vitis_Workspace/qmap_pl_compute_smoke_app/`
+- Current short-path Vitis workspace:
+  `F:\vws`
+- Current Vitis row1024 platform:
+  `F:\vws\p_r1024\`
+- Current Vitis row1024 PL compute smoke app:
+  `F:\vws\a_r1024\`
+- Current Vitis DDR4 smoke baseline in the same clean workspace:
+  `F:\vws\p_ddr4\` and `F:\vws\a_ddr4\`
 - Previous proven PS-to-PL DDR4 platform:
   `Vitis_Workspace/llm_pl_ddr4_aux_reset_fix_platform/`
 - Durable standalone smoke-test source:
@@ -203,12 +218,14 @@ Current Vivado/Vitis artifacts:
   `FPGA_Project/software/qmap_pl_compute_smoke/main.c`
 - Durable QMAP PL compute embedded image header:
   `FPGA_Project/software/qmap_pl_compute_smoke/qmap_dot64_image.h`
-- Current Vitis workspace app copy:
-  `Vitis_Workspace/pl_ddr4_smoke_app/src/main.c`
-- Current QMAP Vitis workspace app copy:
-  `Vitis_Workspace/qmap_load_smoke_app/main.c`
-- Current QMAP PL compute Vitis workspace app copy:
-  `Vitis_Workspace/qmap_pl_compute_smoke_app/main.c`
+- Durable QMAP row1024 PL compute smoke-test source:
+  `FPGA_Project/software/qmap_row1024_pl_compute_smoke/main.c`
+- Durable QMAP row1024 PL compute embedded image header:
+  `FPGA_Project/software/qmap_row1024_pl_compute_smoke/qmap_row1024_image.h`
+- Current Vitis DDR4 workspace app copy:
+  `F:\vws\a_ddr4\src\main.c`
+- Current QMAP row1024 Vitis workspace app copy:
+  `F:\vws\a_r1024\src\main.c`
 
 Current PS-to-PL memory fabric:
 
@@ -218,9 +235,9 @@ M_AXI_HPM0_FPD
       M00_AXI -> AXI BRAM Controller -> Block Memory Generator
       M01_AXI -> AXI Clock Converter -> ddr4_0/C0_DDR4_S_AXI
       M02_AXI -> AXI GPIO DDR4 status register
-      additional AXI GPIO slaves for QMAP dot64 control/status/result
+      additional AXI GPIO slaves for QMAP smoke control/status/result
 
-qmap_dot64_axi_smoke_0/M_AXI
+qmap_row1024_axi_smoke_0/M_AXI
   -> AXI SmartConnect S01_AXI
       -> AXI Clock Converter -> ddr4_0/C0_DDR4_S_AXI
 ```
@@ -232,8 +249,8 @@ Current address map:
 | PS DDR low memory | `0x0000_0000` | `0x7FEF_FFFF` | about 2 GiB minus reserved top window | exported in current BSP |
 | AXI BRAM smoke memory | `0xA000_0000` | `0xA000_1FFF` | 8 KiB | passed in current hardware smoke |
 | DDR4 status AXI GPIO | `0xA001_0000` | `0xA001_FFFF` | 64 KiB | passed in current hardware smoke |
-| QMAP dot64 control/status AXI GPIO | `0xA002_0000` | `0xA002_FFFF` | 64 KiB | passed in current PL master hardware smoke |
-| QMAP dot64 result AXI GPIO | `0xA003_0000` | `0xA003_FFFF` | 64 KiB | passed in current PL master hardware smoke |
+| QMAP smoke control/status AXI GPIO | `0xA002_0000` | `0xA002_FFFF` | 64 KiB | passed in dot64 and row1024 PL master hardware smoke |
+| QMAP smoke result AXI GPIO | `0xA003_0000` | `0xA003_FFFF` | 64 KiB | passed in dot64 and row1024 PL master hardware smoke |
 | PL DDR4 | `0x4_0000_0000` | `0x4_1FFF_FFFF` | 512 MiB | passed in current hardware smoke |
 
 DDR4 status GPIO bit layout at `0xA001_0000`:
@@ -266,6 +283,10 @@ Current board-run result:
 - Current QMAP PL master launch style: FSBL initialization enabled,
   `psu_init.tcl` disabled. This avoids a DAP transaction error while polling
   PS DDR PHY register `0xFD080030` in `psu_init.tcl`.
+- On Windows, use a short Vitis workspace path such as `F:\vws` and short
+  component names such as `p_ddr4`, `a_ddr4`, `p_r1024`, and `a_r1024`.
+  Longer paths can make Vitis/CMake/Ninja fail BSP builds while opening
+  generated `.obj.d` dependency files.
 - AXI BRAM smoke passed at:
   - `0x0_A0000000`
   - `0x0_A0000004`
@@ -297,14 +318,26 @@ Current board-run result:
   - final PL status is `0xA`
   - result GPIO values at `0xA003_0000` are
     `partial_sum_low32=0x60AF` and `scaled_sum_q26_low32=0x2E1366`
+- QMAP row1024 PL master smoke passed:
+  - PS writes the embedded 4096-byte QMAP image to `0x4_1B20_0000`
+  - QMAP readback compare passes for 4096 bytes
+  - header checks pass for magic `0x50414D51`, version `1`, descriptor count
+    `4`, descriptor capacity `8`, descriptor table `0x4_1B20_0100`, payload
+    base `0x4_1B20_0500`, and image size `0x1000`
+  - PS clears and starts the PL compute path through the control GPIO at
+    `0xA002_0000`
+  - final PL status is `0xA`
+  - result GPIO values at `0xA003_0000` are
+    `row_sum_q26_low32=0xFFCA_DDC7` and
+    `expected_row_sum_q26_low32=0xFFCA_DDC7`, both representing `-3482169`
 
 This proves the first PS-to-PL DDR4 path through
 `M_AXI_HPM0_FPD -> axi_smc -> axi_clock_converter_0 -> ddr4_0/C0_DDR4_S_AXI`
 is working for 32-bit standalone smoke-test accesses.
 
-It also proves the first PL AXI master read path from real PL DDR4 into the
-QMAP/Q4 dot64 compute chain:
-`qmap_dot64_axi_smoke_0/M_AXI -> axi_smc -> axi_clock_converter_0 ->
+It also proves PL AXI master read paths from real PL DDR4 into the QMAP/Q4
+dot64 and row1024 compute chains:
+`qmap_*_axi_smoke_0/M_AXI -> axi_smc -> axi_clock_converter_0 ->
 ddr4_0/C0_DDR4_S_AXI`.
 
 Previous useful checkpoint:
@@ -316,10 +349,10 @@ Previous useful checkpoint:
 
 ## Open Gaps
 
-- PL DDR4 is accessible from PS. The first PL QMAP descriptor reader, payload
-  fetcher, Q4 dot64 compute chain, and read-only AXI4 adapter are now wrapped
-  for Vivado, integrated into the block design, and passed board validation
-  against real PL DDR4.
+- PL DDR4 is accessible from PS. The PL QMAP descriptor reader, payload
+  fetcher, Q4 dot64 compute chain, row1024 compute chain, and read-only AXI4
+  adapter are now wrapped for Vivado, integrated into block designs, and have
+  passed board validation against real PL DDR4.
 - QMAP v1 now defines the first descriptor-based PL DDR4 staging contract. The
   dot64 image exporter and standalone PS loader/readback app have passed on
   hardware. The first PL descriptor reader, payload fetcher, and Q4 dot64
@@ -336,25 +369,26 @@ Previous useful checkpoint:
 - Cache coherency, bulk transfer strategy, and any future DMA policy are still
   open. The current proven path is direct PS memory-mapped 32-bit access.
 - A first Vivado bring-up attempt for row1024 showed LUT over-utilization with
-  the earlier full-row payload buffering. The current row1024 RTL is now
-  resource-reduced for bring-up by fetching and computing 4 groups at a time;
-  synthesis, implementation, and bitstream generation remain the next
-  user-run Vivado checks.
+  the earlier full-row payload buffering. The current row1024 RTL is
+  resource-reduced for bring-up by fetching and computing 4 groups at a time,
+  and that reduced path has now passed synthesis, implementation, bitstream
+  generation, Vitis launch, and board validation.
 
 ## Immediate Next Step
 
-Bring the row1024 smoke path onto the board after reviewing the new RTL and
-QMAP image.
+Scale from one row1024 result to a small multi-row tile.
 
 Recommended next slice:
 
-1. Keep the passing dot64 hardware design as the board smoke baseline.
-2. Add or swap in `qmap_row1024_axi_smoke_bd.v` in the Vivado block design.
-3. Reuse the same principle: PS loads the row1024 QMAP image into PL DDR4, PL
-   reads it through AXI, PL performs the row GEMV math, and PS only
-   starts/polls/validates.
-4. After row1024 passes on hardware, scale to a small row tile rather than a
-   full projection at once.
+1. Keep the passing row1024 hardware design as the board smoke baseline.
+2. Export a small QMAP tile image for consecutive `q_proj` rows, for example
+   4 or 8 rows, using the same activation vector and per-row Q4 weights/scales.
+3. Extend the RTL path so it loops over row descriptors or row offsets and
+   accumulates one `row_sum_q26` result per row.
+4. Validate the tile in simulation first, then rebuild the Vivado smoke top and
+   run a board smoke app that checks all tile result words.
+5. Only after the small tile passes, scale toward a larger `q_proj` block and
+   then a fuller attention/MLP datapath.
 
 ## Practical Notes
 
@@ -370,9 +404,11 @@ Recommended next slice:
 - Keep PS-side code as orchestration/support only. Do not move model math for
   prefill or decode back into PS unless the project direction explicitly
   changes.
-- Treat `Vitis_Workspace/` as a local regenerated workspace. Keep durable
-  application source under `FPGA_Project/software/` and recreate Vitis
-  platform/application/build outputs from the Vivado hardware export.
+- Treat `Vitis_Workspace/` and `F:\vws\` as local regenerated workspaces. Keep
+  durable application source under `FPGA_Project/software/` and recreate Vitis
+  platform/application/build outputs from the Vivado hardware export. On
+  Windows, prefer the short `F:\vws` path for new Vitis workspaces to avoid BSP
+  build failures from generated path lengths.
 - Do not use broad staging commands such as `git add .` unless explicitly
   requested.
 - Keep `Source/CURRENT_STATE.md` concise. Store detailed validation logic in

@@ -1,8 +1,9 @@
 # QMAP Format
 
 Status: draft v1 descriptor format for PL DDR4 tensor staging and future
-full-model artifact layout. The first dot64 image has passed both PS
-load/readback and PL AXI-master read/compute hardware smoke tests.
+full-model artifact layout. The dot64 image and the full row1024 image have
+both passed PS load/readback and PL AXI-master read/compute hardware smoke
+tests.
 
 For Q4 quantization semantics, read `Source/Q4_FORMAT.md`. For physical PL
 DDR4 placement, read `Source/FPGA_MEMORY_MAP.md`.
@@ -19,10 +20,10 @@ tensor descriptor table
 payload data
 ```
 
-The first QMAP instance will describe the real Qwen3 Layer 0
-`q_proj` row 0 group 0 dot64 vector. Later instances can describe a full GEMV
-row, a projection tile, all Layer 0 Q/K/V projections, or the full model by
-adding descriptors and increasing tensor shapes.
+The first QMAP instances describe real Qwen3 Layer 0 `q_proj` data: first row
+0 group 0 as a dot64 vector, then row 0 as a complete row1024 GEMV. Later
+instances can describe a projection tile, all Layer 0 Q/K/V projections, or
+the full model by adding descriptors and increasing tensor shapes.
 
 QMAP describes where data is and how to interpret it. It does not define the
 math for Q4 itself; that contract stays in `Source/Q4_FORMAT.md`.
@@ -43,9 +44,10 @@ math for Q4 itself; that contract stays in `Source/Q4_FORMAT.md`.
 
 ## Header
 
-The QMAP header lives at the base of a QMAP image. The first test-vector QMAP
-image will be placed at `0x4_1B10_0000`, the start of the draft PL DDR4
-test-vector staging region.
+The QMAP header lives at the base of a QMAP image. The dot64 test-vector QMAP
+image is placed at `0x4_1B10_0000`, the start of the draft PL DDR4 test-vector
+staging region. The row1024 test-vector QMAP image is placed at
+`0x4_1B20_0000`.
 
 Header size: 256 bytes.
 
@@ -65,14 +67,23 @@ Header size: 256 bytes.
 | `0x3C` | `u32` | `checksum32` | Optional checksum over descriptors and payload; `0` if unused |
 | `0x40` | `u32[48]` | `reserved` | Must be written as zero |
 
-The first bring-up image should reserve eight descriptor slots even if only a
-few are valid. This keeps the payload base stable and leaves room for adding an
-output or debug descriptor without changing the image shape.
+Bring-up images should reserve eight descriptor slots even if only a few are
+valid. This keeps the payload base stable and leaves room for adding an output
+or debug descriptor without changing the image shape.
 
 Recommended first image base:
 
 ```text
 qmap_base              = 0x4_1B10_0000
+descriptor_table_addr  = qmap_base + 0x0100
+descriptor_capacity    = 8
+payload_base_addr      = qmap_base + 0x0500
+```
+
+Recommended second image base:
+
+```text
+qmap_base              = 0x4_1B20_0000
 descriptor_table_addr  = qmap_base + 0x0100
 descriptor_capacity    = 8
 payload_base_addr      = qmap_base + 0x0500
@@ -231,6 +242,9 @@ tensor 4:
 Hardware validation:
 
 - Apps: `qmap_load_smoke_app`, then `qmap_pl_compute_smoke_app`.
+- Durable sources:
+  `FPGA_Project/software/qmap_load_smoke/` and
+  `FPGA_Project/software/qmap_pl_compute_smoke/`.
 - Image base: `0x4_1B10_0000`.
 - Image size: 1536 bytes / `0x600`.
 - Image SHA256:
@@ -324,6 +338,26 @@ Local validation:
 - AXI simulation result:
   `qmap_row1024_axi_smoke_top.sv` passed with 18 AXI read bursts, status
   `0xA`, and row result `-3482169`.
+
+Hardware validation:
+
+- App: `qmap_row1024_pl_compute_smoke_app` in the clean short-path Vitis
+  workspace, with durable source kept under
+  `FPGA_Project/software/qmap_row1024_pl_compute_smoke/`.
+- Vitis recreation path used for the passing run: short workspace `F:\vws`,
+  platform `p_r1024`, application `a_r1024`.
+- Image base: `0x4_1B20_0000`.
+- Image size: 4096 bytes / `0x1000`.
+- Image SHA256:
+  `2065fb798848e2779847f2b2055bb6ce51b50fd23547e66de43aa758374a917d`.
+- Result: PS wrote the image into PL DDR4, read it back byte-for-byte, and
+  checked the QMAP header fields, descriptor table address, payload base, image
+  base, and image size.
+- PL master result: PS started the row1024 smoke top through the temporary
+  control GPIO at `0xA002_0000`; PL read the QMAP image from real PL DDR4
+  through AXI and reported status `0xA`. The result GPIO at `0xA003_0000`
+  returned `row_sum_q26_low32=0xFFCA_DDC7` and
+  `expected_row_sum_q26_low32=0xFFCA_DDC7`, both representing `-3482169`.
 
 ## Scale-Up Path
 
