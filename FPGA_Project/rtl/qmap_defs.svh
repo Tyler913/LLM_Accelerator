@@ -69,6 +69,7 @@
 `define QMAP_DTYPE_I32_Q12_12              32'd19
 `define QMAP_DTYPE_I32_Q14_10              32'd20
 `define QMAP_DTYPE_U16_Q8_8                32'd21
+`define QMAP_DTYPE_I16_Q8_7                32'd22
 
 `define QMAP_TENSOR_F_ROW_MAJOR            32'h0000_0001
 `define QMAP_TENSOR_F_PACKED_Q4_LOW_EVEN   32'h0000_0002

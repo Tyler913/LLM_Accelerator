@@ -74,6 +74,9 @@ Important shapes:
 - K projection: `[1024] -> [1024] -> [8, 128]`
 - V projection: `[1024] -> [1024] -> [8, 128]`
 - Q/K head RMSNorm gamma vectors: `[128]` each
+- Current Layer 0 q/k norm gamma fixed-point format: signed 16-bit `Q8.7`
+  in the local RTL stage. Layer 0 `q_norm.weight` includes negative values,
+  so unsigned gamma is not valid for q/k norm.
 - Attention concat before `o_proj`: `[2048]`
 - `o_proj`: `[2048] -> [1024]`
 - MLP gate/up: `[1024] -> [3072]`
@@ -353,7 +356,9 @@ Current conservative starting formats for RMSNorm RTL planning:
 
 - residual/RMSNorm input: signed 24-bit `Q14.10`
 - RMSNorm output: signed 24-bit `Q12.12`
-- RMSNorm gamma: unsigned 16-bit `UQ8.8`
+- layer input/post/final RMSNorm gamma: unsigned 16-bit `UQ8.8`
+- q_norm/k_norm gamma: signed 16-bit `Q8.7` for the current Layer 0
+  q/k norm + RoPE stage
 - inv_rms: unsigned 24-bit `UQ8.16`
 - sum_squares accumulator: unsigned 64-bit
 
@@ -397,9 +402,13 @@ input_norm[1024]
 The important new capability is PL write-back. The existing row1024 hardware
 checkpoint proves the PL AXI read path and Q4 row GEMV datapath. The local
 QKV projection step now has a QMAP exporter, a descriptor-driven projection
-compute path, and an AXI write adapter passing Icarus simulation. The next
-hardware-facing task is to wrap that path into a Vivado AXI read/write top and
-prove Q/K/V output-buffer write-back from real PL DDR4.
+compute path, an AXI write adapter, and a Vivado-facing AXI read/write top that
+passes local Icarus memory-model simulation through the full `q_proj/k_proj/v_proj`
+row counts `2048/1024/1024`. The next local attention-front-end stage now also
+passes: `qk_norm_rope_stage_128.sv` consumes Q4/QMAP fixed Q/K projection words,
+applies signed q/k gamma over all 24 heads, and matches q_norm/k_norm plus RoPE
+golden outputs exactly. Hardware confirmation is still pending; the next
+model-facing local RTL step is K/V cache append.
 
 Keep the exact next action in `Source/CURRENT_STATE.md`; keep detailed address
 planning in `Source/FPGA_MEMORY_MAP.md`.

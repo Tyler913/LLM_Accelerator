@@ -10,7 +10,7 @@
 //
 //   x[i]:    signed 24-bit Q14.10
 //   inv_rms: unsigned 24-bit UQ8.16
-//   gamma[i]: unsigned 16-bit UQ8.8
+//   gamma[i]: unsigned 16-bit UQ8.8 by default
 //   y[i]:    signed 24-bit Q12.12
 //
 // With these defaults, the raw product has IN_FRAC + INV_RMS_FRAC +
@@ -23,6 +23,7 @@ module rmsnorm_apply_1024 #(
     parameter int INV_RMS_FRAC     = 16,
     parameter int GAMMA_WIDTH      = 16,
     parameter int GAMMA_FRAC       = 8,
+    parameter int GAMMA_SIGNED     = 0,
     parameter int OUT_WIDTH        = 24,
     parameter int OUT_FRAC         = 12,
     parameter int PRODUCT1_WIDTH   = IN_WIDTH + INV_RMS_WIDTH,
@@ -163,8 +164,17 @@ module rmsnorm_apply_1024 #(
         current_input =
             i_input_flat[element_index*IN_WIDTH +: IN_WIDTH];
         current_inv_rms = $signed({1'b0, i_inv_rms});
-        current_gamma =
-            $signed({1'b0, i_gamma_flat[element_index*GAMMA_WIDTH +: GAMMA_WIDTH]});
+        if (GAMMA_SIGNED != 0) begin
+            current_gamma =
+                $signed({
+                    i_gamma_flat[(element_index*GAMMA_WIDTH) + GAMMA_WIDTH - 1],
+                    i_gamma_flat[element_index*GAMMA_WIDTH +: GAMMA_WIDTH]
+                });
+        end
+        else begin
+            current_gamma =
+                $signed({1'b0, i_gamma_flat[element_index*GAMMA_WIDTH +: GAMMA_WIDTH]});
+        end
 
         product_input_inv_rms = current_input * current_inv_rms;
         product_full = product_input_inv_rms * current_gamma;

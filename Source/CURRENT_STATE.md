@@ -82,6 +82,9 @@ The current hand-written RTL bring-up stack includes:
   - `rmsnorm_1024.sv`
 - RoPE:
   - `rope_qk_layer_128.sv`
+- Attention front-end integration:
+  - `qk_norm_128.sv`
+  - `qk_norm_rope_stage_128.sv`
 - KV cache address generation:
   - `kv_cache_addr_gen.sv`
 - QMAP/DDR data movement bring-up:
@@ -96,6 +99,7 @@ The current hand-written RTL bring-up stack includes:
   - `axi4_read_master.sv`
   - `axi4_write_master.sv`
   - `qmap_qkv_projection_compute_path.sv`
+  - `qmap_qkv_projection_axi_smoke_top.sv`
   - `qmap_dot64_axi_smoke_top.sv`
   - `qmap_dot64_axi_smoke_bd.v`
   - `qmap_row1024_axi_smoke_top.sv`
@@ -108,7 +112,11 @@ Current fixed-point direction:
 - Q4 scales: current bring-up uses unsigned 16-bit `Q2.14`
 - RMSNorm/residual input: signed 24-bit `Q14.10`
 - RMSNorm output and Q/K/RoPE path: signed 24-bit `Q12.12`
-- RMSNorm gamma: unsigned 16-bit `UQ8.8`
+- Layer input/post/final RMSNorm gamma starting format: unsigned 16-bit
+  `UQ8.8`
+- Q/K head RMSNorm gamma: signed 16-bit `Q8.7` in the current Layer 0
+  q/k norm + RoPE RTL stage. This was corrected after confirming Layer 0
+  `q_norm.weight` contains negative values.
 - KV cache first RTL storage plan: signed 24-bit `Q12.12` padded to 32-bit
   DDR words
 
@@ -201,6 +209,24 @@ Latest local RTL/software validation state:
 - `axi4_write_master.sv` passes a focused RTL smoke simulation for one aligned
   4-beat AXI4 write burst and B-channel response. This is the first write-side
   adapter from the project-local write stream toward Vivado AXI integration.
+- `qmap_qkv_projection_axi_smoke_top.sv` now wraps the QKV projection path with
+  `axi4_read_master.sv` and `axi4_write_master.sv`. Its parameterized Icarus
+  integration testbench passes compact, medium, larger, and full QKV packets.
+  The full `q_proj/k_proj/v_proj` run covers rows `2048/1024/1024`, completes
+  `8209` AXI read bursts and `4096` AXI write bursts, reports status `0xA`,
+  and matches every Python expected I32_Q12.12 output word.
+- `qk_norm_128.sv` and `qk_norm_rope_stage_128.sv` add the first real
+  downstream attention-front-end stage after QKV projection. The exporter
+  `22_export_qk_norm_rope_fixed_vectors.py` recomputes Layer 0 Q/K projection
+  words from the same Q4/QMAP integer contract, applies signed `Q8.7`
+  q_norm/k_norm gamma, and emits fixed golden vectors for q_norm/k_norm and
+  RoPE.
+- `tb_qk_norm_rope_stage_128.sv` passes in Icarus. It runs all 24 heads
+  (`16` Q heads and `8` K heads), completes in `10612` cycles, reports
+  `norm_heads_done=24`, and matches Q norm, K norm, Q RoPE, and K RoPE output
+  buffers with `max_abs_diff=0` and no saturation. The existing
+  `tb_rmsnorm_1024_real.sv` and `tb_rope_qk_layer_128.sv` regression
+  simulations still pass after adding signed-gamma support to the RMSNorm core.
 - RTL source files now use explicit `input wire logic` ports. This keeps
   `default_nettype none` enabled while satisfying Vivado 2025.1 synthesis,
   which rejects plain `input logic` as an implicit net in this flow.
@@ -374,9 +400,10 @@ Previous useful checkpoint:
 - PL DDR4 is accessible from PS. The PL QMAP descriptor reader, payload
   fetcher, Q4 dot64 compute chain, row1024 compute chain, and read-only AXI4
   adapter are now wrapped for Vivado, integrated into block designs, and have
-  passed board validation against real PL DDR4. The new QKV projection compute
-  path and AXI write adapter currently have local Icarus evidence but have not
-  yet been wrapped into a Vivado-facing AXI read/write top or run on hardware.
+  passed board validation against real PL DDR4. The QKV projection compute path
+  and AXI write adapter are now wrapped into a Vivado-facing AXI read/write top
+  and pass full-size local AXI memory-model simulation, but they have not yet
+  run on hardware.
 - QMAP v1 now defines the first descriptor-based PL DDR4 staging contract. The
   dot64 image exporter and standalone PS loader/readback app have passed on
   hardware. The first PL descriptor reader, payload fetcher, and Q4 dot64
@@ -409,22 +436,21 @@ Previous useful checkpoint:
 
 ## Immediate Next Step
 
-Promote the locally passing QKV projection path into the next hardware-facing
-integration.
+Use the full locally passing QKV AXI write-back path and the locally passing
+q/k norm + RoPE stage as regression baselines, then add the KV-cache append
+stage in local RTL simulation before returning to hardware.
 
 Recommended next slice:
 
-1. Keep the passing row1024 board design as the regression baseline.
-2. Build a Vivado-facing QKV AXI top that connects
-   `qmap_qkv_projection_compute_path.sv` to `axi4_read_master.sv` and
-   `axi4_write_master.sv`, with temporary PS-visible control/status/result
-   registers similar to the row1024 smoke top.
-3. Add a small PS loader/readback app for the compact QKV packet first, then
-   move to the full `q_proj/k_proj/v_proj` packet once the AXI write-back path
-   is stable.
-4. After Q/K/V projection write-back passes hardware, continue the real token
-   path: Q/K norm, RoPE, KV-cache write, attention score/value path, MLP,
-   final LM-head scan, and greedy argmax.
+1. Keep the passing row1024 board design, the full QKV AXI simulation, and
+   `tb_qk_norm_rope_stage_128.sv` as regression baselines.
+2. Implement the next local stage:
+   `k_rope[8,128] + v_flat[8,128] -> KV cache append`.
+3. Reuse `kv_cache_addr_gen.sv` for byte-address generation and add a small
+   write controller/testbench that checks both addresses and 32-bit padded
+   `Q12.12` payload words.
+4. After K/V cache append passes locally, continue into attention score,
+   softmax/value accumulation, and `o_proj`.
 
 ## Practical Notes
 

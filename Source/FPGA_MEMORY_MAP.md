@@ -1,8 +1,9 @@
 # FPGA Memory Map
 
 Status: working draft, updated through the QMAP row1024 PL AXI master
-hardware smoke pass and the local Layer 0 QKV projection packet/write-back
-simulation evidence on 2026-06-23
+hardware smoke pass, the full local Layer 0 QKV projection AXI write-back
+simulation, and the local q/k norm + RoPE stage simulation evidence on
+2026-06-28
 
 This document defines the first FPGA-visible memory layout for the Qwen3
 0.6B accelerator bring-up. It distinguishes hardware-proven base apertures
@@ -506,8 +507,8 @@ first dot64 image to row, tile, projection, layer, and full-model images.
 | layer N q_proj | `[2048, 1024]` | TODO | TODO | TODO | row-major candidate |
 | layer N k_proj | `[1024, 1024]` | TODO | TODO | TODO | row-major candidate |
 | layer N v_proj | `[1024, 1024]` | TODO | TODO | TODO | row-major candidate |
-| layer N q_norm weight | `[128]` | TODO | TODO | TODO | shape confirmed; choose fixed-point gamma format |
-| layer N k_norm weight | `[128]` | TODO | TODO | TODO | shape confirmed; choose fixed-point gamma format |
+| layer N q_norm weight | `[128]` | signed `I16_Q8_7` for current Layer 0 RTL | TODO | 256 B per layer | Layer 0 has negative q_norm gamma entries; full-model format remains subject to range review |
+| layer N k_norm weight | `[128]` | signed `I16_Q8_7` for current Layer 0 RTL | TODO | 256 B per layer | Current Layer 0 max fits; full-model format remains subject to range review |
 | layer N o_proj | `[1024, 2048]` | TODO | TODO | TODO | row-major candidate |
 | layer N post-attn RMSNorm weight | `[1024]` | TODO | TODO | TODO | gamma |
 | layer N gate_proj | `[3072, 1024]` | TODO | TODO | TODO | MLP |
@@ -593,10 +594,10 @@ region can be fixed when the first QKV projection exporter is written.
 | q_flat | `[2048]` | `I32_Q12_12` | activation region | Q projection output, q_norm input | next packet output |
 | k_flat | `[1024]` | `I32_Q12_12` | activation region | K projection output, k_norm input | next packet output |
 | v_flat | `[1024]` | `I32_Q12_12` | activation region | V projection output, V-cache append source | next packet output |
-| q_normed | `[16, 128]` | `I32_Q12_12` | activation region or on-chip | RoPE input | draft |
-| k_normed | `[8, 128]` | `I32_Q12_12` | activation region or on-chip | RoPE input | draft |
-| q_rope | `[16, 128]` | `I32_Q12_12` | activation region or on-chip | attention input | draft |
-| k_rope | `[8, 128]` | `I32_Q12_12` | activation region or direct cache write | K-cache append source | draft |
+| q_normed | `[16, 128]` | `I32_Q12_12` | activation region or on-chip | RoPE input | local RTL stage passed |
+| k_normed | `[8, 128]` | `I32_Q12_12` | activation region or on-chip | RoPE input | local RTL stage passed |
+| q_rope | `[16, 128]` | `I32_Q12_12` | activation region or on-chip | attention input | local RTL stage passed |
+| k_rope | `[8, 128]` | `I32_Q12_12` | activation region or direct cache write | K-cache append source | local RTL stage passed |
 | v_state | `[8, 128]` | `I32_Q12_12` | activation region or direct cache write | V-cache append source | draft |
 | attn_out | `[2048]` | `I32_Q12_12` | activation region | `o_proj` input | draft |
 | o_proj_out | `[1024]` | `I32_Q12_12` | activation region | attention residual add input | draft |
@@ -775,14 +776,25 @@ Bring-up order:
      AXI4 write-burst simulation.
 9. Wrap the QKV projection path into a Vivado-facing AXI read/write top and
    prove compact QKV packet write-back from real PL DDR4 on hardware.
-10. RMSNorm RTL block reads `input_hidden`, `norm_weight`, and `eps`; compare
+   - status: local RTL integration passed through full Q/K/V scale.
+     `qmap_qkv_projection_axi_smoke_top.sv` connects the QKV compute path to
+     AXI read/write masters and the parameterized Icarus memory-model test
+     passes compact, medium, larger, and full packets. Hardware confirmation is
+     still pending.
+10. Add local q/k norm + RoPE integration after QKV projection.
+   - status: local RTL passed. `qk_norm_rope_stage_128.sv` consumes Q/K
+     projection outputs from the same Q4/QMAP fixed-point contract, applies
+     signed `Q8.7` q_norm/k_norm gamma over all 24 heads, runs RoPE, and
+     matches all Q norm, K norm, Q RoPE, and K RoPE golden words with
+     `max_abs_diff=0`.
+11. RMSNorm RTL block reads `input_hidden`, `norm_weight`, and `eps`; compare
    with `expected_output`.
-11. Q4 GEMV RTL block starts from the 64-value dot-product smoke vector in
+12. Q4 GEMV RTL block starts from the 64-value dot-product smoke vector in
    `qwen3_0p6b_q4_v0/q_proj_row0_group0_dot64.npz`, then expands to full
    Layer 0 Q/K/V using `qkv_layer0_last_token_q4.npz`.
-12. Extend vectors and memory regions for RoPE, KV cache, attention, MLP, and
+13. Extend vectors and memory regions for RoPE, KV cache, attention, MLP, and
    complete Layer 0.
-13. Use FP32 vectors as golden references, but design GEMV/weight-storage RTL
+14. Use FP32 vectors as golden references, but design GEMV/weight-storage RTL
    around the required Q4 path from the start. The current Q4 v0 artifact is
    the first packed-weight contract; extend it before scaling beyond Layer 0
    Q/K/V.
@@ -798,7 +810,8 @@ Pass/fail fields to record:
 | QMAP dot64 PL master compute | `q_proj_row0_group0_dot64.qmap.bin` at `0x4_1B10_0000` | exact PL status `0xA` | exact GPIO results `0x60AF` / `0x2E1366` | passed |
 | QMAP row1024 PL master compute | `q_proj_row0_row1024.qmap.bin` at `0x4_1B20_0000` | exact PL status `0xA` | exact GPIO results `0xFFCA_DDC7` / `0xFFCA_DDC7` | passed |
 | QMAP Layer 0 QKV packet export | `layer0_qkv_projection.qmap.bin` at `0x4_0008_0000` | Q/K/V Q26 recompute diff `0.0` | full row coverage `2048/1024/1024` | passed locally |
-| QMAP QKV projection RTL write-back | compact packet `q_rows=4`, `k_rows=2`, `v_rows=2` | exact I32_Q12.12 output word match | 8 writes, 33 read requests, no error | passed in Icarus |
+| QMAP QKV projection AXI top write-back | full packet `q_rows=2048`, `k_rows=1024`, `v_rows=1024` | exact I32_Q12.12 output word match | 4096 AXI writes, 8209 AXI read bursts, status `0xA` | passed in Icarus |
+| Q/K norm + RoPE stage | `qk_norm_rope_stage_128_real` from Q4/QMAP fixed Q/K projection words | exact Q norm, K norm, Q RoPE, K RoPE word match | 24 heads, 10612 cycles, no saturation | passed in Icarus |
 | AXI4 write master | one aligned 4-beat write burst | exact AW/W/B behavior | no error | passed in Icarus |
 | RMSNorm | `rmsnorm_layer0_last_token.npz` | TODO | TODO | TODO |
 | Q4 Q GEMV | `qwen3_0p6b_q4_v0/qkv_layer0_last_token_q4.npz` | 0.22418976 | 0.01856172 | passed in Python verifier |
@@ -830,3 +843,5 @@ Pass/fail fields to record:
 | 2026-06-23 | Prove QMAP row1024 PL AXI master hardware path | `qmap_row1024_pl_compute_smoke_app` passes on board from short Vitis workspace `F:\vws`: DDR4 status `0x5`, QMAP readback passes for 4096 bytes, header checks pass, PL status `0xA`, and both row result words are `0xFFCA_DDC7` / `-3482169` |
 | 2026-06-23 | Define formal QMAP inference-packet direction | Moves the next hardware-facing plan from extra GEMV smoke images to persistent model manifests, runtime work packets, Layer 0 QKV projection descriptors, and PL write-back into activation buffers |
 | 2026-06-23 | Add local QMAP QKV projection write-back path | Adds `21_export_qmap_qkv_projection_image.py`, `qmap_qkv_projection_compute_path.sv`, and `axi4_write_master.sv`; Python export and Icarus simulations pass against compact Q/K/V expected output words |
+| 2026-06-28 | Add full local QKV AXI top simulation pass | Adds `qmap_qkv_projection_axi_smoke_top.sv` and a parameterized AXI memory-model testbench; compact, medium, larger, and full Layer 0 Q/K/V packets pass local write-back comparison, with full scale `2048/1024/1024` rows and `4096` output writes |
+| 2026-06-28 | Add local q/k norm + RoPE integration pass | Adds signed-gamma q/k norm support and `qk_norm_rope_stage_128.sv`; the real-vector test consumes Q4/QMAP fixed Q/K projection words, runs all 24 heads, and matches q_norm/k_norm plus RoPE golden outputs exactly |

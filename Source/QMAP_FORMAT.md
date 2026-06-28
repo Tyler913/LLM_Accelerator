@@ -164,6 +164,7 @@ descriptor_addr = descriptor_table_addr + tensor_slot * 128
 | `19` | `QMAP_DTYPE_I32_Q12_12` | Signed `Q12.12` value padded to 32 bits |
 | `20` | `QMAP_DTYPE_I32_Q14_10` | Signed `Q14.10` value padded to 32 bits |
 | `21` | `QMAP_DTYPE_U16_Q8_8` | Unsigned `UQ8.8` value for RMSNorm gamma |
+| `22` | `QMAP_DTYPE_I16_Q8_7` | Signed `Q8.7` value for q_norm/k_norm gamma |
 
 ## Tensor Flags
 
@@ -407,7 +408,9 @@ DDR4 and reused across prompt prefill and decode:
 
 - Q4 packed weights and Q2.14 scales for embedding/LM-head, attention
   projections, and MLP matrices
-- RMSNorm and q/k norm gamma vectors
+- RMSNorm gamma vectors and q/k norm gamma vectors. Current local RTL uses
+  unsigned `U16_Q8_8` for layer input/post/final RMSNorm gamma and signed
+  `I16_Q8_7` for q_norm/k_norm gamma.
 - optional RoPE cos/sin tables
 - fixed base addresses for KV cache, activation buffers, logits/argmax
   scratch, and debug regions
