@@ -39,6 +39,9 @@ weights/
 fpga_artifacts/
 build/
 .Xil/
+FPGA_Project/sim/lm_head_argmax_mem_stage_trace.csv
+FPGA_Project/sim/lm_head_argmax_tile_scheduler_trace.csv
+FPGA_Project/sim/qmap_lm_head_argmax_compute_path_trace.csv
 *.cache/
 *.hw/
 *.runs/
