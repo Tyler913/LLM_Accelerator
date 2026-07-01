@@ -1,0 +1,64 @@
+{
+  "format_version": 1,
+  "name": "mlp_gate_up_proj_stage_real",
+  "module": "layer0.mlp.gate_up_proj_stage",
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "source_post_norm_prefix": "post_attention_residual_norm_stage_real",
+  "shape": {
+    "input_size": 1024,
+    "out_features": 3072,
+    "group_size": 64,
+    "group_count": 16
+  },
+  "formats": {
+    "activation": "signed 24-bit Q12.12",
+    "weight_words32": "signed int4 packed into 32-bit words, 8 weights per word, lowest index in low nibble",
+    "scale_words32": "unsigned 16-bit Q2.14, 2 scales per 32-bit word",
+    "chunks4096": "simulation-optimized 4096-bit chunks, lowest flattened index in low bits",
+    "row_sum": "signed 56-bit Q26",
+    "output": "signed 24-bit Q12.12"
+  },
+  "saturation": {
+    "gate_output_count": 0,
+    "up_output_count": 0
+  },
+  "debug": {
+    "post_norm_q12_12_max_abs": 41966,
+    "fixed_input_vs_hf_post_norm_max_abs_diff": 0.3323085308074951,
+    "gate_q26_min": -282836032,
+    "gate_q26_max": 180779938,
+    "up_q26_min": -193717106,
+    "up_q26_max": 148779411,
+    "gate_q12_12_max_abs": 17263,
+    "up_q12_12_max_abs": 11824,
+    "fixed_gate_vs_hf_max_abs_diff": 0.6196759939193726,
+    "fixed_gate_vs_hf_mean_abs_diff": 0.08132277975528268,
+    "fixed_up_vs_hf_max_abs_diff": 0.2869652956724167,
+    "fixed_up_vs_hf_mean_abs_diff": 0.05485060655087182
+  },
+  "files": {
+    "activation": "mlp_gate_up_proj_stage_real_activation.hex",
+    "gate_weight_words32": "mlp_gate_up_proj_stage_real_gate_weight_words32.hex",
+    "gate_scale_words32": "mlp_gate_up_proj_stage_real_gate_scale_words32.hex",
+    "gate_weight_chunks4096": "mlp_gate_up_proj_stage_real_gate_weight_chunks4096.hex",
+    "gate_scale_chunks4096": "mlp_gate_up_proj_stage_real_gate_scale_chunks4096.hex",
+    "up_weight_words32": "mlp_gate_up_proj_stage_real_up_weight_words32.hex",
+    "up_scale_words32": "mlp_gate_up_proj_stage_real_up_scale_words32.hex",
+    "up_weight_chunks4096": "mlp_gate_up_proj_stage_real_up_weight_chunks4096.hex",
+    "up_scale_chunks4096": "mlp_gate_up_proj_stage_real_up_scale_chunks4096.hex",
+    "gate_expected_q26": "mlp_gate_up_proj_stage_real_gate_expected_q26.hex",
+    "gate_expected_q12_12": "mlp_gate_up_proj_stage_real_gate_expected_q12_12.hex",
+    "up_expected_q26": "mlp_gate_up_proj_stage_real_up_expected_q26.hex",
+    "up_expected_q12_12": "mlp_gate_up_proj_stage_real_up_expected_q12_12.hex"
+  }
+}

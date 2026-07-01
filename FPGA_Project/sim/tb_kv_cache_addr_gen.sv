@@ -11,7 +11,7 @@
 module tb_kv_cache_addr_gen;
 
     localparam int ADDR_WIDTH = 64;
-    localparam logic [ADDR_WIDTH-1 : 0] BASE_ADDR = 64'h0000_0000_1410_0000;
+    localparam logic [ADDR_WIDTH-1 : 0] BASE_ADDR = 64'h0000_0004_1410_0000;
 
     logic [ADDR_WIDTH-1 : 0] base_addr;
 
@@ -98,18 +98,18 @@ module tb_kv_cache_addr_gen;
         dim512 = 'd0;
         mismatch_count = 0;
 
-        check256("L0 K h0 p0 d0", 5'd0, 1'b0, 3'd0, 8'd0, 7'd0, 64'h0000_0000_1410_0000, 1'b1);
-        check256("L0 K h0 p0 d1", 5'd0, 1'b0, 3'd0, 8'd0, 7'd1, 64'h0000_0000_1410_0004, 1'b1);
-        check256("L0 K h0 p1 d0", 5'd0, 1'b0, 3'd0, 8'd1, 7'd0, 64'h0000_0000_1410_0200, 1'b1);
-        check256("L0 K h1 p0 d0", 5'd0, 1'b0, 3'd1, 8'd0, 7'd0, 64'h0000_0000_1412_0000, 1'b1);
-        check256("L0 V h0 p0 d0", 5'd0, 1'b1, 3'd0, 8'd0, 7'd0, 64'h0000_0000_1420_0000, 1'b1);
-        check256("L1 K h0 p0 d0", 5'd1, 1'b0, 3'd0, 8'd0, 7'd0, 64'h0000_0000_1430_0000, 1'b1);
-        check256("L2 V h3 p5 d7", 5'd2, 1'b1, 3'd3, 8'd5, 7'd7, 64'h0000_0000_1466_0a1c, 1'b1);
-        check256("invalid layer31", 5'd31, 1'b0, 3'd0, 8'd0, 7'd0, 64'h0000_0000_17f0_0000, 1'b0);
+        check256("L0 K h0 p0 d0", 5'd0, 1'b0, 3'd0, 8'd0, 7'd0, 64'h0000_0004_1410_0000, 1'b1);
+        check256("L0 K h0 p0 d1", 5'd0, 1'b0, 3'd0, 8'd0, 7'd1, 64'h0000_0004_1410_0004, 1'b1);
+        check256("L0 K h0 p1 d0", 5'd0, 1'b0, 3'd0, 8'd1, 7'd0, 64'h0000_0004_1410_0200, 1'b1);
+        check256("L0 K h1 p0 d0", 5'd0, 1'b0, 3'd1, 8'd0, 7'd0, 64'h0000_0004_1412_0000, 1'b1);
+        check256("L0 V h0 p0 d0", 5'd0, 1'b1, 3'd0, 8'd0, 7'd0, 64'h0000_0004_1420_0000, 1'b1);
+        check256("L1 K h0 p0 d0", 5'd1, 1'b0, 3'd0, 8'd0, 7'd0, 64'h0000_0004_1430_0000, 1'b1);
+        check256("L2 V h3 p5 d7", 5'd2, 1'b1, 3'd3, 8'd5, 7'd7, 64'h0000_0004_1466_0a1c, 1'b1);
+        check256("invalid layer31", 5'd31, 1'b0, 3'd0, 8'd0, 7'd0, 64'h0000_0004_17f0_0000, 1'b0);
 
-        check512("L0 K h0 p0 d0", 5'd0, 1'b0, 3'd0, 9'd0, 7'd0, 64'h0000_0000_1410_0000, 1'b1);
-        check512("L1 V h7 p511 d127", 5'd1, 1'b1, 3'd7, 9'd511, 7'd127, 64'h0000_0000_148f_fffc, 1'b1);
-        check512("L27 V h7 p511 d127", 5'd27, 1'b1, 3'd7, 9'd511, 7'd127, 64'h0000_0000_1b0f_fffc, 1'b1);
+        check512("L0 K h0 p0 d0", 5'd0, 1'b0, 3'd0, 9'd0, 7'd0, 64'h0000_0004_1410_0000, 1'b1);
+        check512("L1 V h7 p511 d127", 5'd1, 1'b1, 3'd7, 9'd511, 7'd127, 64'h0000_0004_148f_fffc, 1'b1);
+        check512("L27 V h7 p511 d127", 5'd27, 1'b1, 3'd7, 9'd511, 7'd127, 64'h0000_0004_1b0f_fffc, 1'b1);
 
         if (mismatch_count != 0) begin
             $display("FAIL: %0d kv_cache_addr_gen mismatch(es)", mismatch_count);

@@ -89,6 +89,7 @@ module q4_gemv_tile_1024 # (
     logic        [OUT_ROWS-1 : 0]      row_done;
     logic                              all_rows_done;
     logic signed [ROW_ACC_WIDTH-1 : 0] row_output [OUT_ROWS];
+    logic        [OUT_ROWS*ROW_ACC_WIDTH-1 : 0] row_output_flat;
 
     assign row_start     = (current_state == IDLE) && (i_start == 1'b1);
     assign all_rows_done = &row_done;
@@ -161,9 +162,22 @@ module q4_gemv_tile_1024 # (
                 .o_row_sum_q26     (row_output[row_index])
             );
 
-            assign o_output_flat[row_index*ROW_ACC_WIDTH +: ROW_ACC_WIDTH] = row_output[row_index];
+            assign row_output_flat[row_index*ROW_ACC_WIDTH +: ROW_ACC_WIDTH] = row_output[row_index];
         end
     endgenerate
+
+    // Hold tile outputs after row lanes return to IDLE and clear their sums.
+    always_ff @(posedge i_clk or negedge i_rst_n) begin
+        if (i_rst_n == 1'b0) begin
+            o_output_flat <= 'd0;
+        end
+        else if (row_start == 1'b1) begin
+            o_output_flat <= 'd0;
+        end
+        else if ((current_state == PARALLEL_ROWS) && (all_rows_done == 1'b1)) begin
+            o_output_flat <= row_output_flat;
+        end
+    end
 
 endmodule
 

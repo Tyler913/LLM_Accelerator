@@ -160,7 +160,7 @@ module tb_q4_gemv_tile_1024;
         @(negedge clk);
         start = 1'b0;
 
-        while ((done != 1'b1) && (cycle_count < 200)) begin
+        while ((done != 1'b1) && (cycle_count < 600)) begin
             @(negedge clk);
             cycle_count = cycle_count + 1;
         end

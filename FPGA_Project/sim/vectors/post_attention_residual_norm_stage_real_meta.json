@@ -1,0 +1,60 @@
+{
+  "format_version": 1,
+  "name": "post_attention_residual_norm_stage_real",
+  "module": "layer0.post_attention_residual_norm_stage",
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "eps_float": 1e-06,
+  "eps_q20": 1,
+  "source_o_proj_prefix": "o_proj_stage_real",
+  "formats": {
+    "residual_input": "signed 24-bit Q14.10",
+    "o_proj_input": "signed 24-bit Q12.12",
+    "expected_residual": "signed 24-bit Q14.10",
+    "gamma": "signed 16-bit Q8.7",
+    "expected_norm": "signed 24-bit Q12.12"
+  },
+  "saturation": {
+    "residual_count": 0,
+    "norm_output": false
+  },
+  "debug": {
+    "residual_input_q14_10_max_abs": 74,
+    "o_proj_q12_12_max_abs": 10694,
+    "post_attention_hidden_q14_10_max_abs": 2633,
+    "sum_squares": 33222329,
+    "mean_square": 32443,
+    "sqrt_radicand": 32444,
+    "rms_q14_10": 180,
+    "inv_rms_uq8_16": 372827,
+    "div_remainder": 4,
+    "fixed_residual_input_vs_hf_layer_input_max_abs_diff": 0.00048828125,
+    "fixed_post_attention_hidden_vs_hf_max_abs_diff": 0.10029979050159454,
+    "fixed_post_attention_hidden_vs_hf_mean_abs_diff": 0.01879096076163478,
+    "fixed_post_norm_vs_hf_max_abs_diff": 0.3323085308074951,
+    "fixed_post_norm_vs_hf_mean_abs_diff": 0.05147792468304502
+  },
+  "files": {
+    "residual_input": "post_attention_residual_norm_stage_real_residual_input.hex",
+    "o_proj_input": "post_attention_residual_norm_stage_real_o_proj_input.hex",
+    "expected_residual": "post_attention_residual_norm_stage_real_expected_residual.hex",
+    "gamma": "post_attention_residual_norm_stage_real_gamma.hex",
+    "expected_norm": "post_attention_residual_norm_stage_real_expected_norm.hex",
+    "sum_squares": "post_attention_residual_norm_stage_real_sum_squares.hex",
+    "mean_square": "post_attention_residual_norm_stage_real_mean_square.hex",
+    "sqrt_radicand": "post_attention_residual_norm_stage_real_sqrt_radicand.hex",
+    "rms": "post_attention_residual_norm_stage_real_rms.hex",
+    "inv_rms": "post_attention_residual_norm_stage_real_inv_rms.hex",
+    "residual_saturation": "post_attention_residual_norm_stage_real_residual_saturation.hex",
+    "norm_saturation": "post_attention_residual_norm_stage_real_norm_saturation.hex"
+  }
+}

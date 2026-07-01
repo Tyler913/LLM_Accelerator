@@ -4,7 +4,15 @@ Status: draft v1 descriptor format for PL DDR4 tensor staging and future
 full-model artifact layout. The dot64 image and the full row1024 image have
 both passed PS load/readback and PL AXI-master read/compute hardware smoke
 tests. The first Layer 0 QKV projection work packet, local PL write-back path,
-and AXI write adapter now pass Icarus simulation.
+AXI write adapter, downstream local attention through `o_proj`,
+post-attention residual/RMSNorm hookup, MLP gate/up projection, MLP
+SiLU/multiply, MLP down projection, and final MLP residual add now pass Icarus
+simulation. The full-model current-token final RMSNorm stage also passes
+Icarus simulation, and the first tiled Q4 LM-head scan plus greedy argmax stage
+passes Icarus simulation for a 1024-row scan window. A memory-backed
+LM-head tile reader/wrapper, runtime tile scheduler, and QMAP descriptor-backed
+LM-head wrapper now also pass local multi-window scans for `64` and `23`
+tiles. The full `9496`-tile vocabulary proof remains pending.
 
 For Q4 quantization semantics, read `Source/Q4_FORMAT.md`. For physical PL
 DDR4 placement, read `Source/FPGA_MEMORY_MAP.md`.
@@ -536,6 +544,65 @@ bring-up. In the later persistent-manifest flow, the same descriptors should
 point to already-loaded weight, scale, activation, and output-buffer regions
 instead of copying large model tensors into every runtime packet.
 
+### LM-head Memory-Backed Scan Contract
+
+The first LM-head memory-facing path uses the tied embedding/LM-head table as a
+Q4 weight matrix with one Q2.14 scale per 64 columns. The current local vector
+exporter is:
+
+```text
+Qwen3-0.6B-Base/python_each_module/33_export_lm_head_argmax_vectors.py
+```
+
+The exported layout keeps full-vocabulary base addresses even when the local
+testbench loads only the `[0,1024)` scan window:
+
+```text
+lm_head_weight_base       = 0x4_0010_0000
+lm_head_weight_row_bytes  = 512
+lm_head_weight_full_bytes = 0x04A3_0000
+lm_head_scale_base        = 0x4_04B3_0000
+lm_head_scale_row_bytes   = 32
+lm_head_scale_full_bytes  = 0x004A_3000
+```
+
+`lm_head_tile_mem_reader.sv` reads one 16-row tile as eight 1024-byte packed-Q4
+weight bursts plus one 512-byte scale burst. `lm_head_argmax_mem_stage.sv`
+wraps that reader around `lm_head_argmax_stage.sv` without changing the argmax
+core. The local memory-model testbench passes for two complete 1024-row scans:
+`1152` read requests, `278528` response words, `2048` checked logits, exact
+token `264`, exact score `1365150750`, and no error cycles.
+
+`lm_head_argmax_tile_scheduler.sv` reuses that memory-backed stage as a
+one-tile child engine and keeps the global best token/score across runtime tile
+windows. Its default capacity is `MAX_TILES=9496`, matching the full
+`151936`-row vocabulary at 16 rows per tile. The current local scheduler
+testbench proves two runtime scan counts: `64` tiles for the existing
+1024-row window and `23` tiles for a 368-row prefix. It matches exact token
+`264`, exact score `1365150750`, and `1392` checked logits with
+`max_abs_logit_diff=0`.
+
+`34_export_qmap_lm_head_argmax_image.py` exports the first QMAP runtime packet
+for this path. The packet base is `0x4_0500_0000`, uses six active descriptors,
+and keeps the large LM-head weights/scales as persistent tensor references
+instead of copying them into the runtime packet:
+
+| Slot | Tensor | Role | Key fields |
+| ---: | --- | --- | --- |
+| `0` | metadata | `QMAP_ROLE_METADATA` | scan metadata and debug summary |
+| `1` | final RMSNorm output | `QMAP_ROLE_ACTIVATION` | `I32_Q12_12`, `[1024]`, read-only |
+| `2` | LM-head Q4 weight | `QMAP_ROLE_Q4_WEIGHT` | `PACKED_Q4_S4`, `[151936,1024]`, `aux2=scan_base`, `aux3=tile_count` |
+| `3` | LM-head Q2.14 scale | `QMAP_ROLE_Q4_SCALE` | `U16_Q2_14`, `[151936,16]`, same scan aux fields |
+| `4` | output token/score | `QMAP_ROLE_OUTPUT` | three `U32` words: token, score low32, score high32 |
+| `5` | expected token/score | `QMAP_ROLE_EXPECTED` | debug-only copy of the three output words |
+
+`qmap_lm_head_argmax_compute_path.sv` validates those descriptors, reads the
+final RMSNorm activation, runs the scheduler, and writes
+`{token, score_low32, score_high32}` to the output descriptor. Its testbench
+covers descriptor-provided `64`-tile and `23`-tile scans, plus an invalid
+`tile_count=0` descriptor that must raise error and perform no output write.
+The full `151936`-row / `9496`-tile vocabulary scan is still the next proof.
+
 ## Full-Model Runtime Write-Back Policy
 
 For correctness-first inference, these runtime values should be writable in PL
@@ -550,11 +617,14 @@ DDR4, even if later optimized versions keep some of them on chip:
 | V projection output | `[1024]` | `I32_Q12_12` | write for KV-cache append |
 | post-RoPE K cache | `[28, 8, T, 128]` | `I32_Q12_12` | append one position per layer/token |
 | V cache | `[28, 8, T, 128]` | `I32_Q12_12` | append one position per layer/token |
-| attention output before `o_proj` | `[2048]` | `I32_Q12_12` | write or stream depending on first RTL integration |
-| post-attention hidden | `[1024]` | `I32_Q14_10` or `I32_Q12_12` | write as residual result |
-| MLP gate/up/intermediate | `[3072]` | `I32_Q12_12` | write for correctness bring-up if not streamed |
-| layer output | `[1024]` | `I32_Q14_10` or `I32_Q12_12` | write to next layer input buffer |
-| logits/argmax scratch | tiled | implementation-defined | write final token id and optional debug logits |
+| attention output before `o_proj` | `[2048]` | `I32_Q12_12` | local RTL supports streaming into `o_proj`; DDR write-back remains useful for debug |
+| post-attention hidden | `[1024]` | `I32_Q14_10` | local RTL writes/validates this residual result before post-attention RMSNorm |
+| MLP gate/up outputs | `[3072]` each | `I32_Q12_12` | local RTL projection stage passes; write for correctness bring-up if not streamed |
+| MLP SiLU/multiply intermediate | `[3072]` | `I32_Q12_12` | local RTL stage passes; this is the MLP down-projection input |
+| MLP down output | `[1024]` | `I32_Q12_12` | local RTL stage passes; this is the final MLP residual input |
+| layer output | `[1024]` | `I32_Q14_10` or `I32_Q12_12` | local RTL final residual stage passes; write to next layer input buffer |
+| final RMSNorm output | `[1024]` | `I32_Q12_12` | local RTL final-norm stage passes; LM-head input |
+| logits/argmax scratch | tiled | implementation-defined | local RTL tiled argmax core, memory-backed 1024-row wrapper, runtime tile scheduler, and QMAP descriptor wrapper pass; future full-vocab path should write final token id and optional debug logits |
 
 Do not require all of these tensors to be stored forever. The rule is that a
 formal packet must make every consumed or produced tensor explicit. Later RTL

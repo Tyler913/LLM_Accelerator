@@ -1,0 +1,119 @@
+{
+  "format_version": 1,
+  "name": "lm_head_argmax_stage_real",
+  "module": "model.lm_head_argmax_stage",
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "source_final_norm_prefix": "final_rmsnorm_stage_real",
+  "shape": {
+    "vocab_size": 151936,
+    "input_size": 1024,
+    "group_size": 64,
+    "group_count": 16,
+    "scan_base": 0,
+    "scan_rows": 1024,
+    "tile_rows": 16,
+    "tile_count": 64
+  },
+  "memory_layout": {
+    "weight_base_addr": 17180917760,
+    "scale_base_addr": 17258708992,
+    "weight_row_bytes": 512,
+    "scale_row_bytes": 32,
+    "scan_weight_bytes": 524288,
+    "scan_scale_bytes": 32768,
+    "full_vocab_weight_bytes": 77791232,
+    "full_vocab_scale_bytes": 4861952
+  },
+  "formats": {
+    "activation": "signed 24-bit Q12.12",
+    "weight_tiles": "signed int4 packed per tile, lowest index in low nibble",
+    "weight_words32": "same packed Q4 row-major data, eight Q4 values per 32-bit word",
+    "scale_tiles": "unsigned 16-bit Q2.14 packed per tile",
+    "scale_words32": "same scale data, two Q2.14 values per 32-bit word",
+    "logit": "signed 56-bit Q26"
+  },
+  "argmax": {
+    "full_q4_token": 264,
+    "full_q4_token_text": " a",
+    "full_q4_score_q26": 1365150750,
+    "scan_window_token": 264,
+    "scan_window_score_q26": 1365150750,
+    "hf_argmax_token": 264,
+    "hf_argmax_token_text": " a",
+    "fp32_lm_head_argmax_token": 264,
+    "fp32_lm_head_argmax_token_text": " a",
+    "full_q4_argmax_in_scan_window": true
+  },
+  "debug": {
+    "activation_q12_12_min": -222793,
+    "activation_q12_12_max": 128916,
+    "activation_q12_12_max_abs": 222793,
+    "scan_logits_q26_min": -487334008,
+    "scan_logits_q26_max": 1365150750,
+    "top_full_q4_tokens": [
+      {
+        "token": 264,
+        "score_q26": 1365150750,
+        "text": " a"
+      },
+      {
+        "token": 53846,
+        "score_q26": 1336064657,
+        "text": " poised"
+      },
+      {
+        "token": 9906,
+        "score_q26": 1328954050,
+        "text": " bright"
+      },
+      {
+        "token": 1588,
+        "score_q26": 1328052846,
+        "text": " here"
+      },
+      {
+        "token": 537,
+        "score_q26": 1293884142,
+        "text": " not"
+      },
+      {
+        "token": 1660,
+        "score_q26": 1277102544,
+        "text": " being"
+      },
+      {
+        "token": 304,
+        "score_q26": 1275134808,
+        "text": " in"
+      },
+      {
+        "token": 911,
+        "score_q26": 1269051580,
+        "text": " about"
+      }
+    ]
+  },
+  "files": {
+    "activation": "lm_head_argmax_stage_real_activation.hex",
+    "weight_tiles": "lm_head_argmax_stage_real_weight_tiles.hex",
+    "scale_tiles": "lm_head_argmax_stage_real_scale_tiles.hex",
+    "weight_words32": "lm_head_argmax_stage_real_weight_words32.hex",
+    "scale_words32": "lm_head_argmax_stage_real_scale_words32.hex",
+    "expected_scan_logits_q26": "lm_head_argmax_stage_real_expected_scan_logits_q26.hex",
+    "expected_best_token": "lm_head_argmax_stage_real_expected_best_token.hex",
+    "expected_best_score_q26": "lm_head_argmax_stage_real_expected_best_score_q26.hex",
+    "scan_base_token": "lm_head_argmax_stage_real_scan_base_token.hex",
+    "weight_base_addr": "lm_head_argmax_stage_real_weight_base_addr.hex",
+    "scale_base_addr": "lm_head_argmax_stage_real_scale_base_addr.hex"
+  }
+}

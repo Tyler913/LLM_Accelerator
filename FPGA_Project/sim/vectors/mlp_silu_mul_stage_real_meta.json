@@ -1,0 +1,61 @@
+{
+  "format_version": 1,
+  "name": "mlp_silu_mul_stage_real",
+  "module": "layer0.mlp.silu_mul_stage",
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "source_gate_up_prefix": "mlp_gate_up_proj_stage_real",
+  "shape": {
+    "features": 3072
+  },
+  "formats": {
+    "gate_input": "signed 24-bit Q12.12",
+    "up_input": "signed 24-bit Q12.12",
+    "sigmoid_lut": "unsigned 16-bit UQ0.16",
+    "sigmoid_lut_range": "[-8.0, 8.0]",
+    "sigmoid_lut_step": "1/64",
+    "sigmoid_lut_size": 1025,
+    "silu_gate": "signed 24-bit Q12.12",
+    "hidden": "signed 24-bit Q12.12"
+  },
+  "saturation": {
+    "silu_gate_count": 0,
+    "hidden_count": 0
+  },
+  "debug": {
+    "gate_q12_12_min": -17263,
+    "gate_q12_12_max": 11033,
+    "up_q12_12_min": -11824,
+    "up_q12_12_max": 9080,
+    "lut_index_min": 242,
+    "lut_index_max": 684,
+    "sigmoid_q0_16_min": 951,
+    "sigmoid_q0_16_max": 61360,
+    "silu_gate_q12_12_min": -1147,
+    "silu_gate_q12_12_max": 10329,
+    "hidden_q12_12_min": -3969,
+    "hidden_q12_12_max": 10573,
+    "fixed_hidden_vs_hf_max_abs_diff": 0.12928450107574463,
+    "fixed_hidden_vs_hf_mean_abs_diff": 0.0120923866130395,
+    "fixed_hidden_vs_ideal_fixed_silu_max_abs_diff": 0.0027057163236652304,
+    "fixed_hidden_vs_ideal_fixed_silu_mean_abs_diff": 0.000170159594007548
+  },
+  "files": {
+    "gate_input": "mlp_silu_mul_stage_real_gate_input.hex",
+    "up_input": "mlp_silu_mul_stage_real_up_input.hex",
+    "sigmoid_lut": "mlp_silu_mul_stage_real_sigmoid_lut.hex",
+    "expected_lut_index": "mlp_silu_mul_stage_real_expected_lut_index.hex",
+    "expected_sigmoid_q0_16": "mlp_silu_mul_stage_real_expected_sigmoid_q0_16.hex",
+    "expected_silu_gate_q12_12": "mlp_silu_mul_stage_real_expected_silu_gate_q12_12.hex",
+    "expected_hidden_q12_12": "mlp_silu_mul_stage_real_expected_hidden_q12_12.hex"
+  }
+}

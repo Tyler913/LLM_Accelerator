@@ -356,7 +356,13 @@ Current conservative starting formats for RMSNorm RTL planning:
 
 - residual/RMSNorm input: signed 24-bit `Q14.10`
 - RMSNorm output: signed 24-bit `Q12.12`
-- layer input/post/final RMSNorm gamma: unsigned 16-bit `UQ8.8`
+- layer input RMSNorm gamma: unsigned 16-bit `UQ8.8` for the current Layer 0
+  input_layernorm RTL vector
+- post-attention RMSNorm gamma: signed 16-bit `Q8.7` for the current Layer 0
+  post_attention_layernorm RTL vector; that tensor includes negative values
+- final RMSNorm gamma: signed-capable format required; the current model tensor
+  also includes a few negative values, so unsigned gamma is not a safe general
+  rule
 - q_norm/k_norm gamma: signed 16-bit `Q8.7` for the current Layer 0
   q/k norm + RoPE stage
 - inv_rms: unsigned 24-bit `UQ8.16`
@@ -389,14 +395,16 @@ bring-up phase have both reached hardware checkpoints:
 3. The row1024 QMAP image can be loaded by PS, read by PL through AXI, and
    computed by the full-row Q4 GEMV RTL.
 
-The next durable hardware-facing direction is Layer 0 attention front-end
-integration:
+The current durable hardware-facing direction is Layer 0 local one-token
+datapath integration:
 
 ```text
 input_norm[1024]
   -> q_proj/k_proj/v_proj Q4 GEMV
   -> Q/K/V output buffers in PL DDR4
-  -> q_norm/k_norm, RoPE, KV-cache append, and attention
+  -> q_norm/k_norm, RoPE, KV-cache append, attention, and o_proj
+  -> post-attention residual/RMSNorm/MLP
+  -> final RMSNorm and LM-head scan/argmax
 ```
 
 The important new capability is PL write-back. The existing row1024 hardware
@@ -404,11 +412,51 @@ checkpoint proves the PL AXI read path and Q4 row GEMV datapath. The local
 QKV projection step now has a QMAP exporter, a descriptor-driven projection
 compute path, an AXI write adapter, and a Vivado-facing AXI read/write top that
 passes local Icarus memory-model simulation through the full `q_proj/k_proj/v_proj`
-row counts `2048/1024/1024`. The next local attention-front-end stage now also
-passes: `qk_norm_rope_stage_128.sv` consumes Q4/QMAP fixed Q/K projection words,
-applies signed q/k gamma over all 24 heads, and matches q_norm/k_norm plus RoPE
-golden outputs exactly. Hardware confirmation is still pending; the next
-model-facing local RTL step is K/V cache append.
+row counts `2048/1024/1024`. The local attention-front-end now also passes
+through K/V cache append: `qk_norm_rope_stage_128.sv` consumes Q4/QMAP fixed Q/K
+projection words, applies signed q/k gamma over all 24 heads, and matches
+q_norm/k_norm plus RoPE golden outputs exactly; `kv_cache_append.sv` and
+`qk_norm_rope_kv_cache_stage.sv` then write exact K/V cache address/data streams
+under backpressure. `attention_score_stage.sv` now adds the next local step:
+current-token `q_rope` reads a 5-position K cache through a request/response
+interface, applies the 16-to-8-head GQA mapping, and emits exact raw/scaled
+attention scores under request stalls, response latency, and score-stream
+backpressure. `attention_softmax_value_stage.sv` then consumes those scores,
+uses a fixed exp-LUT softmax to produce UQ0.16 probabilities, reads cached V
+values through a request/response interface, and emits exact Q12.12
+`attn_out[16,128]` words under input gaps, V-response latency, and output
+backpressure. `o_proj_stage.sv` now consumes that fixed `attn_out[2048]`,
+reuses the Q4 GEMV projection controller with a 2048-wide input, and emits exact
+Q12.12 `o_proj_out[1024]` words under output backpressure. The post-attention
+residual/RMSNorm stage now consumes the fixed `o_proj_out[1024]`, adds it to
+the signed Q14.10 residual stream, applies signed Q8.7
+`post_attention_layernorm` gamma, and emits exact Q12.12 post-norm words. The
+MLP gate/up projection stage now consumes those post-norm words, runs Layer 0
+`gate_proj[3072]` and `up_proj[3072]` through the same Q4 weight-only GEMV
+contract, and emits exact Q12.12 gate/up pairs under output backpressure. The
+MLP SiLU/multiply stage now consumes those gate/up pairs, uses a fixed UQ0.16
+sigmoid LUT, and emits exact Q12.12 `mlp_hidden[3072]` words under input and
+output backpressure. The MLP down projection stage now consumes that fixed
+`mlp_hidden[3072]`, runs Layer 0 `down_proj[1024]` through the same Q4
+weight-only GEMV contract extended to a 3072-wide input, and emits exact Q12.12
+`down_out[1024]` words under output backpressure. The final MLP residual stage
+now consumes `post_attn_hidden[1024]` and `down_out[1024]`, emits exact Q14.10
+`layer_out[1024]` words, and covers both busy-period spurious start and
+post-done restart behavior in simulation. The full-model current-token final
+RMSNorm stage now also passes local simulation from the Python reference's
+28-layer final hidden state, with signed Q8.7 final gamma and exact Q12.12
+output words. The first tiled Q4 LM-head scan plus greedy argmax stage also
+passes locally for a 1024-row scan window that contains the Python-proven
+full-Q4/HF argmax token, and the same window now passes through a
+memory-backed tile reader/wrapper using exported LM-head weight/scale base
+addresses. A runtime LM-head tile scheduler now reuses that memory-backed
+engine across multiple tile windows and passes local scans for `64` tiles and
+`23` tiles. A QMAP descriptor-backed LM-head wrapper now reads final-norm,
+weight, scale, scan-range, output, and debug descriptors, runs the scheduler,
+and writes the output token/score descriptor locally. Hardware confirmation is
+still pending; the next model-facing direction is to prove the full
+`151936`-row / `9496`-tile vocabulary path before choosing the first
+memory-mapped one-token wrapper.
 
 Keep the exact next action in `Source/CURRENT_STATE.md`; keep detailed address
 planning in `Source/FPGA_MEMORY_MAP.md`.

@@ -1,0 +1,59 @@
+{
+  "format_version": 1,
+  "name": "final_rmsnorm_stage_real",
+  "module": "model.final_norm",
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "eps_float": 1e-06,
+  "eps_q20": 1,
+  "formats": {
+    "input": "signed 24-bit Q14.10",
+    "gamma": "signed 16-bit Q8.7",
+    "expected_output": "signed 24-bit Q12.12",
+    "inv_rms": "unsigned 24-bit UQ8.16"
+  },
+  "saturation": {
+    "input_quantization_count": 0,
+    "gamma_quantization_count": 0,
+    "output_count": 0
+  },
+  "debug": {
+    "input_q14_10_min": -83251,
+    "input_q14_10_max": 203263,
+    "input_q14_10_max_abs": 203263,
+    "gamma_q8_7_min": -15,
+    "gamma_q8_7_max": 1960,
+    "gamma_negative_count": 3,
+    "sum_squares": 271992247168,
+    "mean_square": 265617428,
+    "sqrt_radicand": 265617429,
+    "rms_q14_10": 16297,
+    "inv_rms_uq8_16": 4117,
+    "div_remainder": 14115,
+    "output_q12_12_min": -222793,
+    "output_q12_12_max": 128916,
+    "output_q12_12_max_abs": 222793,
+    "fixed_output_vs_hf_max_abs_diff": 0.019233763217926025,
+    "fixed_output_vs_hf_mean_abs_diff": 0.0004328096767949319
+  },
+  "files": {
+    "input": "final_rmsnorm_stage_real_input.hex",
+    "gamma": "final_rmsnorm_stage_real_gamma.hex",
+    "expected": "final_rmsnorm_stage_real_expected.hex",
+    "sum_squares": "final_rmsnorm_stage_real_sum_squares.hex",
+    "mean_square": "final_rmsnorm_stage_real_mean_square.hex",
+    "sqrt_radicand": "final_rmsnorm_stage_real_sqrt_radicand.hex",
+    "rms": "final_rmsnorm_stage_real_rms.hex",
+    "inv_rms": "final_rmsnorm_stage_real_inv_rms.hex",
+    "saturation": "final_rmsnorm_stage_real_saturation.hex"
+  }
+}

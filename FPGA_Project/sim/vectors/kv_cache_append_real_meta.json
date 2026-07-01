@@ -1,0 +1,62 @@
+{
+  "format_version": 1,
+  "name": "kv_cache_append_real",
+  "module": "layer0.self_attn.kv_cache_append",
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "cache": {
+    "base_addr": "0x0000000414100000",
+    "layer_id": 0,
+    "max_context": 256,
+    "element_bytes": 4,
+    "write_order": "all K heads/dims first, then all V heads/dims",
+    "write_count": 2048,
+    "first_k_addr": "0x0000000414100800",
+    "last_k_addr": "0x00000004141E09FC",
+    "first_v_addr": "0x0000000414200800",
+    "last_v_addr": "0x00000004142E09FC"
+  },
+  "formats": {
+    "k_input": "signed 24-bit Q12.12 post-RoPE K",
+    "v_input": "signed 24-bit Q12.12 V projection output",
+    "write_data": "signed 24-bit Q12.12 sign-extended to 32-bit word",
+    "write_addr": "64-bit byte address"
+  },
+  "saturation": {
+    "k_gamma_quantize_count": 0,
+    "cos_quantize_count": 66,
+    "sin_quantize_count": 0,
+    "k_norm_output": false,
+    "k_rope_output": false
+  },
+  "debug": {
+    "k_projection_recompute_vs_artifact_max_abs_diff": 0.0,
+    "v_projection_recompute_vs_artifact_max_abs_diff": 0.0,
+    "k_rope_q12_12_max_abs": 1076549,
+    "v_input_q12_12_max_abs": 4355,
+    "k_norm_head0": {
+      "sum_squares": 505267519,
+      "mean_square": 3947402,
+      "rms_q12_12": 1986,
+      "inv_rms_uq8_16": 135163
+    }
+  },
+  "files": {
+    "k_input": "kv_cache_append_real_k_input.hex",
+    "v_input": "kv_cache_append_real_v_input.hex",
+    "expected_addr": "kv_cache_append_real_expected_addr.hex",
+    "expected_data": "kv_cache_append_real_expected_data.hex",
+    "expected_kind": "kv_cache_append_real_expected_kind.hex",
+    "expected_head": "kv_cache_append_real_expected_head.hex",
+    "expected_dim": "kv_cache_append_real_expected_dim.hex"
+  }
+}

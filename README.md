@@ -7,6 +7,14 @@ on board on 2026-06-23. Start with
 [Source/CURRENT_STATE.md](Source/CURRENT_STATE.md) for the current handoff and
 next step.
 
+Latest local RTL checkpoint: Layer 0 has passed through attention,
+post-attention residual/RMSNorm, MLP gate/up projection, MLP SiLU/multiply,
+MLP down projection, and final MLP residual add in Icarus. The full-model
+current-token final RMSNorm stage, the tiled Q4 LM-head argmax core, the
+memory-backed LM-head tile reader/wrapper for a 1024-row scan window, and a
+runtime tile scheduler plus QMAP descriptor-backed wrapper for multi-window
+LM-head scans also pass locally.
+
 Start here for persistent project context:
 
 - [Source/PROJECT_CONTEXT.md](Source/PROJECT_CONTEXT.md)

@@ -48,5 +48,32 @@ Script map:
 - `21_export_qmap_qkv_projection_image.py`: exports the first Layer 0 QKV
   projection QMAP work-packet image, plus Python Q12.12 expected words for
   RTL write-back comparison
+- `22_export_qk_norm_rope_fixed_vectors.py`: exports fixed q/k norm and RoPE
+  vectors from the Q4/QMAP Q/K projection contract
+- `23_export_kv_cache_append_vectors.py`: exports fixed K/V cache append
+  address/data vectors after q/k norm and RoPE
+- `24_export_attention_score_vectors.py`: exports current-token Q, cached K,
+  and exact raw/scaled attention score vectors
+- `25_export_attention_softmax_value_vectors.py`: exports fixed softmax
+  probabilities, V-cache reads, and attention-output vectors
+- `26_export_o_proj_vectors.py`: exports Layer 0 attention output projection
+  Q4/fixed vectors for `attn_out[2048] -> o_proj_out[1024]`
+- `27_export_post_attention_residual_norm_vectors.py`: exports fixed
+  post-attention residual add and post-attention RMSNorm vectors
+- `28_export_mlp_gate_up_vectors.py`: exports Layer 0 MLP gate/up projection
+  Q4/fixed vectors from the passing post-attention RMSNorm output
+- `29_export_mlp_silu_mul_vectors.py`: exports fixed SiLU/multiply vectors for
+  `gate[3072], up[3072] -> mlp_hidden[3072]`
+- `30_export_mlp_down_vectors.py`: exports Layer 0 MLP down-projection
+  Q4/fixed vectors for `mlp_hidden[3072] -> down_out[1024]`
+- `31_export_mlp_residual_add_vectors.py`: exports final Layer 0 MLP residual
+  vectors for `post_attn_hidden[1024] + down_out[1024] -> layer_out[1024]`
+- `32_export_final_rmsnorm_vectors.py`: exports full-model current-token final
+  RMSNorm vectors for `final_hidden[1024] -> final_norm[1024]`
+- `33_export_lm_head_argmax_vectors.py`: exports tiled Q4 LM-head scan,
+  memory-layout hex, and greedy argmax vectors from `final_norm[1024]`
+- `34_export_qmap_lm_head_argmax_image.py`: wraps the LM-head activation,
+  persistent weight/scale descriptors, scan range, and output token/score into
+  a QMAP runtime packet for RTL simulation
 - `run_all_module_validations.py`: runs the core validation scripts `01`-`10`
   in order

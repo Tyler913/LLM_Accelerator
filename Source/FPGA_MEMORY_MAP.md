@@ -2,8 +2,11 @@
 
 Status: working draft, updated through the QMAP row1024 PL AXI master
 hardware smoke pass, the full local Layer 0 QKV projection AXI write-back
-simulation, and the local q/k norm + RoPE stage simulation evidence on
-2026-06-28
+simulation, and the local q/k norm + RoPE + KV-cache append + attention
+score/softmax/value/o_proj/post-attention residual-norm/MLP gate-up/MLP
+SiLU-multiply/MLP-down/final-MLP-residual/final-RMSNorm/LM-head-argmax plus
+memory-backed, runtime-tile-scheduled, and QMAP descriptor-backed LM-head
+simulation evidence on 2026-07-01
 
 This document defines the first FPGA-visible memory layout for the Qwen3
 0.6B accelerator bring-up. It distinguishes hardware-proven base apertures
@@ -310,13 +313,32 @@ PL_DDR4_HIGH = 0x4_1FFF_FFFF
 | Region | Base | Size | Owner | Contents | Status |
 | --- | ---: | ---: | --- | --- | --- |
 | Header / memory-map metadata | `0x4_0000_0000` | 1 MiB | PS/PL | QMAP model manifest, runtime work packets, descriptor tables, version/checksum metadata | draft |
-| Weight region | `0x4_0010_0000` | 320 MiB | PS load, PL read | required Q4 weights and scales | draft |
+| Weight region | `0x4_0010_0000` | 320 MiB | PS load, PL read | required Q4 weights and scales | draft; LM-head local memory-reader layout exercised from this base |
 | KV cache region | `0x4_1410_0000` | 32 MiB | PL read/write | per-layer K/V cache, context 256 first | draft |
 | Activation buffers | `0x4_1610_0000` | 64 MiB | PL read/write | one-token hidden, normed, Q/K/V, attention, MLP scratch, debug snapshots | draft |
 | RoPE table | `0x4_1A10_0000` | 8 MiB | PS load or PL read | cos/sin table if precomputed | draft |
 | Logits / argmax scratch | `0x4_1A90_0000` | 8 MiB | PL write, PS read | LM-head tile output and final token id | draft |
 | Test-vector staging | `0x4_1B10_0000` | 32 MiB | PS load, PL read/write | QMAP smoke images, optional exported vectors, and debug staging | dot64 and row1024 QMAP images passed PS load/readback and PL master read/compute |
 | Reserved | `0x4_1D10_0000` | 47 MiB | PS/PL | expansion room within nominal 512 MiB | draft |
+
+Current LM-head local memory-layout checkpoint:
+
+```text
+lm_head_weight_base       = 0x4_0010_0000
+lm_head_weight_row_bytes  = 512
+lm_head_weight_full_bytes = 0x04A3_0000
+lm_head_weight_high       = 0x4_04B2_FFFF
+
+lm_head_scale_base        = 0x4_04B3_0000
+lm_head_scale_row_bytes   = 32
+lm_head_scale_full_bytes  = 0x004A_3000
+lm_head_scale_high        = 0x4_04FD_2FFF
+```
+
+The local memory-model testbench currently loads the `[0,1024)` scan window
+from exported hex files, not the complete 151,936-row table. The base addresses
+above are kept in the vectors so the reader path already uses the intended
+full-vocabulary physical layout.
 
 Draft relative coverage:
 
@@ -558,13 +580,13 @@ Where:
 | Field | Value | Status |
 | --- | --- | --- |
 | Max context | 256 first target; 512 supported by address generator | draft |
-| Cache dtype | signed 24-bit `Q12.12` padded to 32-bit DDR words for the current fixed-point RTL path | draft |
+| Cache dtype | signed 24-bit `Q12.12` padded to 32-bit DDR words for the current fixed-point RTL path | local RTL append passed |
 | Layer stride | `2 * 8 * max_context * 128 * bytes_per_value` | draft |
 | K/V stride | `8 * max_context * 128 * bytes_per_value` | draft |
 | Head stride | `max_context * 128 * bytes_per_value` | draft |
 | Position stride | `128 * bytes_per_value` | draft |
 | Head-dim stride | `bytes_per_value`; current fixed-point default is 4 bytes | draft |
-| Append address formula | `base + layer*layer_stride + kv_kind*kv_stride + head*head_stride + position*position_stride + dim*bytes_per_value` | initial RTL implemented |
+| Append address formula | `base + layer*layer_stride + kv_kind*kv_stride + head*head_stride + position*position_stride + dim*bytes_per_value` | local RTL append passed |
 | Read address formula | same formula, sweeping `position` from 0 through current cache length minus 1 | initial RTL implemented |
 
 The first RTL address generator is:
@@ -573,12 +595,17 @@ The first RTL address generator is:
 FPGA_Project/rtl/kv_cache_addr_gen.sv
 ```
 
-It currently generates byte addresses and range-valid flags only. It does not
-perform DDR4 reads/writes, AXI handshakes, burst planning, or data packing.
-Those functions belong in later append/read controllers. The default
-`ELEMENT_BYTES=4` follows the current fixed-point RTL widths: RoPE outputs
-signed 24-bit `Q12.12` K values, and V values should be converted into the same
-cache element format before storage.
+It generates byte addresses and range-valid flags. The first append controller
+is:
+
+```text
+FPGA_Project/rtl/kv_cache_append.sv
+```
+
+`kv_cache_append.sv` writes K first and V second for one token position, pads
+signed 24-bit `Q12.12` elements into 32-bit DDR words, and keeps its write
+stream stable under backpressure. AXI burst planning and the future read
+controller still belong in later memory-facing wrappers.
 
 ## Activation Buffers
 
@@ -597,16 +624,18 @@ region can be fixed when the first QKV projection exporter is written.
 | q_normed | `[16, 128]` | `I32_Q12_12` | activation region or on-chip | RoPE input | local RTL stage passed |
 | k_normed | `[8, 128]` | `I32_Q12_12` | activation region or on-chip | RoPE input | local RTL stage passed |
 | q_rope | `[16, 128]` | `I32_Q12_12` | activation region or on-chip | attention input | local RTL stage passed |
-| k_rope | `[8, 128]` | `I32_Q12_12` | activation region or direct cache write | K-cache append source | local RTL stage passed |
-| v_state | `[8, 128]` | `I32_Q12_12` | activation region or direct cache write | V-cache append source | draft |
-| attn_out | `[2048]` | `I32_Q12_12` | activation region | `o_proj` input | draft |
-| o_proj_out | `[1024]` | `I32_Q12_12` | activation region | attention residual add input | draft |
-| post_attn_hidden | `[1024]` | `I32_Q14_10` or `I32_Q12_12` | activation region | post-attention residual result | draft |
-| post_norm | `[1024]` | `I32_Q12_12` | activation region | MLP input | draft |
-| gate | `[3072]` | `I32_Q12_12` | activation region or streamed | MLP intermediate | draft |
-| up | `[3072]` | `I32_Q12_12` | activation region or streamed | MLP intermediate | draft |
-| mlp_hidden | `[3072]` | `I32_Q12_12` | activation region or streamed | `silu(gate) * up` | draft |
-| layer_out | `[1024]` | `I32_Q14_10` or `I32_Q12_12` | activation region | next layer input | draft |
+| k_rope | `[8, 128]` | `I32_Q12_12` | activation region or direct cache write | K-cache append source | local RTL append passed |
+| v_state | `[8, 128]` | `I32_Q12_12` | activation region or direct cache write | V-cache append source | local RTL append passed |
+| attn_out | `[2048]` | `I32_Q12_12` | activation region | `o_proj` input | local RTL stage passed |
+| o_proj_out | `[1024]` | `I32_Q12_12` | activation region | attention residual add input | local RTL stage passed |
+| post_attn_hidden | `[1024]` | `I32_Q14_10` | activation region | post-attention residual result | local RTL stage passed |
+| post_norm | `[1024]` | `I32_Q12_12` | activation region | MLP input | local RTL stage passed |
+| gate | `[3072]` | `I32_Q12_12` | activation region or streamed | MLP intermediate | local RTL stage passed |
+| up | `[3072]` | `I32_Q12_12` | activation region or streamed | MLP intermediate | local RTL stage passed |
+| mlp_hidden | `[3072]` | `I32_Q12_12` | activation region or streamed | `silu(gate) * up`, down-projection input | local RTL stage passed |
+| down_out | `[1024]` | `I32_Q12_12` | activation region or streamed | final MLP residual input | local RTL stage passed |
+| layer_out | `[1024]` | `I32_Q14_10` or `I32_Q12_12` | activation region | `post_attn_hidden + down_out`, next layer input | local RTL stage passed |
+| final_norm | `[1024]` | `I32_Q12_12` | activation or logits region | LM-head input | local RTL stage passed |
 | logits_tile | tile-dependent | implementation-defined | logits/argmax region | LM-head tile scan | draft |
 | output_token | `[1]` | `U32` | logits/argmax region or control register | greedy argmax result | draft |
 
@@ -782,22 +811,91 @@ Bring-up order:
      passes compact, medium, larger, and full packets. Hardware confirmation is
      still pending.
 10. Add local q/k norm + RoPE integration after QKV projection.
-   - status: local RTL passed. `qk_norm_rope_stage_128.sv` consumes Q/K
-     projection outputs from the same Q4/QMAP fixed-point contract, applies
-     signed `Q8.7` q_norm/k_norm gamma over all 24 heads, runs RoPE, and
-     matches all Q norm, K norm, Q RoPE, and K RoPE golden words with
-     `max_abs_diff=0`.
-11. RMSNorm RTL block reads `input_hidden`, `norm_weight`, and `eps`; compare
-   with `expected_output`.
-12. Q4 GEMV RTL block starts from the 64-value dot-product smoke vector in
-   `qwen3_0p6b_q4_v0/q_proj_row0_group0_dot64.npz`, then expands to full
-   Layer 0 Q/K/V using `qkv_layer0_last_token_q4.npz`.
-13. Extend vectors and memory regions for RoPE, KV cache, attention, MLP, and
-   complete Layer 0.
-14. Use FP32 vectors as golden references, but design GEMV/weight-storage RTL
-   around the required Q4 path from the start. The current Q4 v0 artifact is
-   the first packed-weight contract; extend it before scaling beyond Layer 0
-   Q/K/V.
+    - status: local RTL passed. `qk_norm_rope_stage_128.sv` consumes Q/K
+      projection outputs from the same Q4/QMAP fixed-point contract, applies
+      signed `Q8.7` q_norm/k_norm gamma over all 24 heads, runs RoPE, and
+      matches all Q norm, K norm, Q RoPE, and K RoPE golden words with
+      `max_abs_diff=0`.
+11. Add local K/V cache append after q/k norm and RoPE.
+    - status: local RTL passed. `kv_cache_append.sv` writes exact K then V cache
+      address/data streams from fixed golden vectors, and
+      `qk_norm_rope_kv_cache_stage.sv` combines q/k norm, RoPE, and K/V cache
+      append with exact Q/K RoPE matches plus `2048` accepted cache writes.
+12. Add local attention-score generation from current Q and cached K.
+    - status: local RTL passed. `attention_score_stage.sv` uses a K-cache
+      request/response interface, applies 16-Q-head to 8-KV-head GQA mapping,
+      and emits exact raw and scaled scores for the 5-position prompt cache.
+      The test accepts `10240` K requests/responses and `80` score outputs under
+      request stalls, variable response latency, and score-stream stalls.
+13. Add local softmax/value accumulation from attention scores and cached V.
+    - status: local RTL passed. `attention_softmax_value_stage.sv` consumes the
+      `80` scaled score stream, uses a 257-entry exp LUT to produce UQ0.16
+      probabilities, reads V cache through a request/response interface, and
+      emits exact `attn_out[16,128]` Q12.12 words. The test accepts `10240`
+      V requests/responses and `2048` outputs under input gaps, request stalls,
+      response latency, and output stalls.
+14. Add local attention output projection from `attn_out[2048]`.
+    - status: local RTL passed. `o_proj_stage.sv` consumes the fixed
+      softmax/value output vector, reuses the Q4 GEMV projection controller
+      with `INPUT_SIZE=2048`, and emits exact Q12.12 `o_proj_out[1024]` words
+      under output-stream backpressure.
+15. Add local post-attention residual add and post-attention RMSNorm hookup.
+    - status: local RTL passed. `post_attention_residual_norm_stage.sv`
+      consumes fixed `o_proj_out[1024]`, adds it to the Layer 0 residual input
+      in signed Q14.10, applies signed Q8.7 post-attention RMSNorm gamma, and
+      emits exact Q12.12 post-norm words.
+16. Add local MLP gate/up projections from post-attention RMSNorm output.
+    - status: local RTL passed. `mlp_gate_up_proj_stage.sv` consumes fixed
+      `post_norm[1024]`, runs Layer 0 `gate_proj[3072]` and `up_proj[3072]`
+      through the same Q4 GEMV projection controller, and emits exact Q12.12
+      gate/up pairs under output-stream backpressure.
+17. Add local SiLU plus elementwise multiply from the passing gate/up outputs.
+    - status: local RTL passed. `mlp_silu_mul_stage.sv` consumes the passing
+      gate/up Q12.12 pairs, uses a UQ0.16 sigmoid LUT over `[-8, 8]` with
+      `1/64` spacing, and emits exact Q12.12
+      `mlp_hidden[3072] = silu(gate[3072]) * up[3072]` words under input and
+      output backpressure.
+18. Add local MLP down projection from `mlp_hidden[3072]`.
+    - status: local RTL passed. `mlp_down_proj_stage.sv` consumes fixed
+      `mlp_hidden[3072]`, runs Layer 0 `down_proj[1024]` through the same Q4
+      GEMV projection controller with `INPUT_SIZE=3072`, and emits exact
+      Q12.12 `down_out[1024]` words under output-stream backpressure.
+19. Add local final MLP residual from `post_attn_hidden[1024]` and
+    `down_out[1024]`.
+    - status: local RTL passed. `mlp_residual_add_stage.sv` wraps the existing
+      sequential residual add block and computes
+      `post_attn_hidden[1024] + down_out[1024] -> layer_out[1024]` exactly
+      against Q14.10 golden words.
+20. Add local final RMSNorm.
+    - status: local RTL passed. `final_rmsnorm_stage.sv` consumes the
+      full-model Python reference's current-token final hidden vector, applies
+      signed Q8.7 final norm gamma, and emits exact Q12.12 final-norm words
+      across two runs with trace-audited control timing.
+21. Add local tied LM-head scan and greedy argmax from `final_norm[1024]`.
+    - status: local tiled RTL, local memory-backed wrapper, and runtime tile
+      scheduler pass. `lm_head_argmax_stage.sv` consumes the passing final
+      RMSNorm vector, requests 16-row Q4 weight/scale tiles, checks all
+      scan-window logits exactly, and returns token `264` with score
+      `1365150750`. `lm_head_tile_mem_reader.sv` and
+      `lm_head_argmax_mem_stage.sv` fetch the same tiles through a
+      project-local memory request/response interface using exported
+      weight/scale base addresses. `lm_head_argmax_tile_scheduler.sv` then
+      reuses the memory-backed stage across runtime scan counts, with default
+      capacity for `9496` tiles / `151936` vocabulary rows. The QMAP wrapper
+      `qmap_lm_head_argmax_compute_path.sv` now reads descriptor-provided
+      final-norm, weight, scale, scan-range, output, and expected/debug tensors,
+      runs the scheduler, and writes token/score output words. The Python
+      exporter also proves token `264` is the full-Q4/HF argmax. The full
+      `9496`-tile vocabulary simulation remains pending.
+22. Q4 GEMV RTL block starts from the 64-value dot-product smoke vector in
+    `qwen3_0p6b_q4_v0/q_proj_row0_group0_dot64.npz`, then expands to full
+    Layer 0 Q/K/V using `qkv_layer0_last_token_q4.npz`.
+23. Extend vectors and memory regions for RoPE, KV cache, attention, MLP, and
+    complete Layer 0.
+24. Use FP32 vectors as golden references, but design GEMV/weight-storage RTL
+    around the required Q4 path from the start. The current Q4 v0 artifact is
+    the first packed-weight contract; extend it before scaling beyond Layer 0
+    Q/K/V.
 
 Pass/fail fields to record:
 
@@ -812,6 +910,21 @@ Pass/fail fields to record:
 | QMAP Layer 0 QKV packet export | `layer0_qkv_projection.qmap.bin` at `0x4_0008_0000` | Q/K/V Q26 recompute diff `0.0` | full row coverage `2048/1024/1024` | passed locally |
 | QMAP QKV projection AXI top write-back | full packet `q_rows=2048`, `k_rows=1024`, `v_rows=1024` | exact I32_Q12.12 output word match | 4096 AXI writes, 8209 AXI read bursts, status `0xA` | passed in Icarus |
 | Q/K norm + RoPE stage | `qk_norm_rope_stage_128_real` from Q4/QMAP fixed Q/K projection words | exact Q norm, K norm, Q RoPE, K RoPE word match | 24 heads, 10612 cycles, no saturation | passed in Icarus |
+| KV cache append | `kv_cache_append_real` from Q4/QMAP fixed K/V projection words | exact cache address/data/kind/head/dim word match | 2048 writes, 652 stall cycles, trace audit passed | passed in Icarus |
+| Q/K norm + RoPE + KV cache append stage | combined `qk_norm_rope_stage_128_real` and `kv_cache_append_real` vectors | exact Q RoPE, K RoPE, and cache write-stream match | 2048 cache writes, 887 stall cycles, first cache valid cycle 10614 | passed in Icarus |
+| Attention score stage | `attention_score_stage_real` from Q4/QMAP fixed Q and 5-position K cache | exact raw Q24.24 and scaled Q24.24 score match | 10240 K requests/responses, 80 scores, trace audit passed | passed in Icarus |
+| Attention softmax/value stage | `attention_softmax_value_stage_real` from fixed scores and 5-position V cache | exact UQ0.16 probabilities and Q12.12 `attn_out` words | 10240 V requests/responses, 2048 outputs, trace audit passed | passed in Icarus |
+| Attention o_proj stage | `o_proj_stage_real` from fixed `attn_out[2048]` and Layer 0 Q4 `o_proj.weight[1024,2048]` | exact Q12.12 `o_proj_out[1024]` word match | 1024 outputs, 618 output stall cycles, 35073 compute cycles | passed in Icarus |
+| Post-attention residual + RMSNorm stage | `post_attention_residual_norm_stage_real` from fixed `o_proj_out[1024]` and Layer 0 residual input | exact Q14.10 residual and Q12.12 post-norm word match | 1024 residual words, 3132 stage cycles, trace audit passed | passed in Icarus |
+| MLP gate/up projection stage | `mlp_gate_up_proj_stage_real` from fixed `post_norm[1024]` and Layer 0 Q4 gate/up weights | exact Q12.12 gate and up word match | 3072 output pairs, 1394 output stall cycles, 52993 compute cycles, trace audit passed | passed in Icarus |
+| MLP SiLU/multiply stage | `mlp_silu_mul_stage_real` from fixed gate/up Q12.12 outputs and sigmoid LUT | exact Q12.12 `mlp_hidden[3072]` word match | 3072 inputs, 3072 outputs, 747 input stall cycles, 961 output stall cycles, trace audit passed | passed in Icarus |
+| MLP down projection stage | `mlp_down_proj_stage_real` from fixed `mlp_hidden[3072]` and Layer 0 Q4 `down_proj.weight[1024,3072]` | exact Q12.12 `down_out[1024]` word match | 1024 outputs, 497 output stall cycles, 52481 compute cycles, trace audit passed | passed in Icarus |
+| Final MLP residual add stage | `mlp_residual_add_stage_real` from fixed `post_attn_hidden[1024]` and `down_out[1024]` | exact Q14.10 `layer_out[1024]` word match | two full runs, 1024 outputs, 1026 stage cycles, spurious start covered, trace audit passed | passed in Icarus |
+| Final RMSNorm stage | `final_rmsnorm_stage_real` from full-model current-token final hidden and signed Q8.7 final gamma | exact Q12.12 final-norm word match plus exact debug scalars | two full runs, 2106 stage cycles, sum/sqrt/div/apply coverage, trace audit passed | passed in Icarus |
+| LM-head scan + greedy argmax stage | `lm_head_argmax_stage_real` from final RMSNorm output and tied Q4 LM-head rows `[0,1024)` | exact Q26 logit word match and best token `264` / score `1365150750` | two full runs, 128 tile requests, 128 tile responses, 2048 logits checked, trace audit passed | passed in Icarus |
+| LM-head memory-backed scan-window wrapper | `lm_head_argmax_stage_real` plus exported LM-head weight/scale memory words for rows `[0,1024)` | exact Q26 logit word match and best token `264` / score `1365150750` | two full runs, 1152 read requests, 278528 response words, 2048 logits checked, trace audit passed | passed in Icarus |
+| LM-head runtime tile scheduler | `lm_head_argmax_stage_real` plus exported LM-head weight/scale memory words and runtime tile counts | exact Q26 logit word match and best token `264` / score `1365150750` | 64-tile and 23-tile scans, 783 read requests, 189312 response words, 1392 logits checked, trace audit passed | passed in Icarus |
+| QMAP LM-head descriptor wrapper | `qmap_lm_head_argmax_runtime.qmap.bin` plus persistent LM-head weight/scale vectors | exact output token `264`, score `1365150750`, and Q26 logit checks | 64-tile and 23-tile descriptor scans, invalid tile_count error path, 812 read requests, 191984 response words, 2 output write bursts, trace audit passed | passed in Icarus |
 | AXI4 write master | one aligned 4-beat write burst | exact AW/W/B behavior | no error | passed in Icarus |
 | RMSNorm | `rmsnorm_layer0_last_token.npz` | TODO | TODO | TODO |
 | Q4 Q GEMV | `qwen3_0p6b_q4_v0/qkv_layer0_last_token_q4.npz` | 0.22418976 | 0.01856172 | passed in Python verifier |
@@ -845,3 +958,17 @@ Pass/fail fields to record:
 | 2026-06-23 | Add local QMAP QKV projection write-back path | Adds `21_export_qmap_qkv_projection_image.py`, `qmap_qkv_projection_compute_path.sv`, and `axi4_write_master.sv`; Python export and Icarus simulations pass against compact Q/K/V expected output words |
 | 2026-06-28 | Add full local QKV AXI top simulation pass | Adds `qmap_qkv_projection_axi_smoke_top.sv` and a parameterized AXI memory-model testbench; compact, medium, larger, and full Layer 0 Q/K/V packets pass local write-back comparison, with full scale `2048/1024/1024` rows and `4096` output writes |
 | 2026-06-28 | Add local q/k norm + RoPE integration pass | Adds signed-gamma q/k norm support and `qk_norm_rope_stage_128.sv`; the real-vector test consumes Q4/QMAP fixed Q/K projection words, runs all 24 heads, and matches q_norm/k_norm plus RoPE golden outputs exactly |
+| 2026-06-28 | Add local KV cache append integration pass | Adds `23_export_kv_cache_append_vectors.py`, `kv_cache_append.sv`, and `qk_norm_rope_kv_cache_stage.sv`; standalone and combined tests match exact K/V cache write addresses/data under backpressure |
+| 2026-06-28 | Add local attention-score integration pass | Adds `24_export_attention_score_vectors.py`, `attention_score_stage.sv`, and `tb_attention_score_stage.sv`; the testbench and CSV trace audit prove exact GQA K-cache request order, response pairing, and raw/scaled score outputs |
+| 2026-06-28 | Add local attention softmax/value pass | Adds `25_export_attention_softmax_value_vectors.py`, `attention_softmax_value_stage.sv`, and `tb_attention_softmax_value_stage.sv`; the testbench and CSV trace audit prove exact fixed softmax probabilities, V-cache response pairing, and attention-output words |
+| 2026-06-28 | Add local attention o_proj pass | Adds `26_export_o_proj_vectors.py`, `o_proj_stage.sv`, and `tb_o_proj_stage.sv`; the testbench proves exact Q12.12 `o_proj_out[1024]` words under output backpressure |
+| 2026-06-29 | Add local post-attention residual/RMSNorm pass | Adds `27_export_post_attention_residual_norm_vectors.py`, `residual_add_1024.sv`, `post_attention_residual_norm_stage.sv`, and `tb_post_attention_residual_norm_stage.sv`; the testbench proves exact residual and post-norm words plus trace-audited control timing |
+| 2026-06-29 | Add local MLP gate/up projection pass | Adds `28_export_mlp_gate_up_vectors.py`, `mlp_gate_up_proj_stage.sv`, and `tb_mlp_gate_up_proj_stage.sv`; the testbench proves exact Q12.12 gate/up pairs for all 3072 rows under output backpressure |
+| 2026-06-29 | Add local MLP SiLU/multiply pass | Adds `29_export_mlp_silu_mul_vectors.py`, `mlp_silu_mul_stage.sv`, and `tb_mlp_silu_mul_stage.sv`; the testbench proves exact Q12.12 `mlp_hidden[3072]` words under input/output backpressure with CSV trace audit |
+| 2026-06-30 | Add local MLP down projection pass | Adds `30_export_mlp_down_vectors.py`, `mlp_down_proj_stage.sv`, and `tb_mlp_down_proj_stage.sv`; the testbench proves exact Q12.12 `down_out[1024]` words under output backpressure with CSV trace audit |
+| 2026-06-30 | Add local final MLP residual add pass | Adds `31_export_mlp_residual_add_vectors.py`, `mlp_residual_add_stage.sv`, and `tb_mlp_residual_add_stage.sv`; the testbench proves exact Q14.10 `layer_out[1024]` words across two runs with CSV trace audit |
+| 2026-06-30 | Add local final RMSNorm pass | Adds `32_export_final_rmsnorm_vectors.py`, `final_rmsnorm_stage.sv`, and `tb_final_rmsnorm_stage.sv`; the testbench proves exact Q12.12 final-norm words and scalar debug values across two runs with CSV trace audit |
+| 2026-06-30 | Add local LM-head scan and greedy argmax pass | Adds `33_export_lm_head_argmax_vectors.py`, `lm_head_argmax_stage.sv`, and `tb_lm_head_argmax_stage.sv`; the testbench proves exact 1024-row Q4 LM-head scan-window logits and token `264` argmax across two runs with CSV trace audit |
+| 2026-07-01 | Add local memory-backed LM-head scan-window pass | Adds LM-head weight/scale memory hex exports, `lm_head_tile_mem_reader.sv`, `lm_head_argmax_mem_stage.sv`, and `tb_lm_head_argmax_mem_stage.sv`; the testbench proves the same 1024-row LM-head window through memory requests with `1152` read bursts and exact token `264` |
+| 2026-07-01 | Add local runtime LM-head tile scheduler pass | Adds `lm_head_argmax_tile_scheduler.sv` and `tb_lm_head_argmax_tile_scheduler.sv`; the testbench proves runtime scan counts of `64` and `23` tiles through the memory-backed LM-head stage, with exact token `264`, score `1365150750`, and `1392` checked logits |
+| 2026-07-01 | Add local QMAP LM-head descriptor wrapper pass | Adds `34_export_qmap_lm_head_argmax_image.py`, `qmap_lm_head_argmax_compute_path.sv`, and `tb_qmap_lm_head_argmax_compute_path.sv`; the testbench proves descriptor-provided final-norm, weight/scale, scan-range, output, and debug tensors across `64`-tile and `23`-tile scans plus an invalid descriptor error path |

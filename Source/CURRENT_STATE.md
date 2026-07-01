@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-06-23
+Last updated: 2026-07-01
 
 This file is the concise working-state handoff. For durable project context,
 read `Source/PROJECT_CONTEXT.md` first. For detailed address planning, read
@@ -51,6 +51,15 @@ conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/16_profile_rmsno
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/19_export_qmap_dot64_image.py --c-header FPGA_Project/software/qmap_load_smoke/qmap_dot64_image.h
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/20_export_qmap_row1024_image.py --c-header FPGA_Project/software/qmap_row1024_pl_compute_smoke/qmap_row1024_image.h
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/21_export_qmap_qkv_projection_image.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/26_export_o_proj_vectors.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/27_export_post_attention_residual_norm_vectors.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/28_export_mlp_gate_up_vectors.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/29_export_mlp_silu_mul_vectors.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/30_export_mlp_down_vectors.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/31_export_mlp_residual_add_vectors.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/32_export_final_rmsnorm_vectors.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/33_export_lm_head_argmax_vectors.py --scan-rows 1024 --tile-rows 16 --chunk-rows 2048
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/34_export_qmap_lm_head_argmax_image.py
 ```
 
 Stable reference prompt:
@@ -80,13 +89,32 @@ The current hand-written RTL bring-up stack includes:
   - `fixed_udiv.sv`
   - `rmsnorm_apply_1024.sv`
   - `rmsnorm_1024.sv`
+  - `residual_add_1024.sv`
+  - `post_attention_residual_norm_stage.sv`
+  - `final_rmsnorm_stage.sv`
 - RoPE:
   - `rope_qk_layer_128.sv`
 - Attention front-end integration:
   - `qk_norm_128.sv`
   - `qk_norm_rope_stage_128.sv`
-- KV cache address generation:
+  - `attention_score_stage.sv`
+  - `attention_softmax_value_stage.sv`
+- Attention output projection:
+  - `o_proj_stage.sv`
+- MLP:
+  - `mlp_gate_up_proj_stage.sv`
+  - `mlp_silu_mul_stage.sv`
+  - `mlp_down_proj_stage.sv`
+  - `mlp_residual_add_stage.sv`
+- Final output:
+  - `lm_head_argmax_stage.sv`
+  - `lm_head_tile_mem_reader.sv`
+  - `lm_head_argmax_mem_stage.sv`
+  - `lm_head_argmax_tile_scheduler.sv`
+- KV cache append:
   - `kv_cache_addr_gen.sv`
+  - `kv_cache_append.sv`
+  - `qk_norm_rope_kv_cache_stage.sv`
 - QMAP/DDR data movement bring-up:
   - `qmap_defs.svh`
   - `qmap_header_reader.sv`
@@ -100,6 +128,7 @@ The current hand-written RTL bring-up stack includes:
   - `axi4_write_master.sv`
   - `qmap_qkv_projection_compute_path.sv`
   - `qmap_qkv_projection_axi_smoke_top.sv`
+  - `qmap_lm_head_argmax_compute_path.sv`
   - `qmap_dot64_axi_smoke_top.sv`
   - `qmap_dot64_axi_smoke_bd.v`
   - `qmap_row1024_axi_smoke_top.sv`
@@ -112,8 +141,12 @@ Current fixed-point direction:
 - Q4 scales: current bring-up uses unsigned 16-bit `Q2.14`
 - RMSNorm/residual input: signed 24-bit `Q14.10`
 - RMSNorm output and Q/K/RoPE path: signed 24-bit `Q12.12`
-- Layer input/post/final RMSNorm gamma starting format: unsigned 16-bit
-  `UQ8.8`
+- Layer 0 input RMSNorm gamma uses unsigned 16-bit `UQ8.8` in the current
+  real-vector RTL check.
+- Layer 0 post-attention RMSNorm gamma uses signed 16-bit `Q8.7`; the actual
+  `post_attention_layernorm.weight` includes negative values. The final norm
+  also contains some negative gamma values, so unsigned gamma is not a safe
+  full-model default.
 - Q/K head RMSNorm gamma: signed 16-bit `Q8.7` in the current Layer 0
   q/k norm + RoPE RTL stage. This was corrected after confirming Layer 0
   `q_norm.weight` contains negative values.
@@ -227,6 +260,205 @@ Latest local RTL/software validation state:
   buffers with `max_abs_diff=0` and no saturation. The existing
   `tb_rmsnorm_1024_real.sv` and `tb_rope_qk_layer_128.sv` regression
   simulations still pass after adding signed-gamma support to the RMSNorm core.
+- `23_export_kv_cache_append_vectors.py` exports the first fixed K/V cache
+  append vector from the same Layer 0 Q4/QMAP integer contract. It stores
+  RoPE-transformed K and raw reshaped V as signed 24-bit `Q12.12` values padded
+  to 32-bit words and emits exact expected cache write addresses/data.
+- `kv_cache_append.sv` passes in Icarus against the generated vector. The
+  standalone test writes `2048` words, checks exact K then V address/data order,
+  survives deterministic backpressure, and audits that write-stream signals stay
+  stable while stalled.
+- `qk_norm_rope_kv_cache_stage.sv` now combines q/k norm, RoPE, and K/V cache
+  append for the Layer 0 last-token path. Its combined testbench matches Q RoPE
+  and K RoPE with `max_abs_diff=0`, accepts `2048` cache writes, observes the
+  first valid cache write after the norm/RoPE phase, and passes the same
+  stall-stability trace audit.
+- `24_export_attention_score_vectors.py` exports the first fixed attention
+  score vector. It uses the existing Q4 weights/scales, quantizes prompt
+  `input_norm` values into the same Q12.12 activation contract, builds a
+  5-position K cache after k_norm/RoPE, and emits current-token Q plus exact
+  raw and scaled score golden words.
+- `attention_score_stage.sv` passes in Icarus against that vector. It requests
+  K-cache elements through a ready/valid read interface, applies the Qwen3 GQA
+  mapping from 16 Q heads to 8 KV heads, emits raw Q24.24 dot-product sums and
+  Q0.31-scaled scores, and matches all `80` score outputs exactly. The
+  testbench accepts `10240` K requests/responses, injects request backpressure
+  plus variable response latency, stalls the score output stream, and its CSV
+  trace audit confirms request order, response pairing, score order, and
+  stall-stable signals.
+- `25_export_attention_softmax_value_vectors.py` exports the first fixed
+  softmax/value vector. It uses the same 5-position prompt cache, converts
+  scaled Q24.24 scores into UQ0.16 probabilities through a 257-entry UQ0.20
+  exp LUT with 1/16 score steps, and emits signed Q12.12 `attn_out[16,128]`
+  golden words.
+- `attention_softmax_value_stage.sv` passes in Icarus against that vector. It
+  accepts the `80` score stream, computes per-head probabilities, reads V cache
+  through a ready/valid request/response interface, and matches all `2048`
+  Q12.12 attention-output words exactly. The testbench injects score input
+  gaps, `10240` V requests/responses with backpressure and variable response
+  latency, output-stream stalls, and a CSV trace audit confirms score order,
+  V response pairing, probability values, output order, and stall-stable
+  signals.
+- `26_export_o_proj_vectors.py` exports the first Layer 0 attention output
+  projection vector. It reuses the fixed softmax/value `attn_out[2048]`
+  vector, quantizes `attn0.o_proj.weight[1024,2048]` into the same signed Q4
+  plus unsigned Q2.14 scale contract, and emits both unpacked debug hex and
+  32-bit packed simulation hex for the large weight/scale tensors.
+- `o_proj_stage.sv` passes in Icarus against that vector. It reuses the
+  parameterized Q4 GEMV projection controller with `INPUT_SIZE=2048`, converts
+  Q26 row sums to signed Q12.12 outputs, and matches all `1024` Python golden
+  words exactly under output-stream backpressure. The full run accepted 1024
+  outputs, observed 618 output stall cycles, completed 35073 compute cycles,
+  and reported `max_abs_output_diff=0`.
+- `27_export_post_attention_residual_norm_vectors.py` exports the first fixed
+  post-attention residual/RMSNorm vector. It consumes the locally generated
+  fixed `o_proj_stage_real_expected_q12_12.hex`, quantizes the Layer 0 residual
+  input as signed Q14.10, uses signed Q8.7
+  `post_attention_layernorm.weight`, and emits exact residual and post-norm
+  golden vectors plus RMSNorm debug scalars.
+- `residual_add_1024.sv` and `post_attention_residual_norm_stage.sv` pass in
+  Icarus against that vector. The combined test matches all `1024`
+  post-attention residual Q14.10 words and all `1024` post-norm Q12.12 words
+  exactly, with `sum_squares=33222329`, `mean_square=32443`, `rms_q10=180`,
+  `inv_rms=372827`, no saturation, and `max_abs_diff=0` for both output
+  vectors. The CSV trace audit observed one busy-period spurious start pulse,
+  one done cycle, zero error cycles, and the expected
+  residual-then-RMSNorm state sequence.
+- `28_export_mlp_gate_up_vectors.py` exports the first fixed Layer 0 MLP
+  gate/up projection vector. It consumes the locally generated
+  `post_attention_residual_norm_stage_real_expected_norm.hex` post-norm vector,
+  quantizes `mlp.gate_proj.weight[3072,1024]` and
+  `mlp.up_proj.weight[3072,1024]` with the project signed Q4 plus unsigned
+  Q2.14 scale contract, and emits Q26 plus Q12.12 golden outputs.
+- `mlp_gate_up_proj_stage.sv` passes in Icarus against that vector. It runs
+  gate and up projections from the same `post_norm[1024]` activation, reuses
+  the Q4 GEMV projection controller, converts Q26 row sums to signed Q12.12,
+  and streams exact gate/up output pairs. The full run accepted all `3072`
+  output pairs under deterministic output backpressure, observed `1394`
+  output stall cycles, completed `52993` compute cycles, matched every Python
+  golden gate/up word with `max_abs_diff=0`, covered one busy-period spurious
+  start pulse, and passed the CSV trace audit.
+- `29_export_mlp_silu_mul_vectors.py` exports the first fixed Layer 0 MLP
+  SiLU/multiply vector. It consumes the locally generated gate/up Q12.12
+  outputs, builds a UQ0.16 sigmoid LUT over `[-8, 8]` with `1/64` spacing, and
+  emits LUT index, sigmoid, `silu(gate)`, and `mlp_hidden[3072]` golden words.
+  The generated vector has no saturation; `mlp_hidden` ranges from `-3969` to
+  `10573` in Q12.12, and the LUT/fixed SiLU approximation is within about
+  `0.00271` max absolute error versus ideal fixed-point SiLU.
+- `mlp_silu_mul_stage.sv` passes in Icarus against that vector. It streams
+  gate/up pairs through a ready/valid input, checks a flattened sigmoid LUT,
+  computes `silu(gate) * up`, and emits exact Q12.12 `mlp_hidden` words. The
+  full run accepted all `3072` inputs and `3072` outputs, injected `1031`
+  input-gap cycles, `747` input-stall cycles, and `961` output-stall cycles,
+  matched every Python golden word with `max_abs_hidden_diff=0`, covered one
+  busy-period spurious start pulse, and passed the CSV trace audit with one
+  done cycle, zero error cycles, zero saturation cycles, and monotonic
+  input/output index order.
+- `30_export_mlp_down_vectors.py` exports the first fixed Layer 0 MLP down
+  projection vector. It consumes the locally generated `mlp_hidden[3072]`,
+  quantizes `mlp.down_proj.weight[1024,3072]` with the project signed Q4 plus
+  unsigned Q2.14 scale contract, and emits Q26 plus Q12.12 golden outputs.
+  The generated vector has no output saturation; Q12.12 `down_out[1024]`
+  ranges from `-2351` to `7843`, and fixed down projection versus the HF path
+  has max error about `0.16191256` and mean error about `0.022316866`.
+- `mlp_down_proj_stage.sv` passes in Icarus against that vector. It reuses the
+  parameterized Q4 GEMV projection controller with `INPUT_SIZE=3072`, converts
+  Q26 row sums to signed Q12.12, and streams exact `down_out[1024]` words.
+  The full run accepted all `1024` outputs, observed `497` output-stall cycles,
+  completed `52481` compute cycles, matched every Python golden word with
+  `max_abs_output_diff=0`, covered one busy-period spurious start pulse, and
+  passed the CSV trace audit with one done cycle, zero error cycles, zero
+  saturation cycles, sequential output rows, correct final `out_last`, and all
+  64 output tiles covered.
+- `31_export_mlp_residual_add_vectors.py` exports the final fixed Layer 0 MLP
+  residual vector. It consumes the locally generated
+  `post_attn_hidden[1024]` Q14.10 and `down_out[1024]` Q12.12 vectors, emits
+  exact Q14.10 `layer_out[1024]` golden words, and records no residual
+  saturation. The generated `layer_out` ranges from `-1726` to `4593` in
+  Q14.10; fixed Layer 0 output versus the HF path has max error about
+  `0.15058082` and mean error about `0.024729879`.
+- `mlp_residual_add_stage.sv` passes in Icarus against that vector. It wraps
+  the existing sequential `residual_add_1024.sv` block for
+  `post_attn_hidden[1024] + down_out[1024] -> layer_out[1024]`, matches all
+  `1024` Q14.10 output words exactly on two consecutive runs, reports
+  `max_abs_diff=0`, covers one busy-period spurious start pulse, observes two
+  one-cycle done pulses with no adjacent done cycles, and passes an independent
+  CSV trace audit with zero error and zero saturation cycles.
+- `32_export_final_rmsnorm_vectors.py` exports the first fixed full-model
+  current-token final RMSNorm vector. It captures `model.norm` input/output
+  after the full 28-layer Python reference, quantizes final hidden as signed
+  Q14.10 and final RMSNorm gamma as signed Q8.7, and emits exact Q12.12 golden
+  output plus debug scalars. The vector has no input, gamma, or output
+  saturation; final hidden max_abs is `203263` in Q14.10, final gamma includes
+  `3` negative fixed-point entries, and fixed final RMSNorm versus HF has max
+  error about `0.019233763` and mean error about `0.00043280968`.
+- `final_rmsnorm_stage.sv` passes in Icarus against that vector. It wraps
+  `rmsnorm_1024.sv` with signed gamma enabled, matches all `1024` Q12.12
+  output words exactly on two consecutive runs, and matches
+  `sum_squares=271992247168`, `mean_square=265617428`, `rms_q10=16297`, and
+  `inv_rms=4117`. The independent CSV trace audit observed two done pulses,
+  no adjacent done cycles, one busy-period spurious start pulse, full
+  sum/sqrt/div/apply sub-state coverage, zero error cycles, and zero
+  saturation cycles.
+- `33_export_lm_head_argmax_vectors.py` exports the first fixed Q4 LM-head
+  scan/argmax vector from the passing full-model final RMSNorm output. It
+  quantizes the tied `lm_head.weight` path as signed Q4 plus unsigned Q2.14
+  scales, proves the full Q4 argmax in Python is token `264` (`' a'`) with
+  score `1365150750`, matching the HF/FP32 argmax, and emits a tiled
+  1024-row scan window `[0,1024)` that contains that winner.
+- `lm_head_argmax_stage.sv` passes in Icarus against that vector. It requests
+  16-row Q4 weight/scale tiles through a ready/valid tile interface, reuses
+  `q4_gemv_tile_1024.sv`, checks all `2048` logits across two full runs
+  exactly, reports `max_abs_logit_diff=0`, returns best token `264` and score
+  `1365150750`, covers one busy-period spurious start pulse, and passes an
+  independent CSV trace audit with `128` tile requests, `128` tile responses,
+  `128` tile updates, no error cycles, no adjacent done cycles, and exact
+  `0..63` tile order on both runs. This also fixed a shared
+  `q4_gemv_tile_1024.sv` output-hold bug by registering tile outputs when all
+  row lanes complete; the older tile and projection smoke tests pass after
+  updating their timeout budgets to the current row-kernel latency.
+- `lm_head_tile_mem_reader.sv` and `lm_head_argmax_mem_stage.sv` turn that
+  LM-head tile interface into a project-local memory-facing path for the same
+  1024-row scan window. The reader fetches each 16-row tile as eight 1024-byte
+  packed-Q4 weight bursts plus one 512-byte scale burst from exported
+  LM-head base addresses, then feeds `lm_head_argmax_stage.sv`.
+  `tb_lm_head_argmax_mem_stage.sv` passes in Icarus across two full runs:
+  best token `264`, score `1365150750`, `2048` checked logits,
+  `max_abs_logit_diff=0`, `1152` memory read requests, `278528` response
+  words, `1152` response-last handshakes, no error cycles, no adjacent done
+  cycles, full core/reader state coverage, and one busy-period spurious start
+  pulse.
+- `lm_head_argmax_tile_scheduler.sv` reuses `lm_head_argmax_mem_stage.sv` as a
+  one-tile child engine, keeps the global best token/score across runtime tile
+  windows, and defaults to `MAX_TILES=9496` for the full `151936`-row tied
+  embedding/LM-head vocabulary. `tb_lm_head_argmax_tile_scheduler.sv` passes in
+  Icarus across two runtime scan counts: `64` tiles for the existing 1024-row
+  window and `23` tiles for a 368-row prefix. It reports final token `264`,
+  score `1365150750`, `783` memory read requests, `189312` response words,
+  `696` weight requests, `87` scale requests, `1392` checked logits,
+  `max_abs_logit_diff=0`, no error cycles, no adjacent done cycles, full
+  scheduler/core/reader state coverage, and tile coverage
+  `max_tile_run1=63` / `max_tile_run2=22`. This proves the runtime scheduler
+  control path locally.
+- `34_export_qmap_lm_head_argmax_image.py` exports a QMAP LM-head runtime packet
+  at `0x4_0500_0000`. The packet has six active descriptors for metadata,
+  final RMSNorm activation, persistent LM-head Q4 weights, persistent Q2.14
+  scales, output token/score, and expected/debug token/score. The weight and
+  scale descriptors expose the scan range through `aux2=scan_base` and
+  `aux3=tile_count`.
+- `qmap_lm_head_argmax_compute_path.sv` passes in Icarus against that packet.
+  It reads the QMAP header/descriptors, validates the LM-head descriptor
+  contract, reads `final_norm[1024]`, runs `lm_head_argmax_tile_scheduler.sv`,
+  and writes `{token, score_low32, score_high32}` to the output descriptor.
+  `tb_qmap_lm_head_argmax_compute_path.sv` covers two successful descriptor
+  scan counts (`64` tiles and `23` tiles) plus an invalid `tile_count=0`
+  descriptor. The passing run reports token `264`, score `1365150750`,
+  `812` read requests, `191984` response words, `696` weight requests,
+  `87` scale requests, `2` output write bursts, `6` output write words,
+  `1392` checked logits, `max_abs_logit_diff=0`, no error rows in the two
+  successful runs, no adjacent done cycles, and full wrapper/scheduler/core/
+  reader state coverage. The invalid descriptor run raises error, writes no
+  output, and clears the externally visible best result.
 - RTL source files now use explicit `input wire logic` ports. This keeps
   `default_nettype none` enabled while satisfying Vivado 2025.1 synthesis,
   which rejects plain `input logic` as an implicit net in this flow.
@@ -416,12 +648,21 @@ Previous useful checkpoint:
   output-buffer addresses.
 - The full-model memory-map layout for Q4 artifacts, KV cache, activation
   buffers, RoPE tables, and debug regions is still draft.
-- RMSNorm, GEMV, RoPE, and KV address RTL blocks are validated in focused
-  simulations, but they are not yet integrated into a streaming or memory-
-  mapped one-token datapath.
-- Attention score/softmax/value accumulation, residual add, SiLU, MLP
-  elementwise multiply, final LM-head scan, and greedy argmax are still
-  pending in RTL.
+- RMSNorm, GEMV, RoPE, K/V cache append, attention score, softmax/value,
+  `o_proj`, post-attention residual/RMSNorm, MLP gate/up projection, MLP
+  SiLU/multiply, MLP down projection, final MLP residual add, full-model final
+  RMSNorm, the tiled LM-head argmax core, the memory-backed 1024-row LM-head
+  scan-window wrapper, the runtime LM-head tile scheduler, and the QMAP
+  descriptor-backed LM-head wrapper are validated in focused simulations. The
+  Q/K norm + RoPE + cache-append chain is locally integrated for the Layer 0
+  last-token path, and attention score plus softmax/value now have K/V-cache
+  read-interface simulations, but these blocks are not yet wrapped as a full
+  memory-mapped one-token datapath.
+- The LM-head QMAP wrapper now proves descriptor-visible scan control over the
+  1024-row scan window and a shorter 368-row prefix. A full `151936`-row /
+  `9496`-tile vocabulary scan, or an equivalent descriptor-backed full-vocab
+  proof, is still pending before treating LM-head as a deployable full-vocab
+  hardware path.
 - Cache coherency, bulk transfer strategy, and any future DMA policy are still
   open. The current proven path is direct PS memory-mapped 32-bit access.
 - The isolated Q4 GEMV smoke-test phase is considered complete enough after the
@@ -436,21 +677,33 @@ Previous useful checkpoint:
 
 ## Immediate Next Step
 
-Use the full locally passing QKV AXI write-back path and the locally passing
-q/k norm + RoPE stage as regression baselines, then add the KV-cache append
-stage in local RTL simulation before returning to hardware.
+Use the full locally passing QKV AXI write-back path, the q/k norm + RoPE +
+KV-cache append stage, the attention-score stage, the softmax/value stage,
+the `o_proj` stage, the post-attention residual/RMSNorm stage, the MLP
+gate/up projection, SiLU/multiply, down projection, final residual stage,
+full-model final RMSNorm stage, tiled LM-head argmax stage, memory-backed
+LM-head scan-window wrapper, runtime LM-head tile scheduler, and QMAP
+descriptor-backed LM-head wrapper as regression baselines. Continue with the
+LM-head full-vocabulary local proof before returning to hardware.
 
 Recommended next slice:
 
 1. Keep the passing row1024 board design, the full QKV AXI simulation, and
-   `tb_qk_norm_rope_stage_128.sv` as regression baselines.
-2. Implement the next local stage:
-   `k_rope[8,128] + v_flat[8,128] -> KV cache append`.
-3. Reuse `kv_cache_addr_gen.sv` for byte-address generation and add a small
-   write controller/testbench that checks both addresses and 32-bit padded
-   `Q12.12` payload words.
-4. After K/V cache append passes locally, continue into attention score,
-   softmax/value accumulation, and `o_proj`.
+   `tb_qk_norm_rope_kv_cache_stage.sv`, `tb_attention_score_stage.sv`, and
+   `tb_attention_softmax_value_stage.sv`, `tb_o_proj_stage.sv`, plus
+   `tb_post_attention_residual_norm_stage.sv` and
+   `tb_mlp_gate_up_proj_stage.sv`, `tb_mlp_silu_mul_stage.sv`, and
+   `tb_mlp_down_proj_stage.sv` and `tb_mlp_residual_add_stage.sv`, as
+   regression baselines. Keep `tb_final_rmsnorm_stage.sv`,
+   `tb_lm_head_argmax_stage.sv`, `tb_lm_head_argmax_mem_stage.sv`, and
+   `tb_lm_head_argmax_tile_scheduler.sv` plus
+   `tb_qmap_lm_head_argmax_compute_path.sv` as the current full-model
+   final-output regressions.
+2. Prove either the complete `151936`-row / `9496`-tile vocabulary scan in the
+   memory model, or an equivalent descriptor-backed full-vocab sweep that
+   reuses the same scheduler and reports exact token `264`.
+3. After that local full-vocab proof passes, choose the first one-token
+   memory-mapped top wrapper boundary before any new board checkpoint.
 
 ## Practical Notes
 
