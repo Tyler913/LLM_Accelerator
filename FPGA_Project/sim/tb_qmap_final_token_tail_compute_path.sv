@@ -3,39 +3,26 @@
 
 `include "qmap_defs.svh"
 
-`ifdef QMAP_LM_HEAD_TB_FULL_VOCAB
-`ifndef QMAP_LM_HEAD_TB_MAX_TILES
-`define QMAP_LM_HEAD_TB_MAX_TILES 9496
+`ifdef QMAP_FINAL_TOKEN_TB_FULL_VOCAB
+`ifndef QMAP_FINAL_TOKEN_TB_MAX_TILES
+`define QMAP_FINAL_TOKEN_TB_MAX_TILES 9496
 `endif
-`ifndef QMAP_LM_HEAD_TB_ENABLE_SECOND_RUN
-`define QMAP_LM_HEAD_TB_ENABLE_SECOND_RUN 0
-`endif
-`ifndef QMAP_LM_HEAD_TB_ENABLE_INVALID_RUN
-`define QMAP_LM_HEAD_TB_ENABLE_INVALID_RUN 0
+`ifndef QMAP_FINAL_TOKEN_TB_ENABLE_INVALID_RUN
+`define QMAP_FINAL_TOKEN_TB_ENABLE_INVALID_RUN 0
 `endif
 `endif
 
-`ifndef QMAP_LM_HEAD_TB_MAX_TILES
-`define QMAP_LM_HEAD_TB_MAX_TILES 64
+`ifndef QMAP_FINAL_TOKEN_TB_MAX_TILES
+`define QMAP_FINAL_TOKEN_TB_MAX_TILES 64
 `endif
 
-`ifndef QMAP_LM_HEAD_TB_SECOND_RUN_TILES
-`define QMAP_LM_HEAD_TB_SECOND_RUN_TILES 23
+`ifndef QMAP_FINAL_TOKEN_TB_ENABLE_INVALID_RUN
+`define QMAP_FINAL_TOKEN_TB_ENABLE_INVALID_RUN 1
 `endif
 
-`ifndef QMAP_LM_HEAD_TB_ENABLE_SECOND_RUN
-`define QMAP_LM_HEAD_TB_ENABLE_SECOND_RUN 1
-`endif
-
-`ifndef QMAP_LM_HEAD_TB_ENABLE_INVALID_RUN
-`define QMAP_LM_HEAD_TB_ENABLE_INVALID_RUN 1
-`endif
-
-module tb_qmap_lm_head_argmax_compute_path #(
-    parameter int MAX_TILES          = `QMAP_LM_HEAD_TB_MAX_TILES,
-    parameter int SECOND_RUN_TILES   = `QMAP_LM_HEAD_TB_SECOND_RUN_TILES,
-    parameter int ENABLE_SECOND_RUN  = `QMAP_LM_HEAD_TB_ENABLE_SECOND_RUN,
-    parameter int ENABLE_INVALID_RUN = `QMAP_LM_HEAD_TB_ENABLE_INVALID_RUN
+module tb_qmap_final_token_tail_compute_path #(
+    parameter int MAX_TILES          = `QMAP_FINAL_TOKEN_TB_MAX_TILES,
+    parameter int ENABLE_INVALID_RUN = `QMAP_FINAL_TOKEN_TB_ENABLE_INVALID_RUN
 );
 
     localparam int ADDR_WIDTH       = 64;
@@ -45,12 +32,14 @@ module tb_qmap_lm_head_argmax_compute_path #(
     localparam int INPUT_SIZE       = 1024;
     localparam int GROUP_SIZE       = 64;
     localparam int GROUP_COUNT      = INPUT_SIZE / GROUP_SIZE;
-    localparam int ACT_WIDTH        = 24;
+    localparam int HIDDEN_WIDTH     = 24;
+    localparam int GAMMA_WIDTH      = 16;
+    localparam int NORM_WIDTH       = 24;
     localparam int WEIGHT_WIDTH     = 4;
     localparam int SCALE_WIDTH      = 16;
     localparam int MEM_DATA_WIDTH   = 32;
     localparam int MAX_READ_BYTES   = 1024;
-    localparam int PARTIAL_WIDTH    = ACT_WIDTH + WEIGHT_WIDTH + $clog2(GROUP_SIZE);
+    localparam int PARTIAL_WIDTH    = NORM_WIDTH + WEIGHT_WIDTH + $clog2(GROUP_SIZE);
     localparam int SCALED_WIDTH     = PARTIAL_WIDTH + SCALE_WIDTH;
     localparam int ROW_ACC_WIDTH    = SCALED_WIDTH + $clog2(GROUP_COUNT) + 2;
     localparam int TOKEN_ID_WIDTH   = 32;
@@ -64,25 +53,25 @@ module tb_qmap_lm_head_argmax_compute_path #(
     localparam int WORDS_PER_TILE = (TILE_WEIGHT_BYTES + TILE_SCALE_BYTES) / 4;
     localparam int WEIGHT_WORDS = SCAN_ROWS * WEIGHT_ROW_BYTES / 4;
     localparam int SCALE_WORDS = SCAN_ROWS * SCALE_ROW_BYTES / 4;
-    localparam int QMAP_IMAGE_BYTES = 32'h0000_2000;
+    localparam int QMAP_IMAGE_BYTES = 32'h0000_4000;
     localparam int QMAP_WORDS = QMAP_IMAGE_BYTES / 4;
     localparam int DESCRIPTOR_WORDS = 32;
     localparam int DESCRIPTOR_TABLE_WORD_OFFSET = 32'h0100 / 4;
+    localparam int DESC_DTYPE_WORD = 2;
     localparam int DESC_BASE_LO_WORD = 8;
     localparam int DESC_BASE_HI_WORD = 9;
-    localparam int DESC_AUX2_WORD = 26;
-    localparam int DESC_AUX3_WORD = 27;
-    localparam int SLOT_METADATA = 0;
-    localparam int SLOT_WEIGHT = 2;
-    localparam int SLOT_SCALE = 3;
+    localparam int SLOT_NORM_OUTPUT = 1;
     localparam int SLOT_OUTPUT = 4;
-    localparam int SLOT_EXPECTED = 5;
-    localparam int METADATA_WORD_OFFSET = 32'h0500 / 4;
+    localparam int SLOT_FINAL_HIDDEN = 6;
+    localparam int SLOT_FINAL_GAMMA = 7;
     localparam logic [15 : 0] MAX_READ_BYTES_U16 = MAX_READ_BYTES;
     localparam logic [15 : 0] TILE_SCALE_BYTES_U16 = TILE_SCALE_BYTES;
     localparam int REGION_QMAP = 0;
     localparam int REGION_WEIGHT = 1;
     localparam int REGION_SCALE = 2;
+    localparam int WRITE_KIND_NONE = 0;
+    localparam int WRITE_KIND_NORM = 1;
+    localparam int WRITE_KIND_OUTPUT = 2;
 
     logic clk;
     logic rst_n;
@@ -90,10 +79,12 @@ module tb_qmap_lm_head_argmax_compute_path #(
     logic busy;
     logic done;
     logic error;
+    logic norm_saturation;
     logic [TOKEN_ID_WIDTH-1 : 0] best_token_id;
     logic signed [ROW_ACC_WIDTH-1 : 0] best_score_q26;
     logic [31 : 0] tiles_started;
     logic [31 : 0] tiles_completed;
+    logic [31 : 0] norm_cycle_count;
     logic [31 : 0] mem_read_burst_count;
     logic [31 : 0] mem_read_word_count;
     logic [31 : 0] mem_write_word_count;
@@ -122,17 +113,18 @@ module tb_qmap_lm_head_argmax_compute_path #(
     logic [31 : 0] weight_words_mem [0:WEIGHT_WORDS-1];
     logic [31 : 0] scale_words_mem [0:SCALE_WORDS-1];
     logic signed [ROW_ACC_WIDTH-1 : 0] expected_logits_mem [0:SCAN_ROWS-1];
+    logic signed [NORM_WIDTH-1 : 0] final_norm_expected_mem [0:INPUT_SIZE-1];
     logic [31 : 0] expected_words_mem [0:2];
     logic [TOKEN_ID_WIDTH-1 : 0] scan_base_token_mem [0:0];
     logic [ADDR_WIDTH-1 : 0] weight_base_addr_mem [0:0];
     logic [ADDR_WIDTH-1 : 0] scale_base_addr_mem [0:0];
 
     string vector_dir;
-    string prefix;
+    string lm_prefix;
     string qmap_image_file;
     string qmap_expected_file;
-    string wavefile;
     string tracefile;
+    string wavefile;
     integer trace_fd;
     integer trace_every_cycle;
     integer fast_memory;
@@ -141,26 +133,22 @@ module tb_qmap_lm_head_argmax_compute_path #(
     integer mismatch_count;
     integer print_count;
     integer run_index;
-    integer current_run_tile_count;
     integer done_seen_count;
     integer last_done_cycle;
     integer spurious_start_seen_busy;
-    integer expected_done_count;
-    integer expected_success_runs;
-    integer expected_total_read_req_count;
-    integer expected_total_read_rsp_count;
-    integer expected_total_weight_req_count;
-    integer expected_total_scale_req_count;
-    integer expected_total_tile_update_count;
-    integer expected_total_logit_count;
     integer mem_req_fire_count;
     integer mem_rsp_fire_count;
     integer mem_qmap_req_count;
-    integer mem_activation_req_count;
+    integer mem_hidden_req_count;
+    integer mem_gamma_req_count;
+    integer mem_norm_read_req_count;
     integer mem_weight_req_count;
     integer mem_scale_req_count;
     integer mem_wr_req_count;
     integer mem_wr_word_count_total;
+    integer norm_write_word_count;
+    integer output_write_word_count;
+    integer norm_write_mismatch_count;
     integer core_update_count;
     integer checked_logit_count;
     integer max_abs_logit_diff;
@@ -168,6 +156,9 @@ module tb_qmap_lm_head_argmax_compute_path #(
     integer run_checked_logit_base;
     integer run_core_update_base;
     integer run_wr_req_base;
+    integer run_norm_wr_base;
+    integer run_output_wr_base;
+    integer run_write_word_base;
     integer element_index;
     integer row_index;
     integer active_region;
@@ -181,6 +172,7 @@ module tb_qmap_lm_head_argmax_compute_path #(
     integer wr_data_stall_active;
     integer active_write_index;
     integer active_write_words_left;
+    integer active_write_kind;
     integer write_done_delay;
     longint signed logit_diff;
     logic read_active;
@@ -196,6 +188,7 @@ module tb_qmap_lm_head_argmax_compute_path #(
     logic [TOKEN_ID_WIDTH-1 : 0] token_base;
     logic [ADDR_WIDTH-1 : 0] weight_base_addr;
     logic [ADDR_WIDTH-1 : 0] scale_base_addr;
+    logic [31 : 0] expected_norm_index;
     logic [31 : 0] expected_output_index;
     logic [31 : 0] expected_run_token;
     logic signed [ROW_ACC_WIDTH-1 : 0] expected_run_score_q26;
@@ -203,33 +196,31 @@ module tb_qmap_lm_head_argmax_compute_path #(
     logic [31 : 0] last_success_token;
     logic signed [ROW_ACC_WIDTH-1 : 0] last_success_score_q26;
 
-    qmap_lm_head_argmax_compute_path #(
+    qmap_final_token_tail_compute_path #(
         .ADDR_WIDTH      (ADDR_WIDTH),
+        .DESCRIPTOR_SLOTS(8),
         .MAX_TILES       (MAX_TILES),
         .TILE_COUNT_WIDTH(TILE_COUNT_WIDTH),
         .TILE_ROWS       (TILE_ROWS),
         .INPUT_SIZE      (INPUT_SIZE),
         .GROUP_SIZE      (GROUP_SIZE),
         .GROUP_COUNT     (GROUP_COUNT),
-        .ACT_WIDTH       (ACT_WIDTH),
-        .WEIGHT_WIDTH    (WEIGHT_WIDTH),
-        .SCALE_WIDTH     (SCALE_WIDTH),
-        .ROW_ACC_WIDTH   (ROW_ACC_WIDTH),
-        .TOKEN_ID_WIDTH  (TOKEN_ID_WIDTH),
         .MEM_DATA_WIDTH  (MEM_DATA_WIDTH),
         .MAX_READ_BYTES  (MAX_READ_BYTES)
     ) dut (
         .i_clk                  (clk),
         .i_rst_n                (rst_n),
         .i_start                (start),
-        .i_qmap_base_addr       (`QMAP_LM_HEAD_BASE_ADDR),
+        .i_qmap_base_addr       (`QMAP_FINAL_TOKEN_BASE_ADDR),
         .o_busy                 (busy),
         .o_done                 (done),
         .o_error                (error),
+        .o_norm_saturation      (norm_saturation),
         .o_best_token_id        (best_token_id),
         .o_best_score_q26       (best_score_q26),
         .o_tiles_started        (tiles_started),
         .o_tiles_completed      (tiles_completed),
+        .o_norm_cycle_count     (norm_cycle_count),
         .o_mem_read_burst_count (mem_read_burst_count),
         .o_mem_read_word_count  (mem_read_word_count),
         .o_mem_write_word_count (mem_write_word_count),
@@ -260,12 +251,12 @@ module tb_qmap_lm_head_argmax_compute_path #(
 
     initial begin
         integer enable_dumpwaves;
-`ifdef QMAP_LM_HEAD_TB_FULL_VOCAB
+`ifdef QMAP_FINAL_TOKEN_TB_FULL_VOCAB
         enable_dumpwaves = 0;
 `else
         enable_dumpwaves = 1;
 `endif
-        wavefile = "FPGA_Project/wave/qmap_lm_head_argmax_compute_path.vcd";
+        wavefile = "FPGA_Project/wave/qmap_final_token_tail_compute_path.vcd";
         if ($value$plusargs("wavefile=%s", wavefile)) begin
         end
         if ($value$plusargs("dumpwaves=%d", enable_dumpwaves)) begin
@@ -278,6 +269,7 @@ module tb_qmap_lm_head_argmax_compute_path #(
             $dumpvars(0, busy);
             $dumpvars(0, done);
             $dumpvars(0, error);
+            $dumpvars(0, norm_saturation);
             $dumpvars(0, mem_rd_req_valid);
             $dumpvars(0, mem_rd_req_ready);
             $dumpvars(0, mem_rd_rsp_valid);
@@ -289,9 +281,10 @@ module tb_qmap_lm_head_argmax_compute_path #(
             $dumpvars(0, best_token_id);
             $dumpvars(0, best_score_q26);
             $dumpvars(0, dut.state);
-            $dumpvars(0, dut.scheduler.state);
-            $dumpvars(0, dut.scheduler.tile_stage.argmax_core.current_state);
-            $dumpvars(0, dut.scheduler.tile_stage.tile_reader.state);
+            $dumpvars(0, dut.final_norm_stage.current_state);
+            $dumpvars(0, dut.lm_head_path.state);
+            $dumpvars(0, dut.lm_head_path.scheduler.state);
+            $dumpvars(0, dut.lm_head_path.scheduler.tile_stage.argmax_core.current_state);
         end
     end
 
@@ -310,15 +303,22 @@ module tb_qmap_lm_head_argmax_compute_path #(
         end
     endfunction
 
+    function automatic logic [31 : 0] norm_expected_word(input integer index);
+        begin
+            norm_expected_word = {
+                {8{final_norm_expected_mem[index][NORM_WIDTH-1]}},
+                final_norm_expected_mem[index]
+            };
+        end
+    endfunction
+
     function automatic logic req_ready_pattern(input integer cycle, input integer count);
         begin
             if (fast_memory != 0) begin
                 req_ready_pattern = 1'b1;
             end
             else begin
-                req_ready_pattern =
-                    ((cycle % 11) != 3) &&
-                    (((cycle + count) % 17) != 5);
+                req_ready_pattern = ((cycle % 11) != 3) && (((cycle + count) % 17) != 5);
             end
         end
     endfunction
@@ -340,9 +340,7 @@ module tb_qmap_lm_head_argmax_compute_path #(
                 response_gap_pattern = 1'b1;
             end
             else begin
-                response_gap_pattern =
-                    ((cycle % 13) != 4) &&
-                    (((cycle + word_count) % 29) != 7);
+                response_gap_pattern = ((cycle % 13) != 4) && (((cycle + word_count) % 29) != 7);
             end
         end
     endfunction
@@ -364,9 +362,7 @@ module tb_qmap_lm_head_argmax_compute_path #(
                 wr_data_ready_pattern = 1'b1;
             end
             else begin
-                wr_data_ready_pattern =
-                    ((cycle % 7) != 1) &&
-                    (((cycle + count) % 13) != 4);
+                wr_data_ready_pattern = ((cycle % 7) != 1) && (((cycle + count) % 13) != 4);
             end
         end
     endfunction
@@ -374,18 +370,10 @@ module tb_qmap_lm_head_argmax_compute_path #(
     function automatic logic [31 : 0] memory_word(input integer region, input integer word_index);
         begin
             case (region)
-                REGION_QMAP: begin
-                    memory_word = qmap_mem[word_index];
-                end
-                REGION_WEIGHT: begin
-                    memory_word = weight_words_mem[word_index];
-                end
-                REGION_SCALE: begin
-                    memory_word = scale_words_mem[word_index];
-                end
-                default: begin
-                    memory_word = 32'hDEAD_BAD0;
-                end
+                REGION_QMAP: memory_word = qmap_mem[word_index];
+                REGION_WEIGHT: memory_word = weight_words_mem[word_index];
+                REGION_SCALE: memory_word = scale_words_mem[word_index];
+                default: memory_word = 32'hDEAD_BAD1;
             endcase
         end
     endfunction
@@ -394,33 +382,26 @@ module tb_qmap_lm_head_argmax_compute_path #(
         begin
             $readmemh(qmap_image_file, qmap_mem);
             $readmemh(qmap_expected_file, expected_words_mem);
-            $readmemh({vector_dir, "/", prefix, "_weight_words32.hex"}, weight_words_mem);
-            $readmemh({vector_dir, "/", prefix, "_scale_words32.hex"}, scale_words_mem);
-            $readmemh({vector_dir, "/", prefix, "_expected_scan_logits_q26.hex"}, expected_logits_mem);
-            $readmemh({vector_dir, "/", prefix, "_scan_base_token.hex"}, scan_base_token_mem);
-            $readmemh({vector_dir, "/", prefix, "_weight_base_addr.hex"}, weight_base_addr_mem);
-            $readmemh({vector_dir, "/", prefix, "_scale_base_addr.hex"}, scale_base_addr_mem);
+            $readmemh({vector_dir, "/final_rmsnorm_stage_real_expected.hex"}, final_norm_expected_mem);
+            $readmemh({vector_dir, "/", lm_prefix, "_weight_words32.hex"}, weight_words_mem);
+            $readmemh({vector_dir, "/", lm_prefix, "_scale_words32.hex"}, scale_words_mem);
+            $readmemh({vector_dir, "/", lm_prefix, "_expected_scan_logits_q26.hex"}, expected_logits_mem);
+            $readmemh({vector_dir, "/", lm_prefix, "_scan_base_token.hex"}, scan_base_token_mem);
+            $readmemh({vector_dir, "/", lm_prefix, "_weight_base_addr.hex"}, weight_base_addr_mem);
+            $readmemh({vector_dir, "/", lm_prefix, "_scale_base_addr.hex"}, scale_base_addr_mem);
             token_base = scan_base_token_mem[0];
             weight_base_addr = weight_base_addr_mem[0];
             scale_base_addr = scale_base_addr_mem[0];
-            expected_output_index = (descriptor_base_addr(SLOT_OUTPUT) - `QMAP_LM_HEAD_BASE_ADDR) >> 2;
+            expected_norm_index = (descriptor_base_addr(SLOT_NORM_OUTPUT) - `QMAP_FINAL_TOKEN_BASE_ADDR) >> 2;
+            expected_output_index = (descriptor_base_addr(SLOT_OUTPUT) - `QMAP_FINAL_TOKEN_BASE_ADDR) >> 2;
         end
     endtask
 
-    task set_descriptor_tile_count(input integer tile_count);
+    task clear_write_targets;
         begin
-            qmap_mem[descriptor_word_index(SLOT_METADATA, DESC_AUX3_WORD)] = tile_count;
-            qmap_mem[descriptor_word_index(SLOT_WEIGHT, DESC_AUX3_WORD)] = tile_count;
-            qmap_mem[descriptor_word_index(SLOT_SCALE, DESC_AUX3_WORD)] = tile_count;
-            qmap_mem[descriptor_word_index(SLOT_OUTPUT, DESC_AUX3_WORD)] = tile_count;
-            qmap_mem[descriptor_word_index(SLOT_EXPECTED, DESC_AUX3_WORD)] = tile_count;
-            qmap_mem[METADATA_WORD_OFFSET + 1] = tile_count * TILE_ROWS;
-            qmap_mem[METADATA_WORD_OFFSET + 3] = tile_count;
-        end
-    endtask
-
-    task clear_output_words;
-        begin
+            for (element_index = 0; element_index < INPUT_SIZE; element_index = element_index + 1) begin
+                qmap_mem[expected_norm_index + element_index] = 32'hA5A5_0000 | element_index[15:0];
+            end
             qmap_mem[expected_output_index + 0] = 32'hFFFF_FFFF;
             qmap_mem[expected_output_index + 1] = 32'hFFFF_FFFF;
             qmap_mem[expected_output_index + 2] = 32'hFFFF_FFFF;
@@ -453,36 +434,26 @@ module tb_qmap_lm_head_argmax_compute_path #(
             burst_id = run_scheduler_req_count % BURSTS_PER_TILE;
             tile_token = token_base + (tile_id * TILE_ROWS);
 
-            if (tile_id >= current_run_tile_count) begin
-                if (print_count < 32) begin
-                    $display("FAIL: extra scheduler memory request run %0d tile_id=%0d tile_count=%0d",
-                             run_index, tile_id, current_run_tile_count);
-                    print_count = print_count + 1;
-                end
+            if (tile_id >= MAX_TILES) begin
+                $display("FAIL: extra LM scheduler request tile_id=%0d max_tiles=%0d", tile_id, MAX_TILES);
                 mismatch_count = mismatch_count + 1;
             end
 
             if (burst_id < WEIGHT_BURSTS_PER_TILE) begin
-                expected_addr =
-                    weight_base_addr +
-                    (tile_token * WEIGHT_ROW_BYTES) +
-                    (burst_id * MAX_READ_BYTES);
+                expected_addr = weight_base_addr + (tile_token * WEIGHT_ROW_BYTES) + (burst_id * MAX_READ_BYTES);
                 expected_len = MAX_READ_BYTES_U16;
                 mem_weight_req_count = mem_weight_req_count + 1;
             end
             else begin
-                expected_addr =
-                    scale_base_addr +
-                    (tile_token * SCALE_ROW_BYTES);
+                expected_addr = scale_base_addr + (tile_token * SCALE_ROW_BYTES);
                 expected_len = TILE_SCALE_BYTES_U16;
                 mem_scale_req_count = mem_scale_req_count + 1;
             end
 
             if ((mem_rd_req_addr !== expected_addr) || (mem_rd_req_len_bytes !== expected_len)) begin
                 if (print_count < 32) begin
-                    $display("FAIL: scheduler request mismatch run %0d tile %0d burst %0d addr=0x%016h expected=0x%016h len=%0d expected_len=%0d",
-                             run_index, tile_id, burst_id, mem_rd_req_addr, expected_addr,
-                             mem_rd_req_len_bytes, expected_len);
+                    $display("FAIL: LM request mismatch tile %0d burst %0d addr=0x%016h expected=0x%016h len=%0d expected_len=%0d",
+                             tile_id, burst_id, mem_rd_req_addr, expected_addr, mem_rd_req_len_bytes, expected_len);
                     print_count = print_count + 1;
                 end
                 mismatch_count = mismatch_count + 1;
@@ -496,15 +467,24 @@ module tb_qmap_lm_head_argmax_compute_path #(
         logic [ADDR_WIDTH-1 : 0] weight_end;
         logic [ADDR_WIDTH-1 : 0] scale_end;
         begin
-            qmap_end = `QMAP_LM_HEAD_BASE_ADDR + QMAP_IMAGE_BYTES;
+            qmap_end = `QMAP_FINAL_TOKEN_BASE_ADDR + QMAP_IMAGE_BYTES;
             weight_end = weight_base_addr + (WEIGHT_WORDS * 4);
             scale_end = scale_base_addr + (SCALE_WORDS * 4);
 
-            if ((mem_rd_req_addr >= `QMAP_LM_HEAD_BASE_ADDR) &&
+            if ((mem_rd_req_addr >= `QMAP_FINAL_TOKEN_BASE_ADDR) &&
                 ((mem_rd_req_addr + mem_rd_req_len_bytes) <= qmap_end)) begin
                 mem_qmap_req_count = mem_qmap_req_count + 1;
-                if (mem_rd_req_len_bytes == MAX_READ_BYTES_U16) begin
-                    mem_activation_req_count = mem_activation_req_count + 1;
+                if ((mem_rd_req_addr >= descriptor_base_addr(SLOT_FINAL_HIDDEN)) &&
+                    (mem_rd_req_addr < (descriptor_base_addr(SLOT_FINAL_HIDDEN) + INPUT_SIZE*4))) begin
+                    mem_hidden_req_count = mem_hidden_req_count + 1;
+                end
+                if ((mem_rd_req_addr >= descriptor_base_addr(SLOT_FINAL_GAMMA)) &&
+                    (mem_rd_req_addr < (descriptor_base_addr(SLOT_FINAL_GAMMA) + INPUT_SIZE*4))) begin
+                    mem_gamma_req_count = mem_gamma_req_count + 1;
+                end
+                if ((mem_rd_req_addr >= descriptor_base_addr(SLOT_NORM_OUTPUT)) &&
+                    (mem_rd_req_addr < (descriptor_base_addr(SLOT_NORM_OUTPUT) + INPUT_SIZE*4))) begin
+                    mem_norm_read_req_count = mem_norm_read_req_count + 1;
                 end
             end
             else if ((mem_rd_req_addr >= weight_base_addr) &&
@@ -526,74 +506,14 @@ module tb_qmap_lm_head_argmax_compute_path #(
         end
     endtask
 
-    task check_request_stability;
-        begin
-            if (req_stall_active != 0) begin
-                if ((mem_rd_req_addr !== stalled_req_addr) ||
-                    (mem_rd_req_len_bytes !== stalled_req_len)) begin
-                    if (print_count < 32) begin
-                        $display("FAIL: read request changed while stalled at cycle %0d", cycle_count);
-                        print_count = print_count + 1;
-                    end
-                    mismatch_count = mismatch_count + 1;
-                end
-            end
-        end
-    endtask
-
-    task check_response_stability;
-        begin
-            if (rsp_stall_active != 0) begin
-                if ((mem_rd_rsp_data !== stalled_rsp_data) ||
-                    (mem_rd_rsp_last !== stalled_rsp_last)) begin
-                    if (print_count < 32) begin
-                        $display("FAIL: read response changed while stalled at cycle %0d", cycle_count);
-                        print_count = print_count + 1;
-                    end
-                    mismatch_count = mismatch_count + 1;
-                end
-            end
-        end
-    endtask
-
-    task check_write_request_stability;
-        begin
-            if (wr_req_stall_active != 0) begin
-                if ((mem_wr_req_addr !== stalled_wr_req_addr) ||
-                    (mem_wr_req_len_bytes !== stalled_wr_req_len)) begin
-                    if (print_count < 32) begin
-                        $display("FAIL: write request changed while stalled at cycle %0d", cycle_count);
-                        print_count = print_count + 1;
-                    end
-                    mismatch_count = mismatch_count + 1;
-                end
-            end
-        end
-    endtask
-
-    task check_write_data_stability;
-        begin
-            if (wr_data_stall_active != 0) begin
-                if ((mem_wr_data !== stalled_wr_data) ||
-                    (mem_wr_data_last !== stalled_wr_last)) begin
-                    if (print_count < 32) begin
-                        $display("FAIL: write data changed while stalled at cycle %0d", cycle_count);
-                        print_count = print_count + 1;
-                    end
-                    mismatch_count = mismatch_count + 1;
-                end
-            end
-        end
-    endtask
-
     task check_tile_logits;
         integer local_index;
         logic signed [ROW_ACC_WIDTH-1 : 0] observed_logit;
         begin
             for (row_index = 0; row_index < TILE_ROWS; row_index = row_index + 1) begin
-                local_index = (dut.scheduler_current_tile * TILE_ROWS) + row_index;
+                local_index = (dut.lm_head_path.scheduler_current_tile * TILE_ROWS) + row_index;
                 observed_logit =
-                    $signed(dut.scheduler.tile_stage.argmax_core.tile_output_flat[row_index*ROW_ACC_WIDTH +: ROW_ACC_WIDTH]);
+                    $signed(dut.lm_head_path.scheduler.tile_stage.argmax_core.tile_output_flat[row_index*ROW_ACC_WIDTH +: ROW_ACC_WIDTH]);
                 logit_diff = observed_logit - expected_logits_mem[local_index];
                 if (logit_diff < 0) begin
                     logit_diff = -logit_diff;
@@ -603,15 +523,12 @@ module tb_qmap_lm_head_argmax_compute_path #(
                 end
                 if (observed_logit !== expected_logits_mem[local_index]) begin
                     if (print_count < 32) begin
-                        $display(
-                            "FAIL: logit run %0d tile %0d row %0d token %0d actual=%0d expected=%0d",
-                            run_index,
-                            dut.scheduler_current_tile,
-                            row_index,
-                            token_base + local_index,
-                            observed_logit,
-                            expected_logits_mem[local_index]
-                        );
+                        $display("FAIL: logit tile %0d row %0d token %0d actual=%0d expected=%0d",
+                                 dut.lm_head_path.scheduler_current_tile,
+                                 row_index,
+                                 token_base + local_index,
+                                 observed_logit,
+                                 expected_logits_mem[local_index]);
                         print_count = print_count + 1;
                     end
                     mismatch_count = mismatch_count + 1;
@@ -621,74 +538,86 @@ module tb_qmap_lm_head_argmax_compute_path #(
         end
     endtask
 
-    task check_successful_run(input integer tile_count);
-        integer expected_read_reqs;
-        integer expected_read_words;
+    task check_successful_run;
         integer expected_scheduler_reqs;
         begin
-            expected_scheduler_reqs = tile_count * BURSTS_PER_TILE;
-            expected_read_reqs = 11 + expected_scheduler_reqs;
-            expected_read_words = 1232 + (tile_count * WORDS_PER_TILE);
-
+            expected_scheduler_reqs = MAX_TILES * BURSTS_PER_TILE;
             if (error != 1'b0) begin
-                $display("FAIL: qmap LM-head wrapper error high at done for run %0d", run_index);
+                $display("FAIL: final-token tail error high at done");
+                mismatch_count = mismatch_count + 1;
+            end
+            if (norm_saturation != 1'b0) begin
+                $display("FAIL: final RMSNorm saturation asserted");
                 mismatch_count = mismatch_count + 1;
             end
             if (best_token_id != expected_run_token) begin
-                $display("FAIL: best token run %0d actual=%0d expected=%0d",
-                         run_index, best_token_id, expected_run_token);
+                $display("FAIL: best token actual=%0d expected=%0d", best_token_id, expected_run_token);
                 mismatch_count = mismatch_count + 1;
             end
             if (best_score_q26 != expected_run_score_q26) begin
-                $display("FAIL: best score run %0d actual=%0d expected=%0d",
-                         run_index, best_score_q26, expected_run_score_q26);
+                $display("FAIL: best score actual=%0d expected=%0d", best_score_q26, expected_run_score_q26);
                 mismatch_count = mismatch_count + 1;
             end
-            if (tiles_started != tile_count) begin
-                $display("FAIL: tiles_started run %0d actual=%0d expected=%0d",
-                         run_index, tiles_started, tile_count);
+            if ((tiles_started != MAX_TILES) || (tiles_completed != MAX_TILES)) begin
+                $display("FAIL: tile count started=%0d completed=%0d expected=%0d",
+                         tiles_started, tiles_completed, MAX_TILES);
                 mismatch_count = mismatch_count + 1;
             end
-            if (tiles_completed != tile_count) begin
-                $display("FAIL: tiles_completed run %0d actual=%0d expected=%0d",
-                         run_index, tiles_completed, tile_count);
+            if (run_scheduler_req_count != expected_scheduler_reqs) begin
+                $display("FAIL: scheduler read request count actual=%0d expected=%0d",
+                         run_scheduler_req_count, expected_scheduler_reqs);
                 mismatch_count = mismatch_count + 1;
             end
-            if (mem_read_burst_count != expected_read_reqs) begin
-                $display("FAIL: read burst count run %0d actual=%0d expected=%0d",
-                         run_index, mem_read_burst_count, expected_read_reqs);
+            if ((core_update_count - run_core_update_base) != MAX_TILES) begin
+                $display("FAIL: tile update count actual=%0d expected=%0d",
+                         core_update_count - run_core_update_base, MAX_TILES);
                 mismatch_count = mismatch_count + 1;
             end
-            if (mem_read_word_count != expected_read_words) begin
-                $display("FAIL: read word count run %0d actual=%0d expected=%0d",
-                         run_index, mem_read_word_count, expected_read_words);
+            if ((checked_logit_count - run_checked_logit_base) != MAX_TILES*TILE_ROWS) begin
+                $display("FAIL: checked logit count actual=%0d expected=%0d",
+                         checked_logit_count - run_checked_logit_base, MAX_TILES*TILE_ROWS);
                 mismatch_count = mismatch_count + 1;
             end
-            if (mem_write_word_count != 3) begin
-                $display("FAIL: write word count run %0d actual=%0d expected=3",
-                         run_index, mem_write_word_count);
+            if ((norm_write_word_count - run_norm_wr_base) != INPUT_SIZE) begin
+                $display("FAIL: norm write word count actual=%0d expected=%0d",
+                         norm_write_word_count - run_norm_wr_base, INPUT_SIZE);
                 mismatch_count = mismatch_count + 1;
             end
-            if ((core_update_count - run_core_update_base) != tile_count) begin
-                $display("FAIL: tile update count run %0d actual=%0d expected=%0d",
-                         run_index, core_update_count - run_core_update_base, tile_count);
+            if ((output_write_word_count - run_output_wr_base) != 3) begin
+                $display("FAIL: output write word count actual=%0d expected=3",
+                         output_write_word_count - run_output_wr_base);
                 mismatch_count = mismatch_count + 1;
             end
-            if ((checked_logit_count - run_checked_logit_base) != tile_count*TILE_ROWS) begin
-                $display("FAIL: checked logit count run %0d actual=%0d expected=%0d",
-                         run_index, checked_logit_count - run_checked_logit_base, tile_count*TILE_ROWS);
+            if ((mem_wr_req_count - run_wr_req_base) != 2) begin
+                $display("FAIL: write request count actual=%0d expected=2",
+                         mem_wr_req_count - run_wr_req_base);
                 mismatch_count = mismatch_count + 1;
             end
-            if ((mem_wr_req_count - run_wr_req_base) != 1) begin
-                $display("FAIL: write request count run %0d actual=%0d expected=1",
-                         run_index, mem_wr_req_count - run_wr_req_base);
+            if ((mem_wr_word_count_total - run_write_word_base) != (INPUT_SIZE + 3)) begin
+                $display("FAIL: write data word count actual=%0d expected=%0d",
+                         mem_wr_word_count_total - run_write_word_base, INPUT_SIZE + 3);
                 mismatch_count = mismatch_count + 1;
+            end
+            if (norm_write_mismatch_count != 0) begin
+                $display("FAIL: norm write mismatches=%0d", norm_write_mismatch_count);
+                mismatch_count = mismatch_count + 1;
+            end
+            for (element_index = 0; element_index < INPUT_SIZE; element_index = element_index + 1) begin
+                if (qmap_mem[expected_norm_index + element_index] !== norm_expected_word(element_index)) begin
+                    if (print_count < 32) begin
+                        $display("FAIL: final_norm memory word %0d actual=%08h expected=%08h",
+                                 element_index,
+                                 qmap_mem[expected_norm_index + element_index],
+                                 norm_expected_word(element_index));
+                        print_count = print_count + 1;
+                    end
+                    mismatch_count = mismatch_count + 1;
+                end
             end
             if ((qmap_mem[expected_output_index + 0] !== expected_run_token) ||
                 (qmap_mem[expected_output_index + 1] !== expected_run_score_ext[31 : 0]) ||
                 (qmap_mem[expected_output_index + 2] !== expected_run_score_ext[63 : 32])) begin
-                $display("FAIL: output descriptor words mismatch run %0d actual=%08h_%08h_%08h expected=%08h_%08h_%08h",
-                         run_index,
+                $display("FAIL: output token/score memory mismatch actual=%08h_%08h_%08h expected=%08h_%08h_%08h",
                          qmap_mem[expected_output_index + 2],
                          qmap_mem[expected_output_index + 1],
                          qmap_mem[expected_output_index + 0],
@@ -702,19 +631,20 @@ module tb_qmap_lm_head_argmax_compute_path #(
         end
     endtask
 
-    task run_success(input integer run_id, input integer tile_count);
+    task run_success(input integer run_id);
         integer wait_cycles;
         integer wait_limit;
         begin
             run_index = run_id;
-            current_run_tile_count = tile_count;
             run_scheduler_req_count = 0;
             run_checked_logit_base = checked_logit_count;
             run_core_update_base = core_update_count;
             run_wr_req_base = mem_wr_req_count;
-            set_descriptor_tile_count(tile_count);
-            clear_output_words();
-            calculate_expected_for_tiles(tile_count);
+            run_norm_wr_base = norm_write_word_count;
+            run_output_wr_base = output_write_word_count;
+            run_write_word_base = mem_wr_word_count_total;
+            clear_write_targets();
+            calculate_expected_for_tiles(MAX_TILES);
 
             @(posedge clk);
             start <= 1'b1;
@@ -722,39 +652,38 @@ module tb_qmap_lm_head_argmax_compute_path #(
             start <= 1'b0;
 
             wait_cycles = 0;
-            wait_limit = 10000 + (tile_count * 8000);
+            wait_limit = 50000 + (MAX_TILES * 9000);
             while ((done != 1'b1) && (wait_cycles < wait_limit)) begin
                 @(posedge clk);
                 wait_cycles = wait_cycles + 1;
-                if ((run_id == 1) && (wait_cycles == 20) && (busy == 1'b1)) begin
+                if ((wait_cycles == 20) && (busy == 1'b1)) begin
                     start <= 1'b1;
                     spurious_start_seen_busy <= 1;
                 end
-                else if ((run_id == 1) && (wait_cycles == 21)) begin
+                else if (wait_cycles == 21) begin
                     start <= 1'b0;
                 end
             end
-
             if (done != 1'b1) begin
-                $display("FAIL: timed out waiting for qmap LM-head run %0d done after %0d cycles",
-                         run_id, wait_limit);
+                $display("FAIL: timed out waiting for qmap final-token tail done after %0d cycles", wait_limit);
                 mismatch_count = mismatch_count + 1;
                 $finish(1);
             end
-
-            check_successful_run(tile_count);
+            check_successful_run();
             @(posedge clk);
         end
     endtask
 
-    task run_invalid_zero_tile_count(input integer run_id);
+    task run_invalid_gamma_dtype(input integer run_id);
         integer wait_cycles;
         integer wr_req_before;
+        integer wr_word_before;
         begin
             run_index = run_id;
-            current_run_tile_count = 0;
             wr_req_before = mem_wr_req_count;
-            set_descriptor_tile_count(0);
+            wr_word_before = mem_wr_word_count_total;
+            qmap_mem[descriptor_word_index(SLOT_FINAL_GAMMA, DESC_DTYPE_WORD)] = 32'd0;
+            clear_write_targets();
 
             @(posedge clk);
             start <= 1'b1;
@@ -762,30 +691,74 @@ module tb_qmap_lm_head_argmax_compute_path #(
             start <= 1'b0;
 
             wait_cycles = 0;
-            while ((done != 1'b1) && (wait_cycles < 10000)) begin
+            while ((done != 1'b1) && (wait_cycles < 20000)) begin
                 @(posedge clk);
                 wait_cycles = wait_cycles + 1;
             end
-
             if (done != 1'b1) begin
-                $display("FAIL: timed out waiting for invalid descriptor run");
+                $display("FAIL: timed out waiting for invalid gamma descriptor run");
                 mismatch_count = mismatch_count + 1;
                 $finish(1);
             end
             if (error != 1'b1) begin
-                $display("FAIL: invalid tile_count descriptor did not raise error");
+                $display("FAIL: invalid gamma descriptor did not raise error");
                 mismatch_count = mismatch_count + 1;
             end
-            if (mem_wr_req_count != wr_req_before) begin
-                $display("FAIL: invalid descriptor run issued a write request");
+            if ((mem_wr_req_count != wr_req_before) || (mem_wr_word_count_total != wr_word_before)) begin
+                $display("FAIL: invalid descriptor issued writes req_before=%0d req_after=%0d word_before=%0d word_after=%0d",
+                         wr_req_before, mem_wr_req_count, wr_word_before, mem_wr_word_count_total);
                 mismatch_count = mismatch_count + 1;
             end
             if ((best_token_id != 32'd0) || (best_score_q26 != 'd0)) begin
-                $display("FAIL: invalid descriptor run exposed stale best result token=%0d score=%0d",
+                $display("FAIL: invalid descriptor exposed stale best token=%0d score=%0d",
                          best_token_id, best_score_q26);
                 mismatch_count = mismatch_count + 1;
             end
             @(posedge clk);
+        end
+    endtask
+
+    task check_request_stability;
+        begin
+            if (req_stall_active != 0) begin
+                if ((mem_rd_req_addr !== stalled_req_addr) || (mem_rd_req_len_bytes !== stalled_req_len)) begin
+                    $display("FAIL: read request changed while stalled at cycle %0d", cycle_count);
+                    mismatch_count = mismatch_count + 1;
+                end
+            end
+        end
+    endtask
+
+    task check_response_stability;
+        begin
+            if (rsp_stall_active != 0) begin
+                if ((mem_rd_rsp_data !== stalled_rsp_data) || (mem_rd_rsp_last !== stalled_rsp_last)) begin
+                    $display("FAIL: read response changed while stalled at cycle %0d", cycle_count);
+                    mismatch_count = mismatch_count + 1;
+                end
+            end
+        end
+    endtask
+
+    task check_write_request_stability;
+        begin
+            if (wr_req_stall_active != 0) begin
+                if ((mem_wr_req_addr !== stalled_wr_req_addr) || (mem_wr_req_len_bytes !== stalled_wr_req_len)) begin
+                    $display("FAIL: write request changed while stalled at cycle %0d", cycle_count);
+                    mismatch_count = mismatch_count + 1;
+                end
+            end
+        end
+    endtask
+
+    task check_write_data_stability;
+        begin
+            if (wr_data_stall_active != 0) begin
+                if ((mem_wr_data !== stalled_wr_data) || (mem_wr_data_last !== stalled_wr_last)) begin
+                    $display("FAIL: write data changed while stalled at cycle %0d", cycle_count);
+                    mismatch_count = mismatch_count + 1;
+                end
+            end
         end
     endtask
 
@@ -797,11 +770,16 @@ module tb_qmap_lm_head_argmax_compute_path #(
             mem_req_fire_count <= 0;
             mem_rsp_fire_count <= 0;
             mem_qmap_req_count <= 0;
-            mem_activation_req_count <= 0;
+            mem_hidden_req_count <= 0;
+            mem_gamma_req_count <= 0;
+            mem_norm_read_req_count <= 0;
             mem_weight_req_count <= 0;
             mem_scale_req_count <= 0;
             mem_wr_req_count <= 0;
             mem_wr_word_count_total <= 0;
+            norm_write_word_count <= 0;
+            output_write_word_count <= 0;
+            norm_write_mismatch_count <= 0;
             core_update_count <= 0;
             checked_logit_count <= 0;
             max_abs_logit_diff <= 0;
@@ -809,14 +787,6 @@ module tb_qmap_lm_head_argmax_compute_path #(
             rsp_stall_active <= 0;
             wr_req_stall_active <= 0;
             wr_data_stall_active <= 0;
-            stalled_req_addr <= 'd0;
-            stalled_req_len <= 'd0;
-            stalled_rsp_data <= 'd0;
-            stalled_rsp_last <= 1'b0;
-            stalled_wr_req_addr <= 'd0;
-            stalled_wr_req_len <= 'd0;
-            stalled_wr_data <= 32'd0;
-            stalled_wr_last <= 1'b0;
         end
         else begin
             cycle_count <= cycle_count + 1;
@@ -886,8 +856,8 @@ module tb_qmap_lm_head_argmax_compute_path #(
                 wr_data_stall_active <= 0;
             end
 
-            if (dut.scheduler.tile_stage.argmax_core.current_state ==
-                dut.scheduler.tile_stage.argmax_core.UPDATE_BEST) begin
+            if (dut.lm_head_path.scheduler.tile_stage.argmax_core.current_state ==
+                dut.lm_head_path.scheduler.tile_stage.argmax_core.UPDATE_BEST) begin
                 check_tile_logits();
                 core_update_count <= core_update_count + 1;
             end
@@ -908,44 +878,45 @@ module tb_qmap_lm_head_argmax_compute_path #(
                  ((mem_wr_data_valid == 1'b1) && (mem_wr_data_ready == 1'b1)) ||
                  (mem_wr_done == 1'b1) ||
                  (done == 1'b1) ||
-                 (dut.scheduler.tile_stage.argmax_core.current_state ==
-                  dut.scheduler.tile_stage.argmax_core.UPDATE_BEST))) begin
+                 (dut.lm_head_path.scheduler.tile_stage.argmax_core.current_state ==
+                  dut.lm_head_path.scheduler.tile_stage.argmax_core.UPDATE_BEST))) begin
                 $fwrite(
                     trace_fd,
-                    "%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,0x%016h,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d\n",
+                    "%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,0x%016h,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d\n",
                     cycle_count,
                     run_index,
                     start,
                     busy,
                     done,
                     error,
+                    norm_saturation,
                     dut.state,
-                    dut.scheduler.state,
-                    dut.scheduler.tile_stage.argmax_core.current_state,
-                    dut.scheduler.tile_stage.tile_reader.state,
+                    dut.final_norm_stage.current_state,
+                    dut.lm_head_path.state,
+                    dut.lm_head_path.scheduler.state,
                     mem_rd_req_valid,
                     mem_rd_req_ready,
-                    mem_rd_req_valid && mem_rd_req_ready,
                     mem_rd_req_addr,
                     mem_rd_req_len_bytes,
                     mem_rd_rsp_valid,
                     mem_rd_rsp_ready,
-                    mem_rd_rsp_valid && mem_rd_rsp_ready,
                     mem_rd_rsp_last,
                     mem_wr_req_valid,
                     mem_wr_req_ready,
                     mem_wr_data_valid,
                     mem_wr_data_ready,
                     mem_wr_done,
-                    read_active,
-                    response_delay,
-                    active_words_left,
-                    dut.scheduler_current_tile,
+                    active_write_kind,
+                    dut.lm_head_path.scheduler_current_tile,
                     best_token_id,
                     best_score_q26,
                     tiles_started,
                     tiles_completed,
-                    mem_read_burst_count
+                    norm_cycle_count,
+                    mem_read_burst_count,
+                    mem_read_word_count,
+                    mem_write_word_count,
+                    norm_write_word_count
                 );
             end
         end
@@ -975,11 +946,10 @@ module tb_qmap_lm_head_argmax_compute_path #(
                 response_delay <= response_latency_pattern(mem_req_fire_count, cycle_count);
                 active_words_left <= (mem_rd_req_len_bytes + 3) >> 2;
                 active_total_words <= (mem_rd_req_len_bytes + 3) >> 2;
-
-                if ((mem_rd_req_addr >= `QMAP_LM_HEAD_BASE_ADDR) &&
-                    (mem_rd_req_addr < (`QMAP_LM_HEAD_BASE_ADDR + QMAP_IMAGE_BYTES))) begin
+                if ((mem_rd_req_addr >= `QMAP_FINAL_TOKEN_BASE_ADDR) &&
+                    (mem_rd_req_addr < (`QMAP_FINAL_TOKEN_BASE_ADDR + QMAP_IMAGE_BYTES))) begin
                     active_region <= REGION_QMAP;
-                    active_read_index <= (mem_rd_req_addr - `QMAP_LM_HEAD_BASE_ADDR) >> 2;
+                    active_read_index <= (mem_rd_req_addr - `QMAP_FINAL_TOKEN_BASE_ADDR) >> 2;
                 end
                 else if ((mem_rd_req_addr >= weight_base_addr) &&
                          (mem_rd_req_addr < (weight_base_addr + (WEIGHT_WORDS * 4)))) begin
@@ -1026,6 +996,7 @@ module tb_qmap_lm_head_argmax_compute_path #(
             write_active <= 1'b0;
             active_write_index <= 0;
             active_write_words_left <= 0;
+            active_write_kind <= WRITE_KIND_NONE;
             write_done_delay <= 0;
         end
         else begin
@@ -1039,21 +1010,47 @@ module tb_qmap_lm_head_argmax_compute_path #(
                 wr_data_ready_pattern(cycle_count, mem_wr_word_count_total);
 
             if ((mem_wr_req_valid == 1'b1) && (mem_wr_req_ready == 1'b1)) begin
-                if (mem_wr_req_addr !== descriptor_base_addr(SLOT_OUTPUT)) begin
-                    $display("FAIL: write request address mismatch actual=0x%016h expected=0x%016h",
-                             mem_wr_req_addr, descriptor_base_addr(SLOT_OUTPUT));
-                    mismatch_count = mismatch_count + 1;
-                end
-                if (mem_wr_req_len_bytes != 16'd12) begin
-                    $display("FAIL: write request length mismatch actual=%0d expected=12", mem_wr_req_len_bytes);
-                    mismatch_count = mismatch_count + 1;
-                end
                 write_active <= 1'b1;
-                active_write_index <= (mem_wr_req_addr - `QMAP_LM_HEAD_BASE_ADDR) >> 2;
-                active_write_words_left <= 3;
+                active_write_index <= (mem_wr_req_addr - `QMAP_FINAL_TOKEN_BASE_ADDR) >> 2;
+                active_write_words_left <= (mem_wr_req_len_bytes + 3) >> 2;
+                if (mem_wr_req_addr == descriptor_base_addr(SLOT_NORM_OUTPUT)) begin
+                    active_write_kind <= WRITE_KIND_NORM;
+                    if (mem_wr_req_len_bytes != 16'd4096) begin
+                        $display("FAIL: norm write length actual=%0d expected=4096", mem_wr_req_len_bytes);
+                        mismatch_count = mismatch_count + 1;
+                    end
+                end
+                else if (mem_wr_req_addr == descriptor_base_addr(SLOT_OUTPUT)) begin
+                    active_write_kind <= WRITE_KIND_OUTPUT;
+                    if (mem_wr_req_len_bytes != 16'd12) begin
+                        $display("FAIL: output write length actual=%0d expected=12", mem_wr_req_len_bytes);
+                        mismatch_count = mismatch_count + 1;
+                    end
+                end
+                else begin
+                    active_write_kind <= WRITE_KIND_NONE;
+                    $display("FAIL: write request address outside expected targets addr=0x%016h", mem_wr_req_addr);
+                    mismatch_count = mismatch_count + 1;
+                end
             end
 
             if ((mem_wr_data_valid == 1'b1) && (mem_wr_data_ready == 1'b1)) begin
+                if (active_write_kind == WRITE_KIND_NORM) begin
+                    if (mem_wr_data !== norm_expected_word(active_write_index - expected_norm_index)) begin
+                        if (print_count < 32) begin
+                            $display("FAIL: norm write data index=%0d actual=%08h expected=%08h",
+                                     active_write_index - expected_norm_index,
+                                     mem_wr_data,
+                                     norm_expected_word(active_write_index - expected_norm_index));
+                            print_count = print_count + 1;
+                        end
+                        norm_write_mismatch_count <= norm_write_mismatch_count + 1;
+                    end
+                    norm_write_word_count <= norm_write_word_count + 1;
+                end
+                else if (active_write_kind == WRITE_KIND_OUTPUT) begin
+                    output_write_word_count <= output_write_word_count + 1;
+                end
                 qmap_mem[active_write_index] <= mem_wr_data;
                 active_write_index <= active_write_index + 1;
                 if (active_write_words_left == 1) begin
@@ -1063,6 +1060,7 @@ module tb_qmap_lm_head_argmax_compute_path #(
                     end
                     write_active <= 1'b0;
                     active_write_words_left <= 0;
+                    active_write_kind <= WRITE_KIND_NONE;
                     write_done_delay <= 2;
                 end
                 else begin
@@ -1084,26 +1082,25 @@ module tb_qmap_lm_head_argmax_compute_path #(
     end
 
     initial begin
-`ifdef QMAP_LM_HEAD_TB_FULL_VOCAB
         vector_dir = "FPGA_Project/sim/vectors";
-        prefix = "lm_head_argmax_full_vocab_real";
-        qmap_image_file = "FPGA_Project/sim/vectors/qmap_lm_head_argmax_full_vocab_image_words32.hex";
-        qmap_expected_file = "FPGA_Project/sim/vectors/qmap_lm_head_argmax_full_vocab_expected_words32.hex";
-        tracefile = "FPGA_Project/sim/qmap_lm_head_argmax_full_vocab_trace.csv";
+`ifdef QMAP_FINAL_TOKEN_TB_FULL_VOCAB
+        lm_prefix = "lm_head_argmax_full_vocab_real";
+        qmap_image_file = "FPGA_Project/sim/vectors/qmap_final_token_tail_full_vocab_image_words32.hex";
+        qmap_expected_file = "FPGA_Project/sim/vectors/qmap_final_token_tail_full_vocab_expected_words32.hex";
+        tracefile = "FPGA_Project/sim/qmap_final_token_tail_full_vocab_trace.csv";
         trace_every_cycle = 0;
         fast_memory = 1;
 `else
-        vector_dir = "FPGA_Project/sim/vectors";
-        prefix = "lm_head_argmax_stage_real";
-        qmap_image_file = "FPGA_Project/sim/vectors/qmap_lm_head_argmax_image_words32.hex";
-        qmap_expected_file = "FPGA_Project/sim/vectors/qmap_lm_head_argmax_expected_words32.hex";
-        tracefile = "FPGA_Project/sim/qmap_lm_head_argmax_compute_path_trace.csv";
+        lm_prefix = "lm_head_argmax_stage_real";
+        qmap_image_file = "FPGA_Project/sim/vectors/qmap_final_token_tail_compact_image_words32.hex";
+        qmap_expected_file = "FPGA_Project/sim/vectors/qmap_final_token_tail_compact_expected_words32.hex";
+        tracefile = "FPGA_Project/sim/qmap_final_token_tail_compute_path_trace.csv";
         trace_every_cycle = 1;
         fast_memory = 0;
 `endif
         if ($value$plusargs("vectordir=%s", vector_dir)) begin
         end
-        if ($value$plusargs("prefix=%s", prefix)) begin
+        if ($value$plusargs("lm_prefix=%s", lm_prefix)) begin
         end
         if ($value$plusargs("qmap_image=%s", qmap_image_file)) begin
         end
@@ -1123,7 +1120,7 @@ module tb_qmap_lm_head_argmax_compute_path #(
         end
         $fwrite(
             trace_fd,
-            "cycle,run,start,busy,done,error,wrapper_state,sched_state,core_state,reader_state,rd_req_valid,rd_req_ready,rd_req_fire,rd_req_addr,rd_req_len,rd_rsp_valid,rd_rsp_ready,rd_rsp_fire,rd_rsp_last,wr_req_valid,wr_req_ready,wr_data_valid,wr_data_ready,wr_done,read_active,response_delay,active_words_left,current_tile,best_token,best_score,tiles_started,tiles_completed,mem_read_burst_count\n"
+            "cycle,run,start,busy,done,error,norm_saturation,tail_state,norm_state,lm_state,lm_sched_state,rd_req_valid,rd_req_ready,rd_req_addr,rd_req_len,rd_rsp_valid,rd_rsp_ready,rd_rsp_last,wr_req_valid,wr_req_ready,wr_data_valid,wr_data_ready,wr_done,active_write_kind,current_tile,best_token,best_score,tiles_started,tiles_completed,norm_cycle_count,mem_read_burst_count,mem_read_word_count,mem_write_word_count,norm_write_word_count\n"
         );
 
         load_vectors();
@@ -1131,10 +1128,9 @@ module tb_qmap_lm_head_argmax_compute_path #(
         mismatch_count = 0;
         print_count = 0;
         run_index = 0;
-        current_run_tile_count = 0;
         run_scheduler_req_count = 0;
         last_success_token = 32'd0;
-        last_success_score_q26 = 'd0;
+        last_success_score_q26 = '0;
         start = 1'b0;
         spurious_start_seen_busy = 0;
         rst_n = 1'b0;
@@ -1142,114 +1138,56 @@ module tb_qmap_lm_head_argmax_compute_path #(
         rst_n = 1'b1;
         repeat (4) @(posedge clk);
 
-        if ((ENABLE_SECOND_RUN != 0) && (SECOND_RUN_TILES > MAX_TILES)) begin
-            $display("FAIL: SECOND_RUN_TILES=%0d exceeds MAX_TILES=%0d", SECOND_RUN_TILES, MAX_TILES);
-            $finish(1);
-        end
-
-        expected_success_runs = 1;
-        expected_done_count = 1;
-        expected_total_read_req_count = 11 + (MAX_TILES * BURSTS_PER_TILE);
-        expected_total_read_rsp_count = 1232 + (MAX_TILES * WORDS_PER_TILE);
-        expected_total_weight_req_count = MAX_TILES * WEIGHT_BURSTS_PER_TILE;
-        expected_total_scale_req_count = MAX_TILES * SCALE_BURSTS_PER_TILE;
-        expected_total_tile_update_count = MAX_TILES;
-        expected_total_logit_count = MAX_TILES * TILE_ROWS;
-
-        if (ENABLE_SECOND_RUN != 0) begin
-            expected_success_runs = expected_success_runs + 1;
-            expected_done_count = expected_done_count + 1;
-            expected_total_read_req_count =
-                expected_total_read_req_count + 11 + (SECOND_RUN_TILES * BURSTS_PER_TILE);
-            expected_total_read_rsp_count =
-                expected_total_read_rsp_count + 1232 + (SECOND_RUN_TILES * WORDS_PER_TILE);
-            expected_total_weight_req_count =
-                expected_total_weight_req_count + (SECOND_RUN_TILES * WEIGHT_BURSTS_PER_TILE);
-            expected_total_scale_req_count =
-                expected_total_scale_req_count + (SECOND_RUN_TILES * SCALE_BURSTS_PER_TILE);
-            expected_total_tile_update_count = expected_total_tile_update_count + SECOND_RUN_TILES;
-            expected_total_logit_count = expected_total_logit_count + (SECOND_RUN_TILES * TILE_ROWS);
-        end
-
+        run_success(1);
         if (ENABLE_INVALID_RUN != 0) begin
-            expected_done_count = expected_done_count + 1;
-            expected_total_read_req_count = expected_total_read_req_count + 7;
-            expected_total_read_rsp_count = expected_total_read_rsp_count + 208;
-        end
-
-        run_success(1, MAX_TILES);
-        if (ENABLE_SECOND_RUN != 0) begin
-            run_success(2, SECOND_RUN_TILES);
-        end
-        if (ENABLE_INVALID_RUN != 0) begin
-            run_invalid_zero_tile_count(3);
+            run_invalid_gamma_dtype(2);
         end
 
         $fclose(trace_fd);
         trace_fd = 0;
 
-        $display("qmap_lm_head_argmax_compute_path descriptor-backed LM-head test");
-        $display("  final expected token     = %0d", expected_run_token);
-        $display("  final expected score q26 = %0d", expected_run_score_q26);
-        $display("  final success token      = %0d", last_success_token);
-        $display("  final success score q26  = %0d", last_success_score_q26);
-        $display("  read req fires           = %0d", mem_req_fire_count);
-        $display("  read rsp fires           = %0d", mem_rsp_fire_count);
-        $display("  qmap/activation reqs     = %0d / %0d", mem_qmap_req_count, mem_activation_req_count);
-        $display("  weight/scale reqs        = %0d / %0d", mem_weight_req_count, mem_scale_req_count);
-        $display("  write reqs/words         = %0d / %0d", mem_wr_req_count, mem_wr_word_count_total);
-        $display("  tile updates             = %0d", core_update_count);
-        $display("  checked logits           = %0d", checked_logit_count);
-        $display("  max_abs_logit_diff       = %0d", max_abs_logit_diff);
-        $display("  spurious start covered   = %0d", spurious_start_seen_busy);
-        $display("  done seen count          = %0d", done_seen_count);
-        $display("  total cycles waited      = %0d", cycle_count);
-        $display("  trace                    = %s", tracefile);
+        $display("qmap_final_token_tail_compute_path final-token tail test");
+        $display("  expected token          = %0d", expected_run_token);
+        $display("  expected score q26      = %0d", expected_run_score_q26);
+        $display("  success token           = %0d", last_success_token);
+        $display("  success score q26       = %0d", last_success_score_q26);
+        $display("  read req/rsp fires      = %0d / %0d", mem_req_fire_count, mem_rsp_fire_count);
+        $display("  qmap hidden/gamma/norm  = %0d / %0d / %0d / %0d",
+                 mem_qmap_req_count, mem_hidden_req_count, mem_gamma_req_count, mem_norm_read_req_count);
+        $display("  weight/scale reqs       = %0d / %0d", mem_weight_req_count, mem_scale_req_count);
+        $display("  write reqs/words        = %0d / %0d", mem_wr_req_count, mem_wr_word_count_total);
+        $display("  norm/output write words = %0d / %0d", norm_write_word_count, output_write_word_count);
+        $display("  tile updates            = %0d", core_update_count);
+        $display("  checked logits          = %0d", checked_logit_count);
+        $display("  max_abs_logit_diff      = %0d", max_abs_logit_diff);
+        $display("  norm write mismatches   = %0d", norm_write_mismatch_count);
+        $display("  spurious start covered  = %0d", spurious_start_seen_busy);
+        $display("  done seen count         = %0d", done_seen_count);
+        $display("  total cycles waited     = %0d", cycle_count);
+        $display("  trace                   = %s", tracefile);
 
-        if (done_seen_count != expected_done_count) begin
+        if (done_seen_count != (1 + ENABLE_INVALID_RUN)) begin
             $display("FAIL: done pulse count mismatch actual=%0d expected=%0d",
-                     done_seen_count, expected_done_count);
+                     done_seen_count, 1 + ENABLE_INVALID_RUN);
             mismatch_count = mismatch_count + 1;
         end
-        if (mem_req_fire_count != expected_total_read_req_count) begin
-            $display("FAIL: total read request count mismatch actual=%0d expected=%0d",
-                     mem_req_fire_count, expected_total_read_req_count);
+        if (mem_hidden_req_count != 4 || mem_gamma_req_count != 4 || mem_norm_read_req_count != 4) begin
+            $display("FAIL: final-token qmap read count mismatch hidden=%0d gamma=%0d norm_read=%0d",
+                     mem_hidden_req_count, mem_gamma_req_count, mem_norm_read_req_count);
             mismatch_count = mismatch_count + 1;
         end
-        if (mem_rsp_fire_count != expected_total_read_rsp_count) begin
-            $display("FAIL: total read response word count mismatch actual=%0d expected=%0d",
-                     mem_rsp_fire_count, expected_total_read_rsp_count);
+        if (mem_weight_req_count != (MAX_TILES * WEIGHT_BURSTS_PER_TILE)) begin
+            $display("FAIL: weight request count actual=%0d expected=%0d",
+                     mem_weight_req_count, MAX_TILES * WEIGHT_BURSTS_PER_TILE);
             mismatch_count = mismatch_count + 1;
         end
-        if (mem_weight_req_count != expected_total_weight_req_count) begin
-            $display("FAIL: weight request count mismatch actual=%0d expected=%0d",
-                     mem_weight_req_count, expected_total_weight_req_count);
-            mismatch_count = mismatch_count + 1;
-        end
-        if (mem_scale_req_count != expected_total_scale_req_count) begin
-            $display("FAIL: scale request count mismatch actual=%0d expected=%0d",
-                     mem_scale_req_count, expected_total_scale_req_count);
-            mismatch_count = mismatch_count + 1;
-        end
-        if (core_update_count != expected_total_tile_update_count) begin
-            $display("FAIL: tile update count mismatch actual=%0d expected=%0d",
-                     core_update_count, expected_total_tile_update_count);
-            mismatch_count = mismatch_count + 1;
-        end
-        if (checked_logit_count != expected_total_logit_count) begin
-            $display("FAIL: checked logit count mismatch actual=%0d expected=%0d",
-                     checked_logit_count, expected_total_logit_count);
+        if (mem_scale_req_count != (MAX_TILES * SCALE_BURSTS_PER_TILE)) begin
+            $display("FAIL: scale request count actual=%0d expected=%0d",
+                     mem_scale_req_count, MAX_TILES * SCALE_BURSTS_PER_TILE);
             mismatch_count = mismatch_count + 1;
         end
         if (max_abs_logit_diff != 0) begin
             $display("FAIL: expected exact logits, max_abs_logit_diff=%0d", max_abs_logit_diff);
-            mismatch_count = mismatch_count + 1;
-        end
-        if (mem_wr_req_count != expected_success_runs ||
-            mem_wr_word_count_total != (expected_success_runs * 3)) begin
-            $display("FAIL: total write count mismatch reqs=%0d expected=%0d words=%0d expected_words=%0d",
-                     mem_wr_req_count, expected_success_runs,
-                     mem_wr_word_count_total, expected_success_runs * 3);
             mismatch_count = mismatch_count + 1;
         end
         if (spurious_start_seen_busy != 1) begin
@@ -1258,11 +1196,11 @@ module tb_qmap_lm_head_argmax_compute_path #(
         end
 
         if (mismatch_count != 0) begin
-            $display("FAIL: qmap_lm_head_argmax_compute_path found %0d mismatches", mismatch_count);
+            $display("FAIL: qmap_final_token_tail_compute_path found %0d mismatches", mismatch_count);
             $finish(1);
         end
 
-        $display("PASS: qmap_lm_head_argmax_compute_path matched descriptor-backed LM-head logits and output token/score writes.");
+        $display("PASS: qmap_final_token_tail_compute_path matched final RMSNorm write-back and LM-head token/score.");
         $display("Waveform: %s", wavefile);
         $finish;
     end

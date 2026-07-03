@@ -42,6 +42,23 @@ build/
 FPGA_Project/sim/lm_head_argmax_mem_stage_trace.csv
 FPGA_Project/sim/lm_head_argmax_tile_scheduler_trace.csv
 FPGA_Project/sim/qmap_lm_head_argmax_compute_path_trace.csv
+FPGA_Project/sim/qmap_lm_head_argmax_full_vocab_trace.csv
+FPGA_Project/sim/qmap_final_token_tail*_trace.csv
+FPGA_Project/sim/qmap_attention_frontend_compute_path_trace.csv
+FPGA_Project/sim/qmap_attention_score_value_compute_path_trace.csv
+FPGA_Project/sim/qmap_o_proj_compute_path_trace.csv
+FPGA_Project/sim/qmap_post_attention_residual_norm_compute_path_trace.csv
+FPGA_Project/sim/qmap_mlp_gate_up_compute_path_trace.csv
+FPGA_Project/sim/qmap_mlp_silu_mul_compute_path_trace.csv
+FPGA_Project/sim/qmap_mlp_down_compute_path_trace.csv
+FPGA_Project/sim/qmap_mlp_residual_add_compute_path_trace.csv
+FPGA_Project/sim/*_run.pid
+FPGA_Project/sim/*_run.err
+FPGA_Project/sim/modelsim_*_work/
+FPGA_Project/sim/vectors/lm_head_argmax_full_vocab_real_*.hex
+FPGA_Project/sim/vectors/lm_head_argmax_full_vocab_real_meta.json
+FPGA_Project/sim/vectors/qmap_lm_head_argmax_full_vocab_*.hex
+FPGA_Project/sim/vectors/qmap_final_token_tail_full_vocab_*.hex
 *.cache/
 *.hw/
 *.runs/
@@ -70,6 +87,9 @@ dfx_runtime.txt
 *.str
 *.wdb
 *.log
+xsim.dir/
+modelsim.ini
+transcript
 
 # Keep source/config files tracked explicitly; large artifacts are restored via init/.
 # Vivado source-bearing files that should remain visible include:

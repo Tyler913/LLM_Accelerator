@@ -14,64 +14,57 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
 QMAP_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_qmap_v1"
 
-LM_HEAD_PREFIX = "lm_head_argmax_stage_real"
-DEFAULT_OUTPUT = QMAP_VECTOR_DIR / "lm_head_argmax_runtime.qmap.bin"
-DEFAULT_MANIFEST = QMAP_VECTOR_DIR / "lm_head_argmax_runtime_manifest.json"
-DEFAULT_SIM_HEX = SIM_VECTOR_DIR / "qmap_lm_head_argmax_image_words32.hex"
-DEFAULT_EXPECTED_HEX = SIM_VECTOR_DIR / "qmap_lm_head_argmax_expected_words32.hex"
+PREFIX = "mlp_residual_add_stage_real"
+DEFAULT_OUTPUT = QMAP_VECTOR_DIR / "mlp_residual_add_runtime.qmap.bin"
+DEFAULT_MANIFEST = QMAP_VECTOR_DIR / "mlp_residual_add_runtime_manifest.json"
+DEFAULT_SIM_HEX = SIM_VECTOR_DIR / "qmap_mlp_residual_add_image_words32.hex"
+DEFAULT_EXPECTED_HEX = SIM_VECTOR_DIR / "qmap_mlp_residual_add_expected_words32.hex"
 
 QMAP_MAGIC = 0x50414D51
 QMAP_VERSION = 1
-QMAP_BASE = 0x4_0500_0000
+QMAP_BASE = 0x4_0509_0000
 HEADER_BYTES = 256
 DESCRIPTOR_BYTES = 128
 DESCRIPTOR_CAPACITY = 8
-DESCRIPTOR_COUNT = 6
+DESCRIPTOR_COUNT = 5
 DESCRIPTOR_TABLE_OFFSET = 0x0100
 PAYLOAD_BASE_OFFSET = 0x0500
 PAYLOAD_ALIGNMENT = 64
 IMAGE_ALIGNMENT = 4096
 
 INPUT_SIZE = 1024
-GROUP_SIZE = 64
-GROUP_COUNT = INPUT_SIZE // GROUP_SIZE
-TILE_ROWS = 16
-ACT_WIDTH = 24
-ACT_FRAC = 12
-WEIGHT_WIDTH = 4
-SCALE_WIDTH = 16
-SCALE_FRAC = 14
-PARTIAL_WIDTH = ACT_WIDTH + WEIGHT_WIDTH + 6
-SCALED_WIDTH = PARTIAL_WIDTH + SCALE_WIDTH
-ROW_ACC_WIDTH = SCALED_WIDTH + 4 + 2
-VOCAB_SIZE_DEFAULT = 151_936
+POST_ATTENTION_WIDTH = 24
+POST_ATTENTION_FRAC = 10
+DOWN_WIDTH = 24
+DOWN_FRAC = 12
+OUT_WIDTH = 24
+OUT_FRAC = 10
+DOWN_TO_OUT_SHIFT = DOWN_FRAC - OUT_FRAC
+LAYER_ID = 0
 
-TENSOR_ID_METADATA = 20
-TENSOR_ID_ACTIVATION = 21
-TENSOR_ID_WEIGHT = 22
-TENSOR_ID_SCALE = 23
-TENSOR_ID_OUTPUT = 24
-TENSOR_ID_EXPECTED = 25
+TENSOR_ID_METADATA = 81
+TENSOR_ID_POST_ATTN = 82
+TENSOR_ID_DOWN = 83
+TENSOR_ID_OUTPUT = 84
+TENSOR_ID_EXPECTED = 85
 
 ROLE_ACTIVATION = 1
-ROLE_Q4_WEIGHT = 2
-ROLE_Q4_SCALE = 3
 ROLE_OUTPUT = 4
 ROLE_EXPECTED = 5
 ROLE_METADATA = 6
 
 DTYPE_U32 = 5
-DTYPE_PACKED_Q4_S4 = 16
-DTYPE_U16_Q2_14 = 17
 DTYPE_I32_Q12_12 = 19
+DTYPE_I32_Q14_10 = 20
 
 TENSOR_F_ROW_MAJOR = 1 << 0
-TENSOR_F_PACKED_Q4_LOW_EVEN = 1 << 1
 TENSOR_F_READ_ONLY = 1 << 2
 TENSOR_F_WRITE_ONLY = 1 << 3
 TENSOR_F_DEBUG_ONLY = 1 << 4
 
-MATRIX_ID_EMBED_LM_HEAD = 8
+MATRIX_ID_DOWN_PROJ = 7
+STAGE_ID_POST_ATTN_RESIDUAL_NORM = 1
+STAGE_ID_MLP_RESIDUAL_ADD = 5
 NO_TENSOR_ID = 0xFFFF_FFFF
 
 
@@ -198,8 +191,10 @@ def add_payload(payloads: list[dict[str, Any]], *, name: str, cursor: int, paylo
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Export a QMAP runtime packet for LM-head argmax simulation.")
-    parser.add_argument("--lm-prefix", default=LM_HEAD_PREFIX)
+    parser = argparse.ArgumentParser(
+        description="Export a QMAP runtime packet for Layer 0 final MLP residual-add simulation."
+    )
+    parser.add_argument("--prefix", default=PREFIX)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
@@ -209,53 +204,62 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    lm_prefix = str(args.lm_prefix)
+    prefix = str(args.prefix)
 
-    activation = read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_activation.hex", ACT_WIDTH, signed=True)
-    scan_base = int(read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_scan_base_token.hex", 32, signed=False)[0])
-    weight_base = int(read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_weight_base_addr.hex", 64, signed=False)[0])
-    scale_base = int(read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_scale_base_addr.hex", 64, signed=False)[0])
-    best_token = int(read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_expected_best_token.hex", 32, signed=False)[0])
-    best_score = int(read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_expected_best_score_q26.hex", ROW_ACC_WIDTH, signed=True)[0])
-
-    meta_path = SIM_VECTOR_DIR / f"{lm_prefix}_meta.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    shape = meta["shape"]
-    vocab_size = int(shape.get("vocab_size", VOCAB_SIZE_DEFAULT))
-    scan_rows = int(shape["scan_rows"])
-    tile_rows = int(shape["tile_rows"])
-    tile_count = int(shape["tile_count"])
-
-    if activation.shape != (INPUT_SIZE,):
-        raise RuntimeError(f"activation shape mismatch: {activation.shape}")
-    if tile_rows != TILE_ROWS:
-        raise RuntimeError(f"tile_rows mismatch: expected {TILE_ROWS}, got {tile_rows}")
-    if scan_rows != tile_count * tile_rows:
-        raise RuntimeError("scan_rows does not match tile_count * tile_rows")
-    if not (0 <= scan_base < vocab_size) or (scan_base + scan_rows > vocab_size):
-        raise RuntimeError("scan range is outside vocabulary")
-    if not (scan_base <= best_token < scan_base + scan_rows):
-        raise RuntimeError("expected token is outside scan window")
-
-    score_u64 = best_score & ((1 << 64) - 1)
-    expected_words = np.array(
-        [
-            best_token & 0xFFFF_FFFF,
-            score_u64 & 0xFFFF_FFFF,
-            (score_u64 >> 32) & 0xFFFF_FFFF,
-        ],
-        dtype=np.uint32,
+    post_attn_hidden = read_hex_lines(
+        SIM_VECTOR_DIR / f"{prefix}_post_attn_hidden.hex",
+        POST_ATTENTION_WIDTH,
+        signed=True,
     )
+    down_out = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_down_out.hex", DOWN_WIDTH, signed=True)
+    expected = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_expected_layer_out.hex", OUT_WIDTH, signed=True)
+    saturation = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_residual_saturation.hex", 1, signed=False)
+
+    for name, values in (
+        ("post_attn_hidden", post_attn_hidden),
+        ("down_out", down_out),
+        ("expected", expected),
+    ):
+        if values.shape != (INPUT_SIZE,):
+            raise RuntimeError(f"{name} shape mismatch: expected {(INPUT_SIZE,)}, got {values.shape}")
+    if saturation.shape != (1,):
+        raise RuntimeError(f"saturation shape mismatch: expected {(1,)}, got {saturation.shape}")
+
+    chained_post_path = SIM_VECTOR_DIR / "qmap_post_attention_residual_norm_expected_hidden_words32.hex"
+    if chained_post_path.is_file():
+        chained_post = read_hex_lines(chained_post_path, 32, signed=True)
+        if chained_post.shape != (INPUT_SIZE,):
+            raise RuntimeError(f"chained post-attn shape mismatch: expected {(INPUT_SIZE,)}, got {chained_post.shape}")
+        if not np.array_equal(chained_post.astype(np.int64), post_attn_hidden.astype(np.int64)):
+            mismatch = int(np.nonzero(chained_post.astype(np.int64) != post_attn_hidden.astype(np.int64))[0][0])
+            raise RuntimeError(f"post_attn_hidden does not match QMAP post-attention hidden at index {mismatch}")
+
+    chained_down_path = SIM_VECTOR_DIR / "qmap_mlp_down_expected_words32.hex"
+    if chained_down_path.is_file():
+        chained_down = read_hex_lines(chained_down_path, 32, signed=True)
+        if chained_down.shape != (INPUT_SIZE,):
+            raise RuntimeError(f"chained down shape mismatch: expected {(INPUT_SIZE,)}, got {chained_down.shape}")
+        if not np.array_equal(chained_down.astype(np.int64), down_out.astype(np.int64)):
+            mismatch = int(np.nonzero(chained_down.astype(np.int64) != down_out.astype(np.int64))[0][0])
+            raise RuntimeError(f"down_out does not match QMAP MLP down output at index {mismatch}")
+
+    post_i32 = post_attn_hidden.astype(np.int32)
+    down_i32 = down_out.astype(np.int32)
+    expected_i32 = expected.astype(np.int32)
+    vector_bytes = INPUT_SIZE * 4
     metadata_words = np.array(
         [
-            scan_base,
-            scan_rows,
-            tile_rows,
-            tile_count,
-            vocab_size,
-            best_token,
-            int(expected_words[1]),
-            int(expected_words[2]),
+            LAYER_ID,
+            INPUT_SIZE,
+            POST_ATTENTION_WIDTH,
+            POST_ATTENTION_FRAC,
+            DOWN_WIDTH,
+            DOWN_FRAC,
+            OUT_WIDTH,
+            OUT_FRAC,
+            DOWN_TO_OUT_SHIFT,
+            STAGE_ID_MLP_RESIDUAL_ADD,
+            int(saturation[0]),
         ],
         dtype=np.uint32,
     )
@@ -263,9 +267,10 @@ def main() -> None:
     payloads: list[dict[str, Any]] = []
     cursor = PAYLOAD_BASE_OFFSET
     cursor = add_payload(payloads, name="metadata", cursor=cursor, payload=as_le_bytes(metadata_words, "<u4"))
-    cursor = add_payload(payloads, name="activation_q12_12", cursor=cursor, payload=as_le_bytes(activation, "<i4"))
-    cursor = add_payload(payloads, name="output_token_score", cursor=cursor, payload=bytes(12))
-    cursor = add_payload(payloads, name="expected_token_score", cursor=cursor, payload=as_le_bytes(expected_words, "<u4"))
+    cursor = add_payload(payloads, name="post_attn_hidden_q14_10", cursor=cursor, payload=as_le_bytes(post_i32, "<i4"))
+    cursor = add_payload(payloads, name="down_out_q12_12", cursor=cursor, payload=as_le_bytes(down_i32, "<i4"))
+    cursor = add_payload(payloads, name="layer_out_q14_10", cursor=cursor, payload=bytes(vector_bytes))
+    cursor = add_payload(payloads, name="expected_layer_out_q14_10", cursor=cursor, payload=as_le_bytes(expected_i32, "<i4"))
     image_bytes = align_up(cursor, IMAGE_ALIGNMENT)
 
     payload_by_name = {item["name"]: item for item in payloads}
@@ -277,11 +282,11 @@ def main() -> None:
         return len(payload_by_name[name]["payload"])
 
     ro = TENSOR_F_ROW_MAJOR | TENSOR_F_READ_ONLY
-    packed_ro = ro | TENSOR_F_PACKED_Q4_LOW_EVEN
     wo = TENSOR_F_ROW_MAJOR | TENSOR_F_WRITE_ONLY
     expected_flags = TENSOR_F_ROW_MAJOR | TENSOR_F_READ_ONLY | TENSOR_F_DEBUG_ONLY
-    weight_row_bytes = INPUT_SIZE * WEIGHT_WIDTH // 8
-    scale_row_bytes = GROUP_COUNT * SCALE_WIDTH // 8
+    stage_aux = (STAGE_ID_MLP_RESIDUAL_ADD, LAYER_ID, INPUT_SIZE, 0)
+    post_aux = (STAGE_ID_POST_ATTN_RESIDUAL_NORM, LAYER_ID, INPUT_SIZE, 0)
+    down_aux = (MATRIX_ID_DOWN_PROJ, LAYER_ID, INPUT_SIZE, 0)
 
     descriptors = [
         pack_descriptor(
@@ -297,82 +302,67 @@ def main() -> None:
             nbytes=size("metadata"),
             dims=(int(metadata_words.size), 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, scan_base, tile_count),
+            aux=stage_aux,
         ),
         pack_descriptor(
-            tensor_id=TENSOR_ID_ACTIVATION,
+            tensor_id=TENSOR_ID_POST_ATTN,
+            role=ROLE_ACTIVATION,
+            dtype=DTYPE_I32_Q14_10,
+            rank=1,
+            flags=ro,
+            element_bits=POST_ATTENTION_WIDTH,
+            group_size=0,
+            scale_tensor_id=NO_TENSOR_ID,
+            base_addr=addr("post_attn_hidden_q14_10"),
+            nbytes=vector_bytes,
+            dims=(INPUT_SIZE, 0, 0, 0),
+            strides=(4, 0, 0, 0),
+            aux=post_aux,
+        ),
+        pack_descriptor(
+            tensor_id=TENSOR_ID_DOWN,
             role=ROLE_ACTIVATION,
             dtype=DTYPE_I32_Q12_12,
             rank=1,
             flags=ro,
-            element_bits=32,
+            element_bits=DOWN_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("activation_q12_12"),
-            nbytes=INPUT_SIZE * 4,
+            base_addr=addr("down_out_q12_12"),
+            nbytes=vector_bytes,
             dims=(INPUT_SIZE, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, 0, 0),
-        ),
-        pack_descriptor(
-            tensor_id=TENSOR_ID_WEIGHT,
-            role=ROLE_Q4_WEIGHT,
-            dtype=DTYPE_PACKED_Q4_S4,
-            rank=2,
-            flags=packed_ro,
-            element_bits=WEIGHT_WIDTH,
-            group_size=GROUP_SIZE,
-            scale_tensor_id=TENSOR_ID_SCALE,
-            base_addr=weight_base,
-            nbytes=vocab_size * weight_row_bytes,
-            dims=(vocab_size, INPUT_SIZE, 0, 0),
-            strides=(weight_row_bytes, 0, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, scan_base, tile_count),
-        ),
-        pack_descriptor(
-            tensor_id=TENSOR_ID_SCALE,
-            role=ROLE_Q4_SCALE,
-            dtype=DTYPE_U16_Q2_14,
-            rank=2,
-            flags=ro,
-            element_bits=SCALE_WIDTH,
-            group_size=0,
-            scale_tensor_id=NO_TENSOR_ID,
-            base_addr=scale_base,
-            nbytes=vocab_size * scale_row_bytes,
-            dims=(vocab_size, GROUP_COUNT, 0, 0),
-            strides=(scale_row_bytes, 2, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, scan_base, tile_count),
+            aux=down_aux,
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_OUTPUT,
             role=ROLE_OUTPUT,
-            dtype=DTYPE_U32,
+            dtype=DTYPE_I32_Q14_10,
             rank=1,
             flags=wo,
-            element_bits=32,
+            element_bits=OUT_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("output_token_score"),
-            nbytes=12,
-            dims=(3, 0, 0, 0),
+            base_addr=addr("layer_out_q14_10"),
+            nbytes=vector_bytes,
+            dims=(INPUT_SIZE, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, scan_base, tile_count),
+            aux=stage_aux,
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_EXPECTED,
             role=ROLE_EXPECTED,
-            dtype=DTYPE_U32,
+            dtype=DTYPE_I32_Q14_10,
             rank=1,
             flags=expected_flags,
-            element_bits=32,
+            element_bits=OUT_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("expected_token_score"),
-            nbytes=12,
-            dims=(3, 0, 0, 0),
+            base_addr=addr("expected_layer_out_q14_10"),
+            nbytes=vector_bytes,
+            dims=(INPUT_SIZE, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, scan_base, tile_count),
+            aux=stage_aux,
         ),
     ]
 
@@ -389,57 +379,67 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(bytes(image))
     write_hex_lines(args.sim_hex, image_to_words32(bytes(image)), 32)
-    write_hex_lines(args.expected_hex, expected_words, 32)
+    write_hex_lines(args.expected_hex, expected_i32, 32)
+
+    focused_meta_path = SIM_VECTOR_DIR / f"{prefix}_meta.json"
+    focused_meta: dict[str, Any] = {}
+    if focused_meta_path.is_file():
+        focused_meta = json.loads(focused_meta_path.read_text(encoding="utf-8"))
 
     manifest = {
         "format_version": 1,
-        "name": "qmap_lm_head_argmax_runtime",
-        "lm_prefix": lm_prefix,
+        "name": "qmap_mlp_residual_add_runtime",
+        "prefix": prefix,
         "qmap_base": QMAP_BASE,
         "image_bytes": image_bytes,
         "sha256": sha256_file(args.output),
         "descriptor_count": DESCRIPTOR_COUNT,
         "descriptor_capacity": DESCRIPTOR_CAPACITY,
         "shape": {
-            "vocab_size": vocab_size,
-            "scan_base": scan_base,
-            "scan_rows": scan_rows,
-            "tile_rows": tile_rows,
-            "tile_count": tile_count,
             "input_size": INPUT_SIZE,
-            "group_count": GROUP_COUNT,
+            "post_attention_width": POST_ATTENTION_WIDTH,
+            "down_width": DOWN_WIDTH,
+            "out_width": OUT_WIDTH,
+            "down_to_out_shift": DOWN_TO_OUT_SHIFT,
         },
         "memory_layout": {
-            "weight_base_addr": weight_base,
-            "scale_base_addr": scale_base,
-            "weight_row_bytes": weight_row_bytes,
-            "scale_row_bytes": scale_row_bytes,
-            "output_addr": addr("output_token_score"),
-            "expected_addr": addr("expected_token_score"),
+            "post_attn_hidden_addr": addr("post_attn_hidden_q14_10"),
+            "down_out_addr": addr("down_out_q12_12"),
+            "layer_out_addr": addr("layer_out_q14_10"),
+            "expected_addr": addr("expected_layer_out_q14_10"),
+            "vector_bytes": vector_bytes,
         },
         "expected": {
-            "best_token": best_token,
-            "best_score_q26": best_score,
-            "output_words32": [int(value) for value in expected_words.tolist()],
+            "words": int(expected_i32.size),
+            "min": int(np.min(expected_i32)),
+            "max": int(np.max(expected_i32)),
+            "saturation": int(saturation[0]),
+        },
+        "focused_meta": {
+            key: focused_meta.get(key)
+            for key in ("selected_position", "selected_token_id", "selected_token_text", "source_post_attention_prefix", "source_down_prefix")
+            if key in focused_meta
         },
         "files": {
             "binary": relpath(args.output),
             "sim_hex": relpath(args.sim_hex),
             "expected_hex": relpath(args.expected_hex),
+            "focused_meta": relpath(focused_meta_path) if focused_meta_path.is_file() else None,
         },
     }
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     args.manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
-    print("Exported QMAP LM-head argmax runtime packet")
+    print("Exported QMAP MLP residual-add runtime packet")
     print("=" * 80)
-    print(f"QMAP base:     0x{QMAP_BASE:016X}")
-    print(f"Image bytes:   0x{image_bytes:X}")
-    print(f"Scan window:   [{scan_base}, {scan_base + scan_rows}) rows={scan_rows}, tiles={tile_count}")
-    print(f"Expected:      token={best_token}, score_q26={best_score}")
-    print(f"Binary:        {args.output}")
-    print(f"Simulation hex:{args.sim_hex}")
-    print(f"Manifest:      {args.manifest}")
+    print(f"QMAP base:       0x{QMAP_BASE:016X}")
+    print(f"Image bytes:     0x{image_bytes:X}")
+    print(f"Input words:     {INPUT_SIZE}")
+    print(f"Expected words:  {expected_i32.size}")
+    print(f"Saturation:      {int(saturation[0])}")
+    print(f"Binary:          {args.output}")
+    print(f"Simulation hex:  {args.sim_hex}")
+    print(f"Manifest:        {args.manifest}")
 
 
 if __name__ == "__main__":

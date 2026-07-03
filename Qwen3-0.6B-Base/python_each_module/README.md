@@ -75,5 +75,35 @@ Script map:
 - `34_export_qmap_lm_head_argmax_image.py`: wraps the LM-head activation,
   persistent weight/scale descriptors, scan range, and output token/score into
   a QMAP runtime packet for RTL simulation
+- `35_export_lm_head_full_vocab_vectors.py`: streams full-vocabulary LM-head
+  Q4 weight/scale/logit vectors for the descriptor-backed full-vocab RTL scan
+- `36_export_qmap_final_token_tail_image.py`: wraps final hidden, final
+  RMSNorm gamma, final-norm scratch, persistent LM-head weight/scale
+  descriptors, and output token/score into the first QMAP final-token tail
+  runtime packet
+- `37_export_qmap_attention_frontend_image.py`: wraps Q/K/V projection outputs,
+  q/k norm gamma, RoPE cos/sin tables, KV-cache placement, and Q RoPE scratch
+  into the first QMAP attention front-end runtime packet
+- `38_export_qmap_attention_score_value_image.py`: wraps Q RoPE input, K/V
+  cache placement, softmax exp LUT, and `attn_out[2048]` scratch into the next
+  QMAP attention-body runtime packet
+- `39_export_qmap_o_proj_image.py`: wraps `attn_out[2048]`, persistent Layer 0
+  `o_proj` Q4 weight/scale descriptors, and `o_proj_out[1024]` scratch into a
+  QMAP runtime packet
+- `40_export_qmap_post_attention_residual_norm_image.py`: wraps residual input,
+  `o_proj_out[1024]`, signed post-attention RMSNorm gamma, post-attention
+  hidden scratch, and post-norm scratch into the next QMAP per-layer body packet
+- `41_export_qmap_mlp_gate_up_image.py`: wraps `post_norm[1024]`, persistent
+  Layer 0 gate/up Q4 weight/scale descriptors, and gate/up output scratch into
+  the next QMAP per-layer body packet
+- `42_export_qmap_mlp_silu_mul_image.py`: wraps gate/up `[3072]`, the fixed
+  sigmoid LUT, hidden output scratch, and expected hidden debug data into the
+  next QMAP per-layer body packet
+- `43_export_qmap_mlp_down_image.py`: wraps `mlp_hidden[3072]`, persistent
+  Layer 0 down-proj Q4 weight/scale descriptors, down output scratch, and
+  expected down debug data into the next QMAP per-layer body packet
+- `44_export_qmap_mlp_residual_add_image.py`: wraps
+  `post_attn_hidden[1024]`, `down_out[1024]`, layer-output scratch, and
+  expected layer-output debug data into the next QMAP per-layer body packet
 - `run_all_module_validations.py`: runs the core validation scripts `01`-`10`
   in order

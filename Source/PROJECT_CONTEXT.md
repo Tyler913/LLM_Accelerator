@@ -453,10 +453,39 @@ addresses. A runtime LM-head tile scheduler now reuses that memory-backed
 engine across multiple tile windows and passes local scans for `64` tiles and
 `23` tiles. A QMAP descriptor-backed LM-head wrapper now reads final-norm,
 weight, scale, scan-range, output, and debug descriptors, runs the scheduler,
-and writes the output token/score descriptor locally. Hardware confirmation is
-still pending; the next model-facing direction is to prove the full
-`151936`-row / `9496`-tile vocabulary path before choosing the first
-memory-mapped one-token wrapper.
+and writes the output token/score descriptor locally. The same QMAP wrapper has
+also passed a full `151936`-row / `9496`-tile vocabulary scan in Vivado xsim,
+returning the Python-proven token `264` and score `1365150750` with exact Q26
+logit checks. The first QMAP final-token tail wrapper now composes
+descriptor-provided `final_hidden[1024]` and signed final RMSNorm gamma,
+writes `final_norm[1024]` back to a QMAP activation descriptor, then invokes
+the full-vocabulary QMAP LM-head wrapper and writes output token/score. This
+tail wrapper passes compact Icarus and full-vocabulary Vivado xsim locally.
+The first QMAP attention front-end wrapper now also passes locally: it consumes
+Q/K/V projection output buffers, q/k gamma, and RoPE cos/sin descriptors, then
+writes exact K/V cache entries and exact Q RoPE output. The next QMAP
+attention score/value wrapper now also passes locally: it consumes Q RoPE,
+reads K/V cache through descriptor-derived addresses, streams scores into
+softmax/value, and writes exact `attn_out[2048]`. The QMAP `o_proj` wrapper
+now also passes locally: it consumes `attn_out[2048]`, reads persistent Layer 0
+Q4 `o_proj` weight/scale rows, and writes exact `o_proj_out[1024]`. Hardware
+confirmation is still pending. The QMAP post-attention residual/RMSNorm
+wrapper now also passes locally: it consumes descriptor-visible residual
+input, `o_proj_out[1024]`, and signed post-attention gamma, then writes exact
+post-attention hidden and post-norm buffers. The QMAP MLP gate/up wrapper now
+also passes locally: it consumes descriptor-visible `post_norm[1024]`, reads
+persistent Layer 0 gate/up Q4 weight/scale rows, and writes exact gate/up
+`[3072]` buffers. The QMAP MLP SiLU/multiply wrapper now also passes locally:
+it consumes descriptor-visible gate/up `[3072]` plus a fixed UQ0.16 sigmoid
+LUT and writes exact `mlp_hidden[3072]`. The QMAP MLP down wrapper now also
+passes locally: it consumes descriptor-visible `mlp_hidden[3072]`, reads
+persistent Layer 0 down-proj Q4 weight/scale rows, and writes exact
+`down_out[1024]`. The QMAP final MLP residual wrapper now also passes locally:
+it consumes descriptor-visible `post_attn_hidden[1024]` and `down_out[1024]`,
+then writes exact `layer_out[1024]` while catching descriptor/protocol error
+paths with no writes. The next model-facing direction is to compose the locally
+passing per-layer body wrappers behind a single Layer 0 scheduler/driver, not
+to repeat small AXI smoke tests.
 
 Keep the exact next action in `Source/CURRENT_STATE.md`; keep detailed address
 planning in `Source/FPGA_MEMORY_MAP.md`.

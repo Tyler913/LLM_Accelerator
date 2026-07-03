@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-07-01
+Last updated: 2026-07-04
 
 This file is the concise working-state handoff. For durable project context,
 read `Source/PROJECT_CONTEXT.md` first. For detailed address planning, read
@@ -60,6 +60,18 @@ conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/31_export_mlp_re
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/32_export_final_rmsnorm_vectors.py
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/33_export_lm_head_argmax_vectors.py --scan-rows 1024 --tile-rows 16 --chunk-rows 2048
 conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/34_export_qmap_lm_head_argmax_image.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/35_export_lm_head_full_vocab_vectors.py --chunk-rows 1024
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/34_export_qmap_lm_head_argmax_image.py --lm-prefix lm_head_argmax_full_vocab_real --output artifacts/test_vectors/qwen3_0p6b_qmap_v1/lm_head_argmax_full_vocab_runtime.qmap.bin --manifest artifacts/test_vectors/qwen3_0p6b_qmap_v1/lm_head_argmax_full_vocab_runtime_manifest.json --sim-hex FPGA_Project/sim/vectors/qmap_lm_head_argmax_full_vocab_image_words32.hex --expected-hex FPGA_Project/sim/vectors/qmap_lm_head_argmax_full_vocab_expected_words32.hex
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/36_export_qmap_final_token_tail_image.py --lm-prefix lm_head_argmax_stage_real --output artifacts/test_vectors/qwen3_0p6b_qmap_v1/final_token_tail_compact_runtime.qmap.bin --manifest artifacts/test_vectors/qwen3_0p6b_qmap_v1/final_token_tail_compact_runtime_manifest.json --sim-hex FPGA_Project/sim/vectors/qmap_final_token_tail_compact_image_words32.hex --expected-hex FPGA_Project/sim/vectors/qmap_final_token_tail_compact_expected_words32.hex
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/36_export_qmap_final_token_tail_image.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/37_export_qmap_attention_frontend_image.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/38_export_qmap_attention_score_value_image.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/39_export_qmap_o_proj_image.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/40_export_qmap_post_attention_residual_norm_image.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/41_export_qmap_mlp_gate_up_image.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/42_export_qmap_mlp_silu_mul_image.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/43_export_qmap_mlp_down_image.py
+conda run -n llm_fpga python Qwen3-0.6B-Base/python_each_module/44_export_qmap_mlp_residual_add_image.py
 ```
 
 Stable reference prompt:
@@ -128,7 +140,16 @@ The current hand-written RTL bring-up stack includes:
   - `axi4_write_master.sv`
   - `qmap_qkv_projection_compute_path.sv`
   - `qmap_qkv_projection_axi_smoke_top.sv`
+  - `qmap_attention_frontend_compute_path.sv`
+  - `qmap_attention_score_value_compute_path.sv`
+  - `qmap_o_proj_compute_path.sv`
+  - `qmap_post_attention_residual_norm_compute_path.sv`
+  - `qmap_mlp_gate_up_compute_path.sv`
+  - `qmap_mlp_silu_mul_compute_path.sv`
+  - `qmap_mlp_down_compute_path.sv`
+  - `qmap_mlp_residual_add_compute_path.sv`
   - `qmap_lm_head_argmax_compute_path.sv`
+  - `qmap_final_token_tail_compute_path.sv`
   - `qmap_dot64_axi_smoke_top.sv`
   - `qmap_dot64_axi_smoke_bd.v`
   - `qmap_row1024_axi_smoke_top.sv`
@@ -445,7 +466,15 @@ Latest local RTL/software validation state:
   final RMSNorm activation, persistent LM-head Q4 weights, persistent Q2.14
   scales, output token/score, and expected/debug token/score. The weight and
   scale descriptors expose the scan range through `aux2=scan_base` and
-  `aux3=tile_count`.
+  `aux3=tile_count`. The exporter now accepts `--lm-prefix`, so the same QMAP
+  descriptor contract can wrap both compact and full-vocabulary LM-head vector
+  sets.
+- `35_export_lm_head_full_vocab_vectors.py` exports the full-vocabulary
+  LM-head Q4 simulation memory without reformatting the RTL contract:
+  activation `[1024]`, persistent weight words for all `151936` rows,
+  persistent scale words, `151936` Q26 golden logits, and expected token/score.
+  Python proves the full Q4 argmax is token `264` (`' a'`) with score
+  `1365150750`, matching the HF/FP32 argmax.
 - `qmap_lm_head_argmax_compute_path.sv` passes in Icarus against that packet.
   It reads the QMAP header/descriptors, validates the LM-head descriptor
   contract, reads `final_norm[1024]`, runs `lm_head_argmax_tile_scheduler.sv`,
@@ -459,6 +488,135 @@ Latest local RTL/software validation state:
   successful runs, no adjacent done cycles, and full wrapper/scheduler/core/
   reader state coverage. The invalid descriptor run raises error, writes no
   output, and clears the externally visible best result.
+- The same QMAP LM-head wrapper passes the full-vocabulary run in Vivado xsim
+  with `QMAP_LM_HEAD_TB_FULL_VOCAB`: `9496` tiles, `151936` checked logits,
+  `85475` read requests, `20664528` response words, `75968` weight requests,
+  `9496` scale requests, one output write burst, token `264`, score
+  `1365150750`, `max_abs_logit_diff=0`, one done pulse, and no error.
+- `36_export_qmap_final_token_tail_image.py` exports the first QMAP
+  final-token tail runtime packet at `0x4_0501_0000`. It uses eight
+  descriptors for metadata, final-norm scratch/LM-head activation,
+  persistent LM-head Q4 weight and Q2.14 scale references, output token/score,
+  expected/debug token/score, final hidden input, and signed final RMSNorm
+  gamma. This packet keeps the already-proven LM-head descriptor contract and
+  adds the preceding final RMSNorm write-back.
+- `qmap_final_token_tail_compute_path.sv` is the first memory-mapped
+  one-token wrapper boundary. It reads `final_hidden[1024]` and
+  `final_norm.gamma[1024]` from QMAP descriptors, runs
+  `final_rmsnorm_stage.sv`, writes `final_norm[1024]` back to the descriptor
+  output buffer, then invokes `qmap_lm_head_argmax_compute_path.sv` and writes
+  the final token/score descriptor. The compact Icarus run covers a 64-tile
+  LM-head scan plus an invalid gamma descriptor path: token `264`, score
+  `1365150750`, `1024` exact final-norm write words, `1024` checked logits,
+  `max_abs_logit_diff=0`, no norm mismatches, stale best-result clearing on
+  invalid descriptor, and no adjacent done pulses. The full-vocabulary Vivado
+  xsim run covers `9496` tiles / `151936` logits with the same token and
+  score, `75968` weight requests, `9496` scale requests, `1024` final-norm
+  write words, `3` token/score output words, `max_abs_logit_diff=0`, one done
+  pulse, and zero error/saturation rows in the trace audit.
+- `37_export_qmap_attention_frontend_image.py` exports the first QMAP
+  attention front-end runtime packet at `0x4_0502_0000`. It uses ten active
+  descriptors in a 16-slot table for metadata, Q/K/V projection output buffers,
+  signed q/k gamma, RoPE cos/sin tables, the KV-cache descriptor, and Q RoPE
+  output scratch.
+- `qmap_attention_frontend_compute_path.sv` is the first memory-mapped
+  per-layer body wrapper after QKV projection write-back. It reads Q/K/V flat
+  buffers, q/k gamma, and RoPE cos/sin from QMAP descriptors, runs
+  `qk_norm_rope_kv_cache_stage.sv`, writes exact K/V cache entries, then writes
+  `q_rope[2048]` to the descriptor output buffer. The Icarus testbench matches
+  `2048` K/V cache writes and `2048` Q RoPE write words exactly, accepts
+  `31` read requests / `4944` read-response words and `2049` write requests /
+  `4096` write-data words, injects read/write request and data backpressure,
+  covers a busy-period spurious start pulse, and covers an invalid RoPE-cos
+  dtype descriptor that raises error with no writes. The trace audit covers all
+  wrapper states and confirms cache writes finish before Q RoPE write-back.
+- `38_export_qmap_attention_score_value_image.py` exports the next QMAP
+  attention-body runtime packet at `0x4_0503_0000`. It uses five active
+  descriptors for metadata, Q RoPE input, the K/V cache descriptor, the
+  softmax exp LUT, and `attn_out[2048]` output scratch.
+- `qmap_attention_score_value_compute_path.sv` composes
+  `attention_score_stage.sv` and `attention_softmax_value_stage.sv` behind a
+  memory-mapped QMAP boundary. It reads Q RoPE and the exp LUT from QMAP
+  descriptors, uses `kv_cache_addr_gen.sv` to turn K/V requests into exact
+  4-byte cache reads, streams scaled scores directly into softmax/value, and
+  writes `attn_out[2048]` back to the descriptor output buffer. The Icarus
+  testbench matches `10240` K-cache reads, `10240` V-cache reads, and `2048`
+  `attn_out` write words exactly. The passing run accepts `20496` read
+  requests / `22961` read-response words, one output write request /
+  `2048` write-data words, injects `7826` read-request stall cycles and `999`
+  write-data stall cycles with max read latency `8`, and covers an invalid
+  exp-LUT dtype descriptor that raises error with no writes. The trace audit
+  confirms K reads finish before V reads, V/capture finish before write-back,
+  and all wrapper states are covered.
+- `39_export_qmap_o_proj_image.py` exports the next QMAP per-layer body packet
+  at `0x4_0504_0000`. It uses six active descriptors for metadata,
+  `attn_out[2048]`, persistent Layer 0 `o_proj` Q4 weight, persistent Q2.14
+  scale, `o_proj_out[1024]` output scratch, and expected/debug output words.
+  The persistent simulation addresses are `0x4_0600_0000` for the packed Q4
+  weight tensor and `0x4_0610_0000` for the scale tensor.
+- `qmap_o_proj_compute_path.sv` consumes that packet behind the same
+  project-local memory request/write interface. It validates descriptor IDs,
+  roles, dtypes, ranks, dimensions, bytes, layer id, and matrix id; reads
+  `attn_out[2048]` in eight 1024-byte bursts; then reads each of the 1024
+  persistent Q4 weight rows and scale rows, runs `q4_gemv_row_1024.sv` with
+  `INPUT_SIZE=2048`, stores each converted Q12.12 row word, and writes
+  `o_proj_out[1024]` as one 4096-byte output burst. The Icarus testbench
+  matches all `1024` output words exactly, accepts `2070` read requests /
+  `280992` read-response words across the normal plus invalid-descriptor
+  runs, accepts one output write request / `1024` write-data words, covers
+  request/response/write-data backpressure and a busy-period spurious start,
+  and covers an invalid Q4 weight group-size descriptor that raises error with
+  no writes. Trace audit confirms `1024` row stores from row 0 to row 1023,
+  one output write burst after the final row store, `wr_last=1` on the final
+  write word, and non-adjacent done pulses.
+- `40_export_qmap_post_attention_residual_norm_image.py` exports the next QMAP
+  per-layer body packet at `0x4_0505_0000`. It uses eight active descriptors
+  for metadata, residual input, `o_proj_out[1024]`, signed post-attention
+  RMSNorm gamma, post-attention hidden output, post-norm output, expected
+  hidden, and expected norm. The image is `0x8000` bytes and keeps all vectors
+  as descriptor-visible 32-bit words, with 24-bit or 16-bit element contracts
+  recorded in the descriptors.
+- `qmap_post_attention_residual_norm_compute_path.sv` consumes that packet
+  behind the project-local memory request/write interface. It validates
+  descriptor IDs, roles, dtypes, ranks, flags, dimensions, byte counts, layer
+  id, stage id, and `o_proj` matrix id; reads residual input, `o_proj_out`, and
+  post-attention gamma as three groups of four 1024-byte bursts; runs
+  `post_attention_residual_norm_stage.sv`; then writes exact
+  `post_attention_hidden[1024]` and `post_norm[1024]` as two 4096-byte output
+  bursts. The Icarus testbench matches both write-back buffers exactly,
+  accepts `30` read requests / `3616` read-response words across the normal
+  plus invalid-descriptor runs, accepts two output write requests / `2048`
+  write-data words, covers request/response/write-data backpressure and a
+  busy-period spurious start, and covers an invalid gamma dtype descriptor that
+  raises error with no writes. The normal run reports `residual_count=1024`,
+  `stage_cycle_count=3132`, `sum_squares=33222329`, `inv_rms=372827`, and no
+  residual or norm saturation. Trace audit confirms the stage-complete snapshot
+  and first hidden write request occur on cycle `10616`, write data runs from
+  cycle `10617` through `13281`, the normal done pulse is cycle `13286`, and
+  normal/bad done pulses are not adjacent.
+- `41_export_qmap_mlp_gate_up_image.py` exports the next QMAP per-layer body
+  packet at `0x4_0506_0000`. It uses ten active descriptors for metadata,
+  `post_norm[1024]`, persistent Layer 0 gate/up Q4 weights, persistent gate/up
+  Q2.14 scales, gate/up output buffers, and expected/debug gate/up outputs.
+  The runtime image is `0xE000` bytes. Persistent simulation bases are
+  `0x4_0620_0000` for gate weight, `0x4_0638_0000` for gate scale,
+  `0x4_0640_0000` for up weight, and `0x4_0658_0000` for up scale.
+- `qmap_mlp_gate_up_compute_path.sv` consumes that packet behind the
+  project-local memory request/write interface. It validates descriptor IDs,
+  roles, dtypes, ranks, flags, dimensions, byte counts, stage id, layer id,
+  and gate/up matrix ids; reads `post_norm[1024]` in four 1024-byte bursts;
+  then for each of 3072 rows reads gate weight, gate scale, up weight, and up
+  scale from persistent DDR regions, runs two `q4_gemv_row_1024.sv` cores in
+  parallel, stores the converted Q12.12 gate/up row words, and writes
+  `gate[3072]` plus `up[3072]` as two 12288-byte output bursts. The Icarus
+  testbench matches both write-back buffers exactly, accepts `12314` read
+  requests / `837280` read-response words across the normal plus
+  invalid-descriptor runs, accepts two output write requests / `6144`
+  write-data words, covers request/response/write-data backpressure and a
+  busy-period spurious start, and covers an invalid up-scale dtype descriptor
+  that raises error with no writes. Trace audit confirms 3072 row completions,
+  gate/up write requests at `0x4_0506_1940` and `0x4_0506_4940`, both length
+  12288 bytes, and non-adjacent normal/error done pulses.
 - RTL source files now use explicit `input wire logic` ports. This keeps
   `default_nettype none` enabled while satisfying Vivado 2025.1 synthesis,
   which rejects plain `input logic` as an implicit net in this flow.
@@ -653,16 +811,53 @@ Previous useful checkpoint:
   SiLU/multiply, MLP down projection, final MLP residual add, full-model final
   RMSNorm, the tiled LM-head argmax core, the memory-backed 1024-row LM-head
   scan-window wrapper, the runtime LM-head tile scheduler, and the QMAP
-  descriptor-backed LM-head wrapper are validated in focused simulations. The
-  Q/K norm + RoPE + cache-append chain is locally integrated for the Layer 0
-  last-token path, and attention score plus softmax/value now have K/V-cache
-  read-interface simulations, but these blocks are not yet wrapped as a full
-  memory-mapped one-token datapath.
+  descriptor-backed LM-head wrapper are validated in focused simulations,
+  including the full `151936`-row / `9496`-tile LM-head vocabulary sweep. The
+  first memory-mapped one-token tail wrapper now also composes final RMSNorm
+  write-back into that full-vocabulary QMAP LM-head path. The first
+  memory-mapped per-layer body slice now wraps Q/K norm, RoPE, and K/V cache
+  append behind QMAP descriptors, producing exact K/V cache writes and exact
+  Q RoPE write-back locally. The next QMAP attention-body slice wraps
+  attention score plus softmax/value behind descriptor-visible Q RoPE, K/V
+  cache, exp LUT, and `attn_out` buffers. The following QMAP `o_proj` slice
+  now consumes that `attn_out[2048]`, persistent Layer 0 Q4 `o_proj`
+  weight/scale descriptors, and writes exact `o_proj_out[1024]` locally. The
+  following QMAP post-attention residual/RMSNorm slice now consumes
+  descriptor-visible residual input, `o_proj_out[1024]`, and signed
+  post-attention gamma, then writes exact post-attention hidden and post-norm
+  buffers locally. The following QMAP MLP gate/up slice now consumes
+  descriptor-visible `post_norm[1024]`, persistent Layer 0 Q4 gate/up
+  weight/scale descriptors, and writes exact gate/up `[3072]` buffers locally.
+  The following QMAP MLP SiLU/multiply slice now consumes descriptor-visible
+  gate/up `[3072]` plus a fixed UQ0.16 sigmoid LUT, runs
+  `mlp_silu_mul_stage.sv`, and writes exact `mlp_hidden[3072]` locally.
+- The following QMAP MLP down-projection slice now consumes descriptor-visible
+  `mlp_hidden[3072]`, reads persistent Layer 0 Q4 down-proj weight/scale rows
+  at `0x4_0660_0000` and `0x4_0678_0000`, splits each 1536-byte weight row
+  into 1024-byte plus 512-byte reads, and writes exact `down_out[1024]`
+  locally. The passing Icarus run covered `1024` rows, `3091` normal read
+  requests, `421072` normal read-response words, one 4096-byte output write,
+  request/response/write-data backpressure, a busy-period spurious start, and
+  an invalid scale-dtype descriptor path with no writes.
+- The following QMAP final MLP residual slice now consumes descriptor-visible
+  `post_attn_hidden[1024]` and `down_out[1024]`, runs
+  `mlp_residual_add_stage.sv`, and writes exact Q14.10 `layer_out[1024]`
+  locally. The passing Icarus run covered a valid full write-back, a
+  bad-down-dtype descriptor path with no writes, and a malformed payload
+  `last` protocol path with no writes. The normal run used `14` read requests,
+  `2224` read-response words, one 4096-byte output write request, and `1024`
+  write-data words. The full three-run test covered `27` read requests,
+  `2577` read-response words, request/response/write-data backpressure,
+  a busy-period spurious start, and CSV trace audit.
 - The LM-head QMAP wrapper now proves descriptor-visible scan control over the
-  1024-row scan window and a shorter 368-row prefix. A full `151936`-row /
-  `9496`-tile vocabulary scan, or an equivalent descriptor-backed full-vocab
-  proof, is still pending before treating LM-head as a deployable full-vocab
-  hardware path.
+  1024-row scan window, a shorter 368-row prefix, and the complete full-vocab
+  path. Full-vocab simulation used Vivado xsim with the same scheduler and
+  reported exact token `264`, score `1365150750`, and `max_abs_logit_diff=0`.
+- The QMAP final-token tail wrapper proves the first descriptor-visible
+  composed inference tail:
+  `final_hidden + final_norm.gamma -> final_norm write-back -> full-vocab
+  LM-head argmax -> output token/score`. This is local RTL/xsim evidence, not
+  a new board checkpoint.
 - Cache coherency, bulk transfer strategy, and any future DMA policy are still
   open. The current proven path is direct PS memory-mapped 32-bit access.
 - The isolated Q4 GEMV smoke-test phase is considered complete enough after the
@@ -677,20 +872,28 @@ Previous useful checkpoint:
 
 ## Immediate Next Step
 
-Use the full locally passing QKV AXI write-back path, the q/k norm + RoPE +
-KV-cache append stage, the attention-score stage, the softmax/value stage,
-the `o_proj` stage, the post-attention residual/RMSNorm stage, the MLP
-gate/up projection, SiLU/multiply, down projection, final residual stage,
-full-model final RMSNorm stage, tiled LM-head argmax stage, memory-backed
-LM-head scan-window wrapper, runtime LM-head tile scheduler, and QMAP
-descriptor-backed LM-head wrapper as regression baselines. Continue with the
-LM-head full-vocabulary local proof before returning to hardware.
+Use the full locally passing QKV AXI write-back path, the QMAP attention
+front-end wrapper, the QMAP attention score/value wrapper, the QMAP `o_proj`
+wrapper, the QMAP post-attention residual/RMSNorm wrapper, the QMAP MLP gate/up
+wrapper, the QMAP MLP SiLU/multiply wrapper, the QMAP MLP down wrapper, the
+QMAP final MLP residual wrapper, full-model final RMSNorm stage, tiled LM-head
+argmax stage, memory-backed LM-head scan-window wrapper, runtime LM-head tile
+scheduler, QMAP descriptor-backed full-vocabulary LM-head wrapper, and the QMAP
+final-token tail wrapper as regression baselines. Continue by composing the
+locally passing per-layer body wrappers into a single local memory-mapped
+Layer 0 body scheduler/driver before returning to hardware.
 
 Recommended next slice:
 
 1. Keep the passing row1024 board design, the full QKV AXI simulation, and
    `tb_qk_norm_rope_kv_cache_stage.sv`, `tb_attention_score_stage.sv`, and
-   `tb_attention_softmax_value_stage.sv`, `tb_o_proj_stage.sv`, plus
+   `tb_attention_softmax_value_stage.sv`, `tb_o_proj_stage.sv`, and
+   `tb_qmap_o_proj_compute_path.sv`, plus
+   `tb_qmap_post_attention_residual_norm_compute_path.sv`,
+   `tb_qmap_mlp_gate_up_compute_path.sv`,
+   `tb_qmap_mlp_silu_mul_compute_path.sv`,
+   `tb_qmap_mlp_down_compute_path.sv`,
+   `tb_qmap_mlp_residual_add_compute_path.sv`,
    `tb_post_attention_residual_norm_stage.sv` and
    `tb_mlp_gate_up_proj_stage.sv`, `tb_mlp_silu_mul_stage.sv`, and
    `tb_mlp_down_proj_stage.sv` and `tb_mlp_residual_add_stage.sv`, as
@@ -699,11 +902,15 @@ Recommended next slice:
    `tb_lm_head_argmax_tile_scheduler.sv` plus
    `tb_qmap_lm_head_argmax_compute_path.sv` as the current full-model
    final-output regressions.
-2. Prove either the complete `151936`-row / `9496`-tile vocabulary scan in the
-   memory model, or an equivalent descriptor-backed full-vocab sweep that
-   reuses the same scheduler and reports exact token `264`.
-3. After that local full-vocab proof passes, choose the first one-token
-   memory-mapped top wrapper boundary before any new board checkpoint.
+2. Implement the next real memory-mapped composition slice: a local Layer 0
+   body scheduler/driver that starts the already passing QMAP sub-wrappers in
+   order from post-attention residual/RMSNorm through final MLP residual and
+   arbitrates their memory request/write interfaces. This should be local
+   simulation first, with backpressure, error propagation, no-write-on-error
+   checks, and trace audit, not a new board run.
+3. After that composed per-layer body passes, decide whether to move one level
+   outward into a one-token/layer scheduler or plan a wider hardware
+   confirmation.
 
 ## Practical Notes
 

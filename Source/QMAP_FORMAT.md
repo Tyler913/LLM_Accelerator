@@ -12,7 +12,28 @@ Icarus simulation, and the first tiled Q4 LM-head scan plus greedy argmax stage
 passes Icarus simulation for a 1024-row scan window. A memory-backed
 LM-head tile reader/wrapper, runtime tile scheduler, and QMAP descriptor-backed
 LM-head wrapper now also pass local multi-window scans for `64` and `23`
-tiles. The full `9496`-tile vocabulary proof remains pending.
+tiles plus the full `9496`-tile vocabulary sweep. The first QMAP final-token
+tail wrapper now composes final RMSNorm write-back with full-vocabulary
+LM-head argmax in local RTL/xsim. The first QMAP attention front-end wrapper
+now also passes local RTL simulation, reading Q/K/V projection outputs plus
+q/k gamma and RoPE tables through descriptors and writing exact K/V cache plus
+Q RoPE outputs. The next QMAP attention score/value wrapper now also passes
+local RTL simulation, reading Q RoPE plus K/V cache and writing exact
+`attn_out[2048]`. The QMAP `o_proj` wrapper now consumes that attention
+output, persistent Layer 0 Q4 `o_proj` weight/scale descriptors, and writes
+exact `o_proj_out[1024]` locally. The QMAP post-attention residual/RMSNorm
+wrapper now consumes residual input, that `o_proj_out[1024]`, and signed
+post-attention gamma, then writes exact post-attention hidden and post-norm
+buffers locally. The QMAP MLP gate/up wrapper now consumes descriptor-visible
+`post_norm[1024]`, persistent Layer 0 Q4 gate/up weight/scale descriptors, and
+writes exact gate/up `[3072]` buffers locally. The QMAP MLP SiLU/multiply
+wrapper now consumes descriptor-visible gate/up `[3072]` plus a fixed UQ0.16
+sigmoid LUT and writes exact `mlp_hidden[3072]` locally. The QMAP MLP down
+wrapper now consumes descriptor-visible `mlp_hidden[3072]`, reads persistent
+Layer 0 Q4 down-proj weight/scale rows, and writes exact `down_out[1024]`
+locally. The QMAP final MLP residual wrapper now consumes descriptor-visible
+`post_attn_hidden[1024]` and `down_out[1024]`, then writes exact
+`layer_out[1024]` locally.
 
 For Q4 quantization semantics, read `Source/Q4_FORMAT.md`. For physical PL
 DDR4 placement, read `Source/FPGA_MEMORY_MAP.md`.
@@ -151,7 +172,7 @@ descriptor_addr = descriptor_table_addr + tensor_slot * 128
 | `6` | `QMAP_ROLE_METADATA` | Extra metadata payload |
 | `7` | `QMAP_ROLE_KV_CACHE` | KV cache tensor |
 | `8` | `QMAP_ROLE_ROPE_TABLE` | RoPE cos/sin tensor |
-| `9` | `QMAP_ROLE_PARAMETER` | Small read-only model parameter such as RMSNorm gamma |
+| `9` | `QMAP_ROLE_PARAMETER` | Small read-only model parameter such as RMSNorm gamma or LUT |
 
 ## Dtype Enum
 
@@ -173,6 +194,9 @@ descriptor_addr = descriptor_table_addr + tensor_slot * 128
 | `20` | `QMAP_DTYPE_I32_Q14_10` | Signed `Q14.10` value padded to 32 bits |
 | `21` | `QMAP_DTYPE_U16_Q8_8` | Unsigned `UQ8.8` value for RMSNorm gamma |
 | `22` | `QMAP_DTYPE_I16_Q8_7` | Signed `Q8.7` value for q_norm/k_norm gamma |
+| `23` | `QMAP_DTYPE_I16_Q1_15` | Signed `Q1.15` value for RoPE cos/sin |
+| `24` | `QMAP_DTYPE_U32_Q0_20` | Unsigned `UQ0.20` value padded to 32 bits |
+| `25` | `QMAP_DTYPE_U16_Q0_16` | Unsigned `UQ0.16` value padded to 32 bits |
 
 ## Tensor Flags
 
@@ -416,9 +440,11 @@ DDR4 and reused across prompt prefill and decode:
 
 - Q4 packed weights and Q2.14 scales for embedding/LM-head, attention
   projections, and MLP matrices
-- RMSNorm gamma vectors and q/k norm gamma vectors. Current local RTL uses
-  unsigned `U16_Q8_8` for layer input/post/final RMSNorm gamma and signed
-  `I16_Q8_7` for q_norm/k_norm gamma.
+- RMSNorm gamma vectors and q/k norm gamma vectors. Current local RTL keeps
+  signed-capable gamma handling where needed: q_norm/k_norm, post-attention
+  RMSNorm, and final RMSNorm use signed `I16_Q8_7` in the current fixed
+  vectors; the older Layer 0 input RMSNorm bring-up vector still uses
+  unsigned `U16_Q8_8`.
 - optional RoPE cos/sin tables
 - fixed base addresses for KV cache, activation buffers, logits/argmax
   scratch, and debug regions
@@ -544,14 +570,447 @@ bring-up. In the later persistent-manifest flow, the same descriptors should
 point to already-loaded weight, scale, activation, and output-buffer regions
 instead of copying large model tensors into every runtime packet.
 
+### Attention Front-End Runtime Packet
+
+The first per-layer body runtime packet starts immediately after QKV projection
+write-back. It consumes descriptor-visible Q/K/V buffers, q/k norm gamma, and
+RoPE tables, then writes K/V cache entries and a Q RoPE output buffer for the
+current token.
+
+Dataflow:
+
+```text
+q_out[2048] + k_out[1024] + v_out[1024]
+  + q_norm.gamma[128] + k_norm.gamma[128]
+  + rope_cos[128] + rope_sin[128]
+  -> qk_norm_rope_kv_cache_stage
+  -> append K/V cache for one layer/position
+  -> write q_rope[2048]
+```
+
+The current packet base is `0x4_0502_0000`. It reserves 16 descriptor slots,
+uses ten active descriptors, and places the payload after the table at
+`qmap_base + 0x0900`.
+
+Descriptor table:
+
+| Slot | Tensor | Role | Key fields |
+| ---: | --- | --- | --- |
+| `0` | metadata | `QMAP_ROLE_METADATA` | layer index, position, and debug summary |
+| `1` | Q projection output | `QMAP_ROLE_ACTIVATION` | `I32_Q12_12`, `[2048]`, read-only |
+| `2` | K projection output | `QMAP_ROLE_ACTIVATION` | `I32_Q12_12`, `[1024]`, read-only |
+| `3` | V projection output | `QMAP_ROLE_ACTIVATION` | `I32_Q12_12`, `[1024]`, read-only |
+| `4` | q_norm gamma | `QMAP_ROLE_PARAMETER` | `I16_Q8_7`, `[128]`, read-only, padded to 32-bit words in the current packet |
+| `5` | k_norm gamma | `QMAP_ROLE_PARAMETER` | `I16_Q8_7`, `[128]`, read-only, padded to 32-bit words in the current packet |
+| `6` | RoPE cos | `QMAP_ROLE_ROPE_TABLE` | `I16_Q1_15`, `[128]`, read-only, padded to 32-bit words in the current packet |
+| `7` | RoPE sin | `QMAP_ROLE_ROPE_TABLE` | `I16_Q1_15`, `[128]`, read-only, padded to 32-bit words in the current packet |
+| `8` | KV cache | `QMAP_ROLE_KV_CACHE` | `I32_Q12_12`, `[2,8,256,128]`, base `0x4_1410_0000` in the current local layout |
+| `9` | Q RoPE output | `QMAP_ROLE_OUTPUT` | `I32_Q12_12`, `[2048]`, write-only |
+
+Local validation:
+
+- Exporter:
+  `Qwen3-0.6B-Base/python_each_module/37_export_qmap_attention_frontend_image.py`.
+- RTL wrapper:
+  `FPGA_Project/rtl/qmap_attention_frontend_compute_path.sv`.
+- Testbench:
+  `FPGA_Project/sim/tb_qmap_attention_frontend_compute_path.sv`.
+- Icarus result: exact `2048` K/V cache write words and exact `2048`
+  Q RoPE write words, `31` accepted read requests, `4944` accepted
+  read-response words, `2049` accepted write requests, `4096` accepted
+  write-data words, deterministic read/write backpressure, busy-period
+  spurious start coverage, and an invalid RoPE-cos dtype descriptor path that
+  errors with no writes.
+
+### Attention Score/Value Runtime Packet
+
+The next per-layer body packet consumes the Q RoPE output buffer and K/V cache
+from the attention front-end path, computes current-token attention scores,
+feeds them directly into softmax/value, and writes the attention output before
+`o_proj`.
+
+Dataflow:
+
+```text
+q_rope[2048] + K cache + V cache + exp_lut[257]
+  -> attention_score_stage
+  -> attention_softmax_value_stage
+  -> write attn_out[2048]
+```
+
+The current packet base is `0x4_0503_0000`. It reserves eight descriptor slots,
+uses five active descriptors, and places payload data after the table at
+`qmap_base + 0x0500`.
+
+Descriptor table:
+
+| Slot | Tensor | Role | Key fields |
+| ---: | --- | --- | --- |
+| `0` | metadata | `QMAP_ROLE_METADATA` | `aux0=score_scale_q0_31`, `aux1=layer_id`, `aux2=cache_length`, `aux3=position` |
+| `1` | Q RoPE input | `QMAP_ROLE_ACTIVATION` | `I32_Q12_12`, `[2048]`, read-only |
+| `2` | K/V cache | `QMAP_ROLE_KV_CACHE` | `I32_Q12_12`, `[2,8,256,128]`, read-only for this packet |
+| `3` | softmax exp LUT | `QMAP_ROLE_PARAMETER` | `U32_Q0_20`, `[257]`, read-only |
+| `4` | attention output | `QMAP_ROLE_OUTPUT` | `I32_Q12_12`, `[2048]`, write-only |
+
+Local validation:
+
+- Exporter:
+  `Qwen3-0.6B-Base/python_each_module/38_export_qmap_attention_score_value_image.py`.
+- RTL wrapper:
+  `FPGA_Project/rtl/qmap_attention_score_value_compute_path.sv`.
+- Testbench:
+  `FPGA_Project/sim/tb_qmap_attention_score_value_compute_path.sv`.
+- Icarus result: exact `10240` K-cache reads, exact `10240` V-cache reads,
+  exact `2048` `attn_out` write words, `20496` accepted read requests,
+  `22961` accepted read-response words, one output write request, `2048`
+  accepted write-data words, read/write backpressure coverage, and an invalid
+  exp-LUT dtype descriptor path that errors with no writes.
+
+### Attention Output Projection Runtime Packet
+
+The next per-layer body packet consumes the `attn_out[2048]` buffer written by
+the attention score/value wrapper and applies the Layer 0 `o_proj` matrix. The
+large `o_proj` Q4 weight and Q2.14 scale tensors are persistent references, not
+runtime-packet payload copies.
+
+Dataflow:
+
+```text
+attn_out[2048] + persistent o_proj.weight[1024,2048]
+  + persistent o_proj.scale[1024,32]
+  -> q4_gemv_row_1024(INPUT_SIZE=2048)
+  -> write o_proj_out[1024]
+```
+
+The current packet base is `0x4_0504_0000`. It reserves eight descriptor slots,
+uses six active descriptors, and places payload data after the table at
+`qmap_base + 0x0500`.
+
+Persistent simulation layout:
+
+```text
+o_proj_weight_base       = 0x4_0600_0000
+o_proj_weight_row_bytes  = 1024
+o_proj_weight_full_bytes = 0x0010_0000
+o_proj_scale_base        = 0x4_0610_0000
+o_proj_scale_row_bytes   = 64
+o_proj_scale_full_bytes  = 0x0001_0000
+```
+
+Descriptor table:
+
+| Slot | Tensor | Role | Key fields |
+| ---: | --- | --- | --- |
+| `0` | metadata | `QMAP_ROLE_METADATA` | `U32`, `aux0=o_proj`, `aux1=layer_id`, `aux2=1024`, `aux3=2048` |
+| `1` | attention output input | `QMAP_ROLE_ACTIVATION` | `I32_Q12_12`, `[2048]`, read-only |
+| `2` | `o_proj` Q4 weight | `QMAP_ROLE_Q4_WEIGHT` | `PACKED_Q4_S4`, `[1024,2048]`, persistent base `0x4_0600_0000` |
+| `3` | `o_proj` Q2.14 scale | `QMAP_ROLE_Q4_SCALE` | `U16_Q2_14`, `[1024,32]`, persistent base `0x4_0610_0000` |
+| `4` | `o_proj` output | `QMAP_ROLE_OUTPUT` | `I32_Q12_12`, `[1024]`, write-only |
+| `5` | expected output | `QMAP_ROLE_EXPECTED` | `I32_Q12_12`, `[1024]`, debug-only |
+
+Local validation:
+
+- Exporter:
+  `Qwen3-0.6B-Base/python_each_module/39_export_qmap_o_proj_image.py`.
+- RTL wrapper:
+  `FPGA_Project/rtl/qmap_o_proj_compute_path.sv`.
+- Testbench:
+  `FPGA_Project/sim/tb_qmap_o_proj_compute_path.sv`.
+- Icarus result: exact `1024` Q4 weight-row reads, exact `1024` scale-row
+  reads, exact `1024` `o_proj_out` write words, `2070` accepted read requests,
+  `280992` accepted read-response words, one output write request, `1024`
+  accepted write-data words, request/response/write-data backpressure coverage,
+  a busy-period spurious start pulse, and an invalid Q4 weight group-size
+  descriptor path that errors with no writes. The CSV trace audit confirms row
+  stores run from row 0 through row 1023 before the single output write-back
+  burst and that done pulses are not adjacent.
+
+### Post-Attention Residual/RMSNorm Runtime Packet
+
+The next per-layer body packet consumes the `o_proj_out[1024]` buffer and the
+Layer 0 residual stream, applies the post-attention residual add, then applies
+post-attention RMSNorm with signed `Q8.7` gamma.
+
+Dataflow:
+
+```text
+residual_input[1024] + o_proj_out[1024] + post_attention_gamma[1024]
+  -> residual_add_1024
+  -> rmsnorm_1024(signed gamma)
+  -> write post_attention_hidden[1024]
+  -> write post_norm[1024]
+```
+
+The current packet base is `0x4_0505_0000`. It reserves and uses eight active
+descriptor slots and places payload data after the table at
+`qmap_base + 0x0500`. The generated local simulation image is `0x8000` bytes.
+
+Descriptor table:
+
+| Slot | Tensor | Role | Key fields |
+| ---: | --- | --- | --- |
+| `0` | metadata | `QMAP_ROLE_METADATA` | `U32`, `aux0=post_attn_residual_norm`, `aux1=layer_id`, `aux2=1024` |
+| `1` | residual input | `QMAP_ROLE_ACTIVATION` | `I32_Q14_10`, `[1024]`, read-only |
+| `2` | `o_proj` output input | `QMAP_ROLE_ACTIVATION` | `I32_Q12_12`, `[1024]`, read-only, `aux0=o_proj` |
+| `3` | post-attention gamma | `QMAP_ROLE_PARAMETER` | `I16_Q8_7`, `[1024]`, read-only, stored as 32-bit words |
+| `4` | post-attention hidden | `QMAP_ROLE_OUTPUT` | `I32_Q14_10`, `[1024]`, write-only |
+| `5` | post-norm output | `QMAP_ROLE_OUTPUT` | `I32_Q12_12`, `[1024]`, write-only |
+| `6` | expected hidden | `QMAP_ROLE_EXPECTED` | `I32_Q14_10`, `[1024]`, debug-only |
+| `7` | expected norm | `QMAP_ROLE_EXPECTED` | `I32_Q12_12`, `[1024]`, debug-only |
+
+Local validation:
+
+- Exporter:
+  `Qwen3-0.6B-Base/python_each_module/40_export_qmap_post_attention_residual_norm_image.py`.
+- RTL wrapper:
+  `FPGA_Project/rtl/qmap_post_attention_residual_norm_compute_path.sv`.
+- Testbench:
+  `FPGA_Project/sim/tb_qmap_post_attention_residual_norm_compute_path.sv`.
+- Icarus result: exact `1024` post-attention hidden write words, exact `1024`
+  post-norm write words, `30` accepted read requests, `3616` accepted
+  read-response words, two output write requests, `2048` accepted write-data
+  words, request/response/write-data backpressure coverage, a busy-period
+  spurious start pulse, and an invalid gamma dtype descriptor path that errors
+  with no writes. The CSV trace audit confirms the stage-complete snapshot and
+  first hidden write request occur in the same cycle, all write data completes
+  before done, and normal/bad done pulses are not adjacent.
+
+### MLP Gate/Up Runtime Packet
+
+The next per-layer body packet consumes the post-attention RMSNorm output and
+computes Layer 0 MLP gate/up projections from persistent Q4 weight/scale
+tensors.
+
+Dataflow:
+
+```text
+post_norm[1024]
+  + persistent gate_proj.weight[3072,1024] / gate_proj.scale[3072,16]
+  + persistent up_proj.weight[3072,1024] / up_proj.scale[3072,16]
+  -> two q4_gemv_row_1024 cores in parallel
+  -> write gate[3072]
+  -> write up[3072]
+```
+
+The current packet base is `0x4_0506_0000`. It uses ten active descriptors,
+sets `descriptor_capacity=16`, and places payload data after the table at
+`qmap_base + 0x0900`. The generated local simulation image is `0xE000` bytes.
+
+Persistent simulation layout:
+
+```text
+gate_weight_base       = 0x4_0620_0000
+gate_weight_row_bytes  = 512
+gate_weight_full_bytes = 0x0018_0000
+gate_scale_base        = 0x4_0638_0000
+gate_scale_row_bytes   = 32
+gate_scale_full_bytes  = 0x0001_8000
+up_weight_base         = 0x4_0640_0000
+up_weight_row_bytes    = 512
+up_weight_full_bytes   = 0x0018_0000
+up_scale_base          = 0x4_0658_0000
+up_scale_row_bytes     = 32
+up_scale_full_bytes    = 0x0001_8000
+```
+
+Descriptor table:
+
+| Slot | Tensor | Role | Key fields |
+| ---: | --- | --- | --- |
+| `0` | metadata | `QMAP_ROLE_METADATA` | `U32`, `aux0=mlp_gate_up`, `aux1=layer_id`, `aux2=3072`, `aux3=1024` |
+| `1` | post-norm input | `QMAP_ROLE_ACTIVATION` | `I32_Q12_12`, `[1024]`, read-only |
+| `2` | gate Q4 weight | `QMAP_ROLE_Q4_WEIGHT` | `PACKED_Q4_S4`, `[3072,1024]`, persistent base `0x4_0620_0000` |
+| `3` | gate Q2.14 scale | `QMAP_ROLE_Q4_SCALE` | `U16_Q2_14`, `[3072,16]`, persistent base `0x4_0638_0000` |
+| `4` | up Q4 weight | `QMAP_ROLE_Q4_WEIGHT` | `PACKED_Q4_S4`, `[3072,1024]`, persistent base `0x4_0640_0000` |
+| `5` | up Q2.14 scale | `QMAP_ROLE_Q4_SCALE` | `U16_Q2_14`, `[3072,16]`, persistent base `0x4_0658_0000` |
+| `6` | gate output | `QMAP_ROLE_OUTPUT` | `I32_Q12_12`, `[3072]`, write-only |
+| `7` | up output | `QMAP_ROLE_OUTPUT` | `I32_Q12_12`, `[3072]`, write-only |
+| `8` | expected gate | `QMAP_ROLE_EXPECTED` | `I32_Q12_12`, `[3072]`, debug-only |
+| `9` | expected up | `QMAP_ROLE_EXPECTED` | `I32_Q12_12`, `[3072]`, debug-only |
+
+Local validation:
+
+- Exporter:
+  `Qwen3-0.6B-Base/python_each_module/41_export_qmap_mlp_gate_up_image.py`.
+- RTL wrapper:
+  `FPGA_Project/rtl/qmap_mlp_gate_up_compute_path.sv`.
+- Testbench:
+  `FPGA_Project/sim/tb_qmap_mlp_gate_up_compute_path.sv`.
+- Icarus result: exact `3072` gate write words, exact `3072` up write words,
+  `12314` accepted read requests, `837280` accepted read-response words, two
+  output write requests, `6144` accepted write-data words,
+  request/response/write-data backpressure coverage, a busy-period spurious
+  start pulse, and an invalid up-scale dtype descriptor path that errors with
+  no writes. The CSV trace audit confirms 3072 row completions, gate/up write
+  requests at `0x4_0506_1940` and `0x4_0506_4940`, both length 12288 bytes,
+  all write data completes before done, and normal/bad done pulses are not
+  adjacent.
+
+### MLP SiLU/Multiply Runtime Packet
+
+The next per-layer body packet consumes the MLP gate/up outputs and computes the
+Layer 0 MLP activation intermediate.
+
+Dataflow:
+
+```text
+gate[3072] + up[3072] + sigmoid_lut[1025]
+  -> mlp_silu_mul_stage
+  -> write mlp_hidden[3072]
+```
+
+The current packet base is `0x4_0507_0000`. It uses six active descriptors,
+sets `descriptor_capacity=16`, and places payload data after the table at
+`qmap_base + 0x0900`. The generated local simulation image is `0xE000` bytes.
+The sigmoid LUT uses unsigned `UQ0.16` values over `[-8, 8]` with `1/64`
+spacing; each LUT entry is stored in the low 16 bits of one 32-bit DDR word.
+
+Descriptor table:
+
+| Slot | Tensor | Role | Key fields |
+| ---: | --- | --- | --- |
+| `0` | metadata | `QMAP_ROLE_METADATA` | `U32`, `aux0=mlp_silu_mul`, `aux1=layer_id`, `aux2=3072`, `aux3=1025` |
+| `1` | gate input | `QMAP_ROLE_ACTIVATION` | `I32_Q12_12`, `[3072]`, read-only |
+| `2` | up input | `QMAP_ROLE_ACTIVATION` | `I32_Q12_12`, `[3072]`, read-only |
+| `3` | sigmoid LUT | `QMAP_ROLE_PARAMETER` | `U16_Q0_16`, `[1025]`, read-only, padded to 32-bit words |
+| `4` | hidden output | `QMAP_ROLE_OUTPUT` | `I32_Q12_12`, `[3072]`, write-only |
+| `5` | expected hidden | `QMAP_ROLE_EXPECTED` | `I32_Q12_12`, `[3072]`, debug-only |
+
+Local validation:
+
+- Exporter:
+  `Qwen3-0.6B-Base/python_each_module/42_export_qmap_mlp_silu_mul_image.py`.
+- RTL wrapper:
+  `FPGA_Project/rtl/qmap_mlp_silu_mul_compute_path.sv`.
+- Testbench:
+  `FPGA_Project/sim/tb_qmap_mlp_silu_mul_compute_path.sv`.
+- Icarus result: exact `3072` stage input handshakes, exact `3072` stage
+  output handshakes, exact `3072` hidden write words, `43` accepted read
+  requests across the normal plus invalid-descriptor runs, `7585` accepted
+  read-response words, one output write request, `3072` accepted write-data
+  words, request/response/write-data backpressure coverage, a busy-period
+  spurious start pulse, and an invalid LUT dtype descriptor path that errors
+  with no writes. The normal DUT counters are `36` read requests, `7377`
+  read-response words, one write request, and `3072` write words. The CSV trace
+  audit confirms the hidden write request at `0x4_0507_7980`, length `12288`
+  bytes, all write data completes before done, and normal/bad done pulses are
+  not adjacent.
+
+### MLP Down Runtime Packet
+
+The next per-layer body packet consumes the MLP SiLU/multiply hidden output and
+computes the Layer 0 MLP down projection from persistent Q4 weight/scale
+tensors.
+
+Dataflow:
+
+```text
+mlp_hidden[3072]
+  + persistent down_proj.weight[1024,3072] / down_proj.scale[1024,48]
+  -> q4_gemv_row_1024 with INPUT_SIZE=3072
+  -> write down_out[1024]
+```
+
+The current packet base is `0x4_0508_0000`. It uses six active descriptors,
+sets `descriptor_capacity=16`, and places payload data after the table at
+`qmap_base + 0x0900`. The generated local simulation image is `0x6000` bytes.
+
+Persistent simulation layout:
+
+```text
+down_weight_base        = 0x4_0660_0000
+down_weight_row_bytes   = 1536
+down_weight_full_bytes  = 0x0018_0000
+down_scale_base         = 0x4_0678_0000
+down_scale_row_bytes    = 96
+down_scale_full_bytes   = 0x0001_8000
+```
+
+Descriptor table:
+
+| Slot | Tensor | Role | Key fields |
+| ---: | --- | --- | --- |
+| `0` | metadata | `QMAP_ROLE_METADATA` | `U32`, `aux0=mlp_down`, `aux1=layer_id`, `aux2=1024`, `aux3=3072` |
+| `1` | MLP hidden input | `QMAP_ROLE_ACTIVATION` | `I32_Q12_12`, `[3072]`, read-only |
+| `2` | down Q4 weight | `QMAP_ROLE_Q4_WEIGHT` | `PACKED_Q4_S4`, `[1024,3072]`, persistent base `0x4_0660_0000`, row stride `1536` bytes |
+| `3` | down Q2.14 scale | `QMAP_ROLE_Q4_SCALE` | `U16_Q2_14`, `[1024,48]`, persistent base `0x4_0678_0000`, row stride `96` bytes |
+| `4` | down output | `QMAP_ROLE_OUTPUT` | `I32_Q12_12`, `[1024]`, write-only |
+| `5` | expected down output | `QMAP_ROLE_EXPECTED` | `I32_Q12_12`, `[1024]`, debug-only |
+
+Local validation:
+
+- Exporter:
+  `Qwen3-0.6B-Base/python_each_module/43_export_qmap_mlp_down_image.py`.
+- RTL wrapper:
+  `FPGA_Project/rtl/qmap_mlp_down_compute_path.sv`.
+- Testbench:
+  `FPGA_Project/sim/tb_qmap_mlp_down_compute_path.sv`.
+- Icarus result: exact `1024` row completions, exact `1024` output write
+  words, `3098` accepted read requests across the normal plus invalid-descriptor
+  runs, `421280` accepted read-response words, one output write request, `1024`
+  accepted write-data words, request/response/write-data backpressure coverage,
+  a busy-period spurious start pulse, and an invalid scale dtype descriptor path
+  that errors with no writes. The normal DUT counters are `3091` read requests,
+  `421072` read-response words, one write request, and `1024` write words. The
+  CSV trace audit confirms the down output write request at `0x4_0508_3940`,
+  length `4096` bytes, all write data completes before done, and normal/bad
+  done pulses are not adjacent.
+
+### Final MLP Residual Runtime Packet
+
+The next per-layer body packet consumes the post-attention hidden vector and the
+MLP down-projection output, then computes the Layer 0 final MLP residual add.
+
+Dataflow:
+
+```text
+post_attn_hidden[1024] + down_out[1024]
+  -> mlp_residual_add_stage
+  -> write layer_out[1024]
+```
+
+The current packet base is `0x4_0509_0000`. It uses five active descriptors,
+sets `descriptor_capacity=8`, and places payload data after the table at
+`qmap_base + 0x0500`. The generated local simulation image is `0x5000` bytes.
+
+Descriptor table:
+
+| Slot | Tensor | Role | Key fields |
+| ---: | --- | --- | --- |
+| `0` | metadata | `QMAP_ROLE_METADATA` | `U32`, `aux0=mlp_residual_add`, `aux1=layer_id`, `aux2=1024` |
+| `1` | post-attention hidden input | `QMAP_ROLE_ACTIVATION` | `I32_Q14_10`, `[1024]`, read-only |
+| `2` | MLP down output input | `QMAP_ROLE_ACTIVATION` | `I32_Q12_12`, `[1024]`, read-only |
+| `3` | layer output | `QMAP_ROLE_OUTPUT` | `I32_Q14_10`, `[1024]`, write-only |
+| `4` | expected layer output | `QMAP_ROLE_EXPECTED` | `I32_Q14_10`, `[1024]`, debug-only |
+
+Local validation:
+
+- Exporter:
+  `Qwen3-0.6B-Base/python_each_module/44_export_qmap_mlp_residual_add_image.py`.
+- RTL wrapper:
+  `FPGA_Project/rtl/qmap_mlp_residual_add_compute_path.sv`.
+- Testbench:
+  `FPGA_Project/sim/tb_qmap_mlp_residual_add_compute_path.sv`.
+- Icarus result: exact `1024` output words, one `4096`-byte output write
+  burst, request/response/write-data backpressure coverage, a busy-period
+  spurious start pulse, a bad down-input dtype descriptor path with no writes,
+  and a malformed payload `last` protocol path with no writes. The normal DUT
+  counters are `14` read requests, `2224` read-response words, one write
+  request, and `1024` write words. The full three-run test covers `27` read
+  requests and `2577` read-response words. The CSV trace audit confirms the
+  layer output write request at `0x4_0509_2540`, length `4096` bytes, all
+  write data completes before done, and all error paths complete without
+  writes.
+
 ### LM-head Memory-Backed Scan Contract
 
 The first LM-head memory-facing path uses the tied embedding/LM-head table as a
 Q4 weight matrix with one Q2.14 scale per 64 columns. The current local vector
-exporter is:
+exporters are:
 
 ```text
 Qwen3-0.6B-Base/python_each_module/33_export_lm_head_argmax_vectors.py
+Qwen3-0.6B-Base/python_each_module/35_export_lm_head_full_vocab_vectors.py
 ```
 
 The exported layout keeps full-vocabulary base addresses even when the local
@@ -582,10 +1041,11 @@ testbench proves two runtime scan counts: `64` tiles for the existing
 `264`, exact score `1365150750`, and `1392` checked logits with
 `max_abs_logit_diff=0`.
 
-`34_export_qmap_lm_head_argmax_image.py` exports the first QMAP runtime packet
-for this path. The packet base is `0x4_0500_0000`, uses six active descriptors,
-and keeps the large LM-head weights/scales as persistent tensor references
-instead of copying them into the runtime packet:
+`34_export_qmap_lm_head_argmax_image.py` exports QMAP runtime packets for this
+path. The packet base is `0x4_0500_0000`, uses six active descriptors, and
+keeps the large LM-head weights/scales as persistent tensor references instead
+of copying them into the runtime packet. The same descriptor contract is used
+for the compact `[0,1024)` scan and the full `[0,151936)` vocabulary scan:
 
 | Slot | Tensor | Role | Key fields |
 | ---: | --- | --- | --- |
@@ -601,7 +1061,60 @@ final RMSNorm activation, runs the scheduler, and writes
 `{token, score_low32, score_high32}` to the output descriptor. Its testbench
 covers descriptor-provided `64`-tile and `23`-tile scans, plus an invalid
 `tile_count=0` descriptor that must raise error and perform no output write.
-The full `151936`-row / `9496`-tile vocabulary scan is still the next proof.
+The compact Icarus run reports token `264`, score `1365150750`, `812` read
+requests, `191984` response words, `1392` checked logits, and
+`max_abs_logit_diff=0`. The full-vocabulary Vivado xsim run uses
+`QMAP_LM_HEAD_TB_FULL_VOCAB` and reports `9496` tiles, `151936` checked logits,
+`85475` read requests, `20664528` response words, one output write burst,
+token `264`, score `1365150750`, and `max_abs_logit_diff=0`.
+
+### Final-Token Tail Runtime Packet
+
+The first composed one-token tail packet adds final RMSNorm in front of the
+descriptor-backed LM-head scan. It is intentionally still a runtime packet, not
+a persistent manifest. The packet base is `0x4_0501_0000`, uses eight active
+descriptors, and keeps the large LM-head weights/scales as persistent tensor
+references.
+
+Dataflow:
+
+```text
+final_hidden[1024] + final_norm.gamma[1024]
+  -> final_rmsnorm_stage
+  -> write final_norm[1024] to the QMAP activation descriptor
+  -> qmap_lm_head_argmax_compute_path
+  -> write output token/score descriptor
+```
+
+Descriptor table:
+
+| Slot | Tensor | Role | Key fields |
+| ---: | --- | --- | --- |
+| `0` | metadata | `QMAP_ROLE_METADATA` | tail metadata and debug summary |
+| `1` | final-norm scratch / LM-head activation | `QMAP_ROLE_ACTIVATION` | `I32_Q12_12`, `[1024]`, written by final RMSNorm then read by LM-head |
+| `2` | LM-head Q4 weight | `QMAP_ROLE_Q4_WEIGHT` | `PACKED_Q4_S4`, `[151936,1024]`, `aux2=scan_base`, `aux3=tile_count` |
+| `3` | LM-head Q2.14 scale | `QMAP_ROLE_Q4_SCALE` | `U16_Q2_14`, `[151936,16]`, same scan aux fields |
+| `4` | output token/score | `QMAP_ROLE_OUTPUT` | three `U32` words: token, score low32, score high32 |
+| `5` | expected token/score | `QMAP_ROLE_EXPECTED` | debug-only copy of the three output words |
+| `6` | final hidden input | `QMAP_ROLE_ACTIVATION` | `I32_Q14_10`, `[1024]`, read-only |
+| `7` | final RMSNorm gamma | `QMAP_ROLE_PARAMETER` | `I16_Q8_7`, `[1024]`, read-only signed gamma padded to 32-bit words in the current packet |
+
+Local validation:
+
+- Exporter:
+  `Qwen3-0.6B-Base/python_each_module/36_export_qmap_final_token_tail_image.py`.
+- RTL wrapper:
+  `FPGA_Project/rtl/qmap_final_token_tail_compute_path.sv`.
+- Testbench:
+  `FPGA_Project/sim/tb_qmap_final_token_tail_compute_path.sv`.
+- Compact Icarus result: `64` LM-head tiles, token `264`, score
+  `1365150750`, `1024` exact final-norm write words, `1024` checked logits,
+  `max_abs_logit_diff=0`, invalid gamma descriptor error path covered, and no
+  stale best-result exposure.
+- Full-vocabulary Vivado xsim result: `9496` tiles, `151936` checked logits,
+  token `264`, score `1365150750`, `1024` final-norm write words, `3`
+  token/score output words, `max_abs_logit_diff=0`, one done pulse, and zero
+  error/saturation rows in the trace audit.
 
 ## Full-Model Runtime Write-Back Policy
 
@@ -617,14 +1130,15 @@ DDR4, even if later optimized versions keep some of them on chip:
 | V projection output | `[1024]` | `I32_Q12_12` | write for KV-cache append |
 | post-RoPE K cache | `[28, 8, T, 128]` | `I32_Q12_12` | append one position per layer/token |
 | V cache | `[28, 8, T, 128]` | `I32_Q12_12` | append one position per layer/token |
-| attention output before `o_proj` | `[2048]` | `I32_Q12_12` | local RTL supports streaming into `o_proj`; DDR write-back remains useful for debug |
-| post-attention hidden | `[1024]` | `I32_Q14_10` | local RTL writes/validates this residual result before post-attention RMSNorm |
-| MLP gate/up outputs | `[3072]` each | `I32_Q12_12` | local RTL projection stage passes; write for correctness bring-up if not streamed |
-| MLP SiLU/multiply intermediate | `[3072]` | `I32_Q12_12` | local RTL stage passes; this is the MLP down-projection input |
-| MLP down output | `[1024]` | `I32_Q12_12` | local RTL stage passes; this is the final MLP residual input |
-| layer output | `[1024]` | `I32_Q14_10` or `I32_Q12_12` | local RTL final residual stage passes; write to next layer input buffer |
+| attention output before `o_proj` | `[2048]` | `I32_Q12_12` | QMAP score/value wrapper now writes exact `attn_out[2048]` locally |
+| `o_proj_out` | `[1024]` | `I32_Q12_12` | QMAP `o_proj` wrapper now writes exact output locally |
+| post-attention hidden | `[1024]` | `I32_Q14_10` | QMAP post-attention wrapper writes and validates this residual result before post-attention RMSNorm |
+| MLP gate/up outputs | `[3072]` each | `I32_Q12_12` | QMAP MLP gate/up wrapper now writes exact gate/up buffers locally |
+| MLP SiLU/multiply intermediate | `[3072]` | `I32_Q12_12` | QMAP MLP SiLU/multiply wrapper now writes exact hidden locally; this is the MLP down-projection input |
+| MLP down output | `[1024]` | `I32_Q12_12` | QMAP MLP down wrapper now writes exact down output locally; this is the final MLP residual input |
+| layer output | `[1024]` | `I32_Q14_10` | QMAP final MLP residual wrapper now writes exact layer output locally; this is the next layer input |
 | final RMSNorm output | `[1024]` | `I32_Q12_12` | local RTL final-norm stage passes; LM-head input |
-| logits/argmax scratch | tiled | implementation-defined | local RTL tiled argmax core, memory-backed 1024-row wrapper, runtime tile scheduler, and QMAP descriptor wrapper pass; future full-vocab path should write final token id and optional debug logits |
+| logits/argmax scratch | tiled | implementation-defined | local RTL tiled argmax core, memory-backed 1024-row wrapper, runtime tile scheduler, QMAP descriptor wrapper, and full-vocab QMAP LM-head scan pass; writes final token id and token score |
 
 Do not require all of these tensors to be stored forever. The rule is that a
 formal packet must make every consumed or produced tensor explicit. Later RTL

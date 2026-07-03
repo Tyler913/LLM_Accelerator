@@ -14,64 +14,63 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
 QMAP_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_qmap_v1"
 
-LM_HEAD_PREFIX = "lm_head_argmax_stage_real"
-DEFAULT_OUTPUT = QMAP_VECTOR_DIR / "lm_head_argmax_runtime.qmap.bin"
-DEFAULT_MANIFEST = QMAP_VECTOR_DIR / "lm_head_argmax_runtime_manifest.json"
-DEFAULT_SIM_HEX = SIM_VECTOR_DIR / "qmap_lm_head_argmax_image_words32.hex"
-DEFAULT_EXPECTED_HEX = SIM_VECTOR_DIR / "qmap_lm_head_argmax_expected_words32.hex"
+PREFIX = "mlp_silu_mul_stage_real"
+GATE_UP_QMAP_PREFIX = "qmap_mlp_gate_up"
+DEFAULT_OUTPUT = QMAP_VECTOR_DIR / "mlp_silu_mul_runtime.qmap.bin"
+DEFAULT_MANIFEST = QMAP_VECTOR_DIR / "mlp_silu_mul_runtime_manifest.json"
+DEFAULT_SIM_HEX = SIM_VECTOR_DIR / "qmap_mlp_silu_mul_image_words32.hex"
+DEFAULT_EXPECTED_HEX = SIM_VECTOR_DIR / "qmap_mlp_silu_mul_expected_hidden_words32.hex"
 
 QMAP_MAGIC = 0x50414D51
 QMAP_VERSION = 1
-QMAP_BASE = 0x4_0500_0000
+QMAP_BASE = 0x4_0507_0000
 HEADER_BYTES = 256
 DESCRIPTOR_BYTES = 128
-DESCRIPTOR_CAPACITY = 8
+DESCRIPTOR_CAPACITY = 16
 DESCRIPTOR_COUNT = 6
 DESCRIPTOR_TABLE_OFFSET = 0x0100
-PAYLOAD_BASE_OFFSET = 0x0500
+PAYLOAD_BASE_OFFSET = 0x0900
 PAYLOAD_ALIGNMENT = 64
 IMAGE_ALIGNMENT = 4096
 
-INPUT_SIZE = 1024
-GROUP_SIZE = 64
-GROUP_COUNT = INPUT_SIZE // GROUP_SIZE
-TILE_ROWS = 16
-ACT_WIDTH = 24
-ACT_FRAC = 12
-WEIGHT_WIDTH = 4
-SCALE_WIDTH = 16
-SCALE_FRAC = 14
-PARTIAL_WIDTH = ACT_WIDTH + WEIGHT_WIDTH + 6
-SCALED_WIDTH = PARTIAL_WIDTH + SCALE_WIDTH
-ROW_ACC_WIDTH = SCALED_WIDTH + 4 + 2
-VOCAB_SIZE_DEFAULT = 151_936
+FEATURES = 3072
+IN_WIDTH = 24
+IN_FRAC = 12
+OUT_WIDTH = 24
+OUT_FRAC = 12
+SIGMOID_WIDTH = 16
+SIGMOID_FRAC = 16
+SIGMOID_LUT_INDEX_FRAC = 6
+SIGMOID_LUT_MIN_INT = -8
+SIGMOID_LUT_MAX_INT = 8
+SIGMOID_LUT_SIZE = ((SIGMOID_LUT_MAX_INT - SIGMOID_LUT_MIN_INT) << SIGMOID_LUT_INDEX_FRAC) + 1
+LAYER_ID = 0
 
-TENSOR_ID_METADATA = 20
-TENSOR_ID_ACTIVATION = 21
-TENSOR_ID_WEIGHT = 22
-TENSOR_ID_SCALE = 23
-TENSOR_ID_OUTPUT = 24
-TENSOR_ID_EXPECTED = 25
+TENSOR_ID_METADATA = 69
+TENSOR_ID_GATE = 70
+TENSOR_ID_UP = 71
+TENSOR_ID_LUT = 72
+TENSOR_ID_HIDDEN = 73
+TENSOR_ID_EXPECTED = 74
 
 ROLE_ACTIVATION = 1
-ROLE_Q4_WEIGHT = 2
-ROLE_Q4_SCALE = 3
 ROLE_OUTPUT = 4
 ROLE_EXPECTED = 5
 ROLE_METADATA = 6
+ROLE_PARAMETER = 9
 
 DTYPE_U32 = 5
-DTYPE_PACKED_Q4_S4 = 16
-DTYPE_U16_Q2_14 = 17
 DTYPE_I32_Q12_12 = 19
+DTYPE_U16_Q0_16 = 25
 
 TENSOR_F_ROW_MAJOR = 1 << 0
-TENSOR_F_PACKED_Q4_LOW_EVEN = 1 << 1
 TENSOR_F_READ_ONLY = 1 << 2
 TENSOR_F_WRITE_ONLY = 1 << 3
 TENSOR_F_DEBUG_ONLY = 1 << 4
 
-MATRIX_ID_EMBED_LM_HEAD = 8
+MATRIX_ID_GATE_PROJ = 5
+MATRIX_ID_UP_PROJ = 6
+STAGE_ID_MLP_SILU_MUL = 3
 NO_TENSOR_ID = 0xFFFF_FFFF
 
 
@@ -198,8 +197,8 @@ def add_payload(payloads: list[dict[str, Any]], *, name: str, cursor: int, paylo
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Export a QMAP runtime packet for LM-head argmax simulation.")
-    parser.add_argument("--lm-prefix", default=LM_HEAD_PREFIX)
+    parser = argparse.ArgumentParser(description="Export a QMAP runtime packet for Layer 0 MLP SiLU/multiply simulation.")
+    parser.add_argument("--prefix", default=PREFIX)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
@@ -209,53 +208,54 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    lm_prefix = str(args.lm_prefix)
+    prefix = str(args.prefix)
 
-    activation = read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_activation.hex", ACT_WIDTH, signed=True)
-    scan_base = int(read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_scan_base_token.hex", 32, signed=False)[0])
-    weight_base = int(read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_weight_base_addr.hex", 64, signed=False)[0])
-    scale_base = int(read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_scale_base_addr.hex", 64, signed=False)[0])
-    best_token = int(read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_expected_best_token.hex", 32, signed=False)[0])
-    best_score = int(read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_expected_best_score_q26.hex", ROW_ACC_WIDTH, signed=True)[0])
+    gate_input = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_gate_input.hex", IN_WIDTH, signed=True)
+    up_input = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_up_input.hex", IN_WIDTH, signed=True)
+    sigmoid_lut = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_sigmoid_lut.hex", SIGMOID_WIDTH, signed=False)
+    expected_hidden = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_expected_hidden_q12_12.hex", OUT_WIDTH, signed=True)
 
-    meta_path = SIM_VECTOR_DIR / f"{lm_prefix}_meta.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    shape = meta["shape"]
-    vocab_size = int(shape.get("vocab_size", VOCAB_SIZE_DEFAULT))
-    scan_rows = int(shape["scan_rows"])
-    tile_rows = int(shape["tile_rows"])
-    tile_count = int(shape["tile_count"])
+    if gate_input.shape != (FEATURES,):
+        raise RuntimeError(f"gate input shape mismatch: expected {(FEATURES,)}, got {gate_input.shape}")
+    if up_input.shape != (FEATURES,):
+        raise RuntimeError(f"up input shape mismatch: expected {(FEATURES,)}, got {up_input.shape}")
+    if sigmoid_lut.shape != (SIGMOID_LUT_SIZE,):
+        raise RuntimeError(f"sigmoid LUT shape mismatch: expected {(SIGMOID_LUT_SIZE,)}, got {sigmoid_lut.shape}")
+    if expected_hidden.shape != (FEATURES,):
+        raise RuntimeError(f"hidden expected shape mismatch: expected {(FEATURES,)}, got {expected_hidden.shape}")
 
-    if activation.shape != (INPUT_SIZE,):
-        raise RuntimeError(f"activation shape mismatch: {activation.shape}")
-    if tile_rows != TILE_ROWS:
-        raise RuntimeError(f"tile_rows mismatch: expected {TILE_ROWS}, got {tile_rows}")
-    if scan_rows != tile_count * tile_rows:
-        raise RuntimeError("scan_rows does not match tile_count * tile_rows")
-    if not (0 <= scan_base < vocab_size) or (scan_base + scan_rows > vocab_size):
-        raise RuntimeError("scan range is outside vocabulary")
-    if not (scan_base <= best_token < scan_base + scan_rows):
-        raise RuntimeError("expected token is outside scan window")
+    qmap_gate_path = SIM_VECTOR_DIR / f"{GATE_UP_QMAP_PREFIX}_expected_gate_words32.hex"
+    qmap_up_path = SIM_VECTOR_DIR / f"{GATE_UP_QMAP_PREFIX}_expected_up_words32.hex"
+    if qmap_gate_path.is_file() and qmap_up_path.is_file():
+        qmap_gate = read_hex_lines(qmap_gate_path, 32, signed=True)
+        qmap_up = read_hex_lines(qmap_up_path, 32, signed=True)
+        if not np.array_equal(qmap_gate, gate_input):
+            raise RuntimeError("SiLU gate input does not match QMAP gate/up gate write-back vector")
+        if not np.array_equal(qmap_up, up_input):
+            raise RuntimeError("SiLU up input does not match QMAP gate/up up write-back vector")
 
-    score_u64 = best_score & ((1 << 64) - 1)
-    expected_words = np.array(
-        [
-            best_token & 0xFFFF_FFFF,
-            score_u64 & 0xFFFF_FFFF,
-            (score_u64 >> 32) & 0xFFFF_FFFF,
-        ],
-        dtype=np.uint32,
-    )
+    vector_bytes = FEATURES * 4
+    lut_bytes = SIGMOID_LUT_SIZE * 4
+
+    gate_i32 = gate_input.astype(np.int32)
+    up_i32 = up_input.astype(np.int32)
+    expected_i32 = expected_hidden.astype(np.int32)
+    lut_u32 = sigmoid_lut.astype(np.uint32)
     metadata_words = np.array(
         [
-            scan_base,
-            scan_rows,
-            tile_rows,
-            tile_count,
-            vocab_size,
-            best_token,
-            int(expected_words[1]),
-            int(expected_words[2]),
+            LAYER_ID,
+            FEATURES,
+            SIGMOID_LUT_SIZE,
+            IN_WIDTH,
+            IN_FRAC,
+            OUT_WIDTH,
+            OUT_FRAC,
+            SIGMOID_WIDTH,
+            SIGMOID_FRAC,
+            SIGMOID_LUT_INDEX_FRAC,
+            SIGMOID_LUT_MIN_INT & 0xFFFF_FFFF,
+            SIGMOID_LUT_MAX_INT & 0xFFFF_FFFF,
+            STAGE_ID_MLP_SILU_MUL,
         ],
         dtype=np.uint32,
     )
@@ -263,9 +263,11 @@ def main() -> None:
     payloads: list[dict[str, Any]] = []
     cursor = PAYLOAD_BASE_OFFSET
     cursor = add_payload(payloads, name="metadata", cursor=cursor, payload=as_le_bytes(metadata_words, "<u4"))
-    cursor = add_payload(payloads, name="activation_q12_12", cursor=cursor, payload=as_le_bytes(activation, "<i4"))
-    cursor = add_payload(payloads, name="output_token_score", cursor=cursor, payload=bytes(12))
-    cursor = add_payload(payloads, name="expected_token_score", cursor=cursor, payload=as_le_bytes(expected_words, "<u4"))
+    cursor = add_payload(payloads, name="gate_q12_12", cursor=cursor, payload=as_le_bytes(gate_i32, "<i4"))
+    cursor = add_payload(payloads, name="up_q12_12", cursor=cursor, payload=as_le_bytes(up_i32, "<i4"))
+    cursor = add_payload(payloads, name="sigmoid_lut_uq0_16_words32", cursor=cursor, payload=as_le_bytes(lut_u32, "<u4"))
+    cursor = add_payload(payloads, name="hidden_q12_12", cursor=cursor, payload=bytes(vector_bytes))
+    cursor = add_payload(payloads, name="expected_hidden_q12_12", cursor=cursor, payload=as_le_bytes(expected_i32, "<i4"))
     image_bytes = align_up(cursor, IMAGE_ALIGNMENT)
 
     payload_by_name = {item["name"]: item for item in payloads}
@@ -277,11 +279,9 @@ def main() -> None:
         return len(payload_by_name[name]["payload"])
 
     ro = TENSOR_F_ROW_MAJOR | TENSOR_F_READ_ONLY
-    packed_ro = ro | TENSOR_F_PACKED_Q4_LOW_EVEN
     wo = TENSOR_F_ROW_MAJOR | TENSOR_F_WRITE_ONLY
     expected_flags = TENSOR_F_ROW_MAJOR | TENSOR_F_READ_ONLY | TENSOR_F_DEBUG_ONLY
-    weight_row_bytes = INPUT_SIZE * WEIGHT_WIDTH // 8
-    scale_row_bytes = GROUP_COUNT * SCALE_WIDTH // 8
+    stage_aux = (STAGE_ID_MLP_SILU_MUL, LAYER_ID, FEATURES, SIGMOID_LUT_SIZE)
 
     descriptors = [
         pack_descriptor(
@@ -297,82 +297,82 @@ def main() -> None:
             nbytes=size("metadata"),
             dims=(int(metadata_words.size), 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, scan_base, tile_count),
+            aux=stage_aux,
         ),
         pack_descriptor(
-            tensor_id=TENSOR_ID_ACTIVATION,
+            tensor_id=TENSOR_ID_GATE,
             role=ROLE_ACTIVATION,
             dtype=DTYPE_I32_Q12_12,
             rank=1,
             flags=ro,
-            element_bits=32,
+            element_bits=IN_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("activation_q12_12"),
-            nbytes=INPUT_SIZE * 4,
-            dims=(INPUT_SIZE, 0, 0, 0),
+            base_addr=addr("gate_q12_12"),
+            nbytes=vector_bytes,
+            dims=(FEATURES, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, 0, 0),
+            aux=(MATRIX_ID_GATE_PROJ, LAYER_ID, 0, FEATURES),
         ),
         pack_descriptor(
-            tensor_id=TENSOR_ID_WEIGHT,
-            role=ROLE_Q4_WEIGHT,
-            dtype=DTYPE_PACKED_Q4_S4,
-            rank=2,
-            flags=packed_ro,
-            element_bits=WEIGHT_WIDTH,
-            group_size=GROUP_SIZE,
-            scale_tensor_id=TENSOR_ID_SCALE,
-            base_addr=weight_base,
-            nbytes=vocab_size * weight_row_bytes,
-            dims=(vocab_size, INPUT_SIZE, 0, 0),
-            strides=(weight_row_bytes, 0, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, scan_base, tile_count),
-        ),
-        pack_descriptor(
-            tensor_id=TENSOR_ID_SCALE,
-            role=ROLE_Q4_SCALE,
-            dtype=DTYPE_U16_Q2_14,
-            rank=2,
+            tensor_id=TENSOR_ID_UP,
+            role=ROLE_ACTIVATION,
+            dtype=DTYPE_I32_Q12_12,
+            rank=1,
             flags=ro,
-            element_bits=SCALE_WIDTH,
+            element_bits=IN_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=scale_base,
-            nbytes=vocab_size * scale_row_bytes,
-            dims=(vocab_size, GROUP_COUNT, 0, 0),
-            strides=(scale_row_bytes, 2, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, scan_base, tile_count),
+            base_addr=addr("up_q12_12"),
+            nbytes=vector_bytes,
+            dims=(FEATURES, 0, 0, 0),
+            strides=(4, 0, 0, 0),
+            aux=(MATRIX_ID_UP_PROJ, LAYER_ID, 0, FEATURES),
         ),
         pack_descriptor(
-            tensor_id=TENSOR_ID_OUTPUT,
+            tensor_id=TENSOR_ID_LUT,
+            role=ROLE_PARAMETER,
+            dtype=DTYPE_U16_Q0_16,
+            rank=1,
+            flags=ro,
+            element_bits=SIGMOID_WIDTH,
+            group_size=0,
+            scale_tensor_id=NO_TENSOR_ID,
+            base_addr=addr("sigmoid_lut_uq0_16_words32"),
+            nbytes=lut_bytes,
+            dims=(SIGMOID_LUT_SIZE, 0, 0, 0),
+            strides=(4, 0, 0, 0),
+            aux=stage_aux,
+        ),
+        pack_descriptor(
+            tensor_id=TENSOR_ID_HIDDEN,
             role=ROLE_OUTPUT,
-            dtype=DTYPE_U32,
+            dtype=DTYPE_I32_Q12_12,
             rank=1,
             flags=wo,
-            element_bits=32,
+            element_bits=OUT_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("output_token_score"),
-            nbytes=12,
-            dims=(3, 0, 0, 0),
+            base_addr=addr("hidden_q12_12"),
+            nbytes=vector_bytes,
+            dims=(FEATURES, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, scan_base, tile_count),
+            aux=stage_aux,
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_EXPECTED,
             role=ROLE_EXPECTED,
-            dtype=DTYPE_U32,
+            dtype=DTYPE_I32_Q12_12,
             rank=1,
             flags=expected_flags,
-            element_bits=32,
+            element_bits=OUT_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("expected_token_score"),
-            nbytes=12,
-            dims=(3, 0, 0, 0),
+            base_addr=addr("expected_hidden_q12_12"),
+            nbytes=vector_bytes,
+            dims=(FEATURES, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, scan_base, tile_count),
+            aux=stage_aux,
         ),
     ]
 
@@ -389,57 +389,68 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(bytes(image))
     write_hex_lines(args.sim_hex, image_to_words32(bytes(image)), 32)
-    write_hex_lines(args.expected_hex, expected_words, 32)
+    write_hex_lines(args.expected_hex, expected_i32, 32)
+
+    focused_meta_path = SIM_VECTOR_DIR / f"{prefix}_meta.json"
+    focused_meta: dict[str, Any] = {}
+    if focused_meta_path.is_file():
+        focused_meta = json.loads(focused_meta_path.read_text(encoding="utf-8"))
 
     manifest = {
         "format_version": 1,
-        "name": "qmap_lm_head_argmax_runtime",
-        "lm_prefix": lm_prefix,
+        "name": "qmap_mlp_silu_mul_runtime",
+        "prefix": prefix,
         "qmap_base": QMAP_BASE,
         "image_bytes": image_bytes,
         "sha256": sha256_file(args.output),
         "descriptor_count": DESCRIPTOR_COUNT,
         "descriptor_capacity": DESCRIPTOR_CAPACITY,
         "shape": {
-            "vocab_size": vocab_size,
-            "scan_base": scan_base,
-            "scan_rows": scan_rows,
-            "tile_rows": tile_rows,
-            "tile_count": tile_count,
-            "input_size": INPUT_SIZE,
-            "group_count": GROUP_COUNT,
+            "features": FEATURES,
+            "sigmoid_lut_size": SIGMOID_LUT_SIZE,
         },
         "memory_layout": {
-            "weight_base_addr": weight_base,
-            "scale_base_addr": scale_base,
-            "weight_row_bytes": weight_row_bytes,
-            "scale_row_bytes": scale_row_bytes,
-            "output_addr": addr("output_token_score"),
-            "expected_addr": addr("expected_token_score"),
+            "gate_addr": addr("gate_q12_12"),
+            "up_addr": addr("up_q12_12"),
+            "sigmoid_lut_addr": addr("sigmoid_lut_uq0_16_words32"),
+            "hidden_addr": addr("hidden_q12_12"),
+            "expected_hidden_addr": addr("expected_hidden_q12_12"),
+            "vector_bytes": vector_bytes,
+            "lut_bytes": lut_bytes,
         },
         "expected": {
-            "best_token": best_token,
-            "best_score_q26": best_score,
-            "output_words32": [int(value) for value in expected_words.tolist()],
+            "hidden_words": int(expected_i32.size),
+            "hidden_min": int(np.min(expected_i32)),
+            "hidden_max": int(np.max(expected_i32)),
+        },
+        "focused_meta": {
+            key: focused_meta.get(key)
+            for key in ("selected_position", "selected_token_id", "selected_token_text", "source_gate_up_prefix")
+            if key in focused_meta
         },
         "files": {
             "binary": relpath(args.output),
             "sim_hex": relpath(args.sim_hex),
-            "expected_hex": relpath(args.expected_hex),
+            "expected_hidden_hex": relpath(args.expected_hex),
+            "gate_input": relpath(SIM_VECTOR_DIR / f"{prefix}_gate_input.hex"),
+            "up_input": relpath(SIM_VECTOR_DIR / f"{prefix}_up_input.hex"),
+            "sigmoid_lut": relpath(SIM_VECTOR_DIR / f"{prefix}_sigmoid_lut.hex"),
         },
     }
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     args.manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
-    print("Exported QMAP LM-head argmax runtime packet")
+    print("Exported QMAP MLP SiLU/multiply runtime packet")
     print("=" * 80)
-    print(f"QMAP base:     0x{QMAP_BASE:016X}")
-    print(f"Image bytes:   0x{image_bytes:X}")
-    print(f"Scan window:   [{scan_base}, {scan_base + scan_rows}) rows={scan_rows}, tiles={tile_count}")
-    print(f"Expected:      token={best_token}, score_q26={best_score}")
-    print(f"Binary:        {args.output}")
-    print(f"Simulation hex:{args.sim_hex}")
-    print(f"Manifest:      {args.manifest}")
+    print(f"QMAP base:       0x{QMAP_BASE:016X}")
+    print(f"Image bytes:     0x{image_bytes:X}")
+    print(f"Gate/up words:   {gate_i32.size} / {up_i32.size}")
+    print(f"Sigmoid LUT:     {lut_u32.size} words ({lut_bytes} bytes)")
+    print(f"Expected hidden: {expected_i32.size} words")
+    print(f"Hidden addr:     0x{addr('hidden_q12_12'):016X}")
+    print(f"Binary:          {args.output}")
+    print(f"Simulation hex:  {args.sim_hex}")
+    print(f"Manifest:        {args.manifest}")
 
 
 if __name__ == "__main__":

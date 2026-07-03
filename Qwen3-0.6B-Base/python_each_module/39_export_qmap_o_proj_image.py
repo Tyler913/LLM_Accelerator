@@ -14,15 +14,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
 QMAP_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_qmap_v1"
 
-LM_HEAD_PREFIX = "lm_head_argmax_stage_real"
-DEFAULT_OUTPUT = QMAP_VECTOR_DIR / "lm_head_argmax_runtime.qmap.bin"
-DEFAULT_MANIFEST = QMAP_VECTOR_DIR / "lm_head_argmax_runtime_manifest.json"
-DEFAULT_SIM_HEX = SIM_VECTOR_DIR / "qmap_lm_head_argmax_image_words32.hex"
-DEFAULT_EXPECTED_HEX = SIM_VECTOR_DIR / "qmap_lm_head_argmax_expected_words32.hex"
+O_PROJ_PREFIX = "o_proj_stage_real"
+DEFAULT_OUTPUT = QMAP_VECTOR_DIR / "o_proj_runtime.qmap.bin"
+DEFAULT_MANIFEST = QMAP_VECTOR_DIR / "o_proj_runtime_manifest.json"
+DEFAULT_SIM_HEX = SIM_VECTOR_DIR / "qmap_o_proj_image_words32.hex"
+DEFAULT_EXPECTED_HEX = SIM_VECTOR_DIR / "qmap_o_proj_expected_words32.hex"
 
 QMAP_MAGIC = 0x50414D51
 QMAP_VERSION = 1
-QMAP_BASE = 0x4_0500_0000
+QMAP_BASE = 0x4_0504_0000
 HEADER_BYTES = 256
 DESCRIPTOR_BYTES = 128
 DESCRIPTOR_CAPACITY = 8
@@ -32,26 +32,26 @@ PAYLOAD_BASE_OFFSET = 0x0500
 PAYLOAD_ALIGNMENT = 64
 IMAGE_ALIGNMENT = 4096
 
-INPUT_SIZE = 1024
+O_PROJ_WEIGHT_BASE_ADDR = 0x4_0600_0000
+O_PROJ_SCALE_BASE_ADDR = 0x4_0610_0000
+
+INPUT_SIZE = 2048
+OUT_FEATURES = 1024
 GROUP_SIZE = 64
 GROUP_COUNT = INPUT_SIZE // GROUP_SIZE
-TILE_ROWS = 16
 ACT_WIDTH = 24
-ACT_FRAC = 12
 WEIGHT_WIDTH = 4
 SCALE_WIDTH = 16
-SCALE_FRAC = 14
-PARTIAL_WIDTH = ACT_WIDTH + WEIGHT_WIDTH + 6
-SCALED_WIDTH = PARTIAL_WIDTH + SCALE_WIDTH
-ROW_ACC_WIDTH = SCALED_WIDTH + 4 + 2
-VOCAB_SIZE_DEFAULT = 151_936
+OUT_WIDTH = 24
+ROW_ACC_WIDTH = 64
+LAYER_ID = 0
 
-TENSOR_ID_METADATA = 20
-TENSOR_ID_ACTIVATION = 21
-TENSOR_ID_WEIGHT = 22
-TENSOR_ID_SCALE = 23
-TENSOR_ID_OUTPUT = 24
-TENSOR_ID_EXPECTED = 25
+TENSOR_ID_METADATA = 45
+TENSOR_ID_ACTIVATION = 46
+TENSOR_ID_WEIGHT = 47
+TENSOR_ID_SCALE = 48
+TENSOR_ID_OUTPUT = 49
+TENSOR_ID_EXPECTED = 50
 
 ROLE_ACTIVATION = 1
 ROLE_Q4_WEIGHT = 2
@@ -71,7 +71,7 @@ TENSOR_F_READ_ONLY = 1 << 2
 TENSOR_F_WRITE_ONLY = 1 << 3
 TENSOR_F_DEBUG_ONLY = 1 << 4
 
-MATRIX_ID_EMBED_LM_HEAD = 8
+MATRIX_ID_O_PROJ = 4
 NO_TENSOR_ID = 0xFFFF_FFFF
 
 
@@ -114,6 +114,10 @@ def write_hex_lines(path: Path, values: np.ndarray, width_bits: int) -> None:
     digits = (width_bits + 3) // 4
     flat = values.reshape(-1)
     path.write_text("\n".join(f"{int(value) & mask:0{digits}x}" for value in flat) + "\n", encoding="utf-8")
+
+
+def write_scalar(path: Path, value: int, width_bits: int) -> None:
+    write_hex_lines(path, np.array([value], dtype=np.uint64), width_bits)
 
 
 def image_to_words32(image: bytes) -> np.ndarray:
@@ -198,8 +202,8 @@ def add_payload(payloads: list[dict[str, Any]], *, name: str, cursor: int, paylo
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Export a QMAP runtime packet for LM-head argmax simulation.")
-    parser.add_argument("--lm-prefix", default=LM_HEAD_PREFIX)
+    parser = argparse.ArgumentParser(description="Export a QMAP runtime packet for Layer 0 o_proj simulation.")
+    parser.add_argument("--prefix", default=O_PROJ_PREFIX)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
@@ -209,53 +213,40 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    lm_prefix = str(args.lm_prefix)
+    prefix = str(args.prefix)
 
-    activation = read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_activation.hex", ACT_WIDTH, signed=True)
-    scan_base = int(read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_scan_base_token.hex", 32, signed=False)[0])
-    weight_base = int(read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_weight_base_addr.hex", 64, signed=False)[0])
-    scale_base = int(read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_scale_base_addr.hex", 64, signed=False)[0])
-    best_token = int(read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_expected_best_token.hex", 32, signed=False)[0])
-    best_score = int(read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_expected_best_score_q26.hex", ROW_ACC_WIDTH, signed=True)[0])
-
-    meta_path = SIM_VECTOR_DIR / f"{lm_prefix}_meta.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    shape = meta["shape"]
-    vocab_size = int(shape.get("vocab_size", VOCAB_SIZE_DEFAULT))
-    scan_rows = int(shape["scan_rows"])
-    tile_rows = int(shape["tile_rows"])
-    tile_count = int(shape["tile_count"])
+    activation = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_activation.hex", ACT_WIDTH, signed=True)
+    expected = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_expected_q12_12.hex", OUT_WIDTH, signed=True)
+    weight_words = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_weight_words32.hex", 32, signed=False)
+    scale_words = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_scale_words32.hex", 32, signed=False)
 
     if activation.shape != (INPUT_SIZE,):
-        raise RuntimeError(f"activation shape mismatch: {activation.shape}")
-    if tile_rows != TILE_ROWS:
-        raise RuntimeError(f"tile_rows mismatch: expected {TILE_ROWS}, got {tile_rows}")
-    if scan_rows != tile_count * tile_rows:
-        raise RuntimeError("scan_rows does not match tile_count * tile_rows")
-    if not (0 <= scan_base < vocab_size) or (scan_base + scan_rows > vocab_size):
-        raise RuntimeError("scan range is outside vocabulary")
-    if not (scan_base <= best_token < scan_base + scan_rows):
-        raise RuntimeError("expected token is outside scan window")
+        raise RuntimeError(f"activation shape mismatch: expected {(INPUT_SIZE,)}, got {activation.shape}")
+    if expected.shape != (OUT_FEATURES,):
+        raise RuntimeError(f"expected shape mismatch: expected {(OUT_FEATURES,)}, got {expected.shape}")
 
-    score_u64 = best_score & ((1 << 64) - 1)
-    expected_words = np.array(
-        [
-            best_token & 0xFFFF_FFFF,
-            score_u64 & 0xFFFF_FFFF,
-            (score_u64 >> 32) & 0xFFFF_FFFF,
-        ],
-        dtype=np.uint32,
-    )
+    weight_row_bytes = INPUT_SIZE * WEIGHT_WIDTH // 8
+    scale_row_bytes = GROUP_COUNT * SCALE_WIDTH // 8
+    weight_bytes = OUT_FEATURES * weight_row_bytes
+    scale_bytes = OUT_FEATURES * scale_row_bytes
+
+    if weight_words.size * 4 != weight_bytes:
+        raise RuntimeError(f"weight_words size mismatch: got {weight_words.size * 4}, expected {weight_bytes}")
+    if scale_words.size * 4 != scale_bytes:
+        raise RuntimeError(f"scale_words size mismatch: got {scale_words.size * 4}, expected {scale_bytes}")
+
+    activation_i32 = activation.astype(np.int32)
+    expected_i32 = expected.astype(np.int32)
     metadata_words = np.array(
         [
-            scan_base,
-            scan_rows,
-            tile_rows,
-            tile_count,
-            vocab_size,
-            best_token,
-            int(expected_words[1]),
-            int(expected_words[2]),
+            LAYER_ID,
+            OUT_FEATURES,
+            INPUT_SIZE,
+            GROUP_SIZE,
+            GROUP_COUNT,
+            O_PROJ_WEIGHT_BASE_ADDR & 0xFFFF_FFFF,
+            O_PROJ_SCALE_BASE_ADDR & 0xFFFF_FFFF,
+            MATRIX_ID_O_PROJ,
         ],
         dtype=np.uint32,
     )
@@ -263,9 +254,9 @@ def main() -> None:
     payloads: list[dict[str, Any]] = []
     cursor = PAYLOAD_BASE_OFFSET
     cursor = add_payload(payloads, name="metadata", cursor=cursor, payload=as_le_bytes(metadata_words, "<u4"))
-    cursor = add_payload(payloads, name="activation_q12_12", cursor=cursor, payload=as_le_bytes(activation, "<i4"))
-    cursor = add_payload(payloads, name="output_token_score", cursor=cursor, payload=bytes(12))
-    cursor = add_payload(payloads, name="expected_token_score", cursor=cursor, payload=as_le_bytes(expected_words, "<u4"))
+    cursor = add_payload(payloads, name="attn_out_q12_12", cursor=cursor, payload=as_le_bytes(activation_i32, "<i4"))
+    cursor = add_payload(payloads, name="o_proj_out_q12_12", cursor=cursor, payload=bytes(OUT_FEATURES * 4))
+    cursor = add_payload(payloads, name="expected_o_proj_out_q12_12", cursor=cursor, payload=as_le_bytes(expected_i32, "<i4"))
     image_bytes = align_up(cursor, IMAGE_ALIGNMENT)
 
     payload_by_name = {item["name"]: item for item in payloads}
@@ -277,11 +268,9 @@ def main() -> None:
         return len(payload_by_name[name]["payload"])
 
     ro = TENSOR_F_ROW_MAJOR | TENSOR_F_READ_ONLY
-    packed_ro = ro | TENSOR_F_PACKED_Q4_LOW_EVEN
     wo = TENSOR_F_ROW_MAJOR | TENSOR_F_WRITE_ONLY
+    packed_ro = ro | TENSOR_F_PACKED_Q4_LOW_EVEN
     expected_flags = TENSOR_F_ROW_MAJOR | TENSOR_F_READ_ONLY | TENSOR_F_DEBUG_ONLY
-    weight_row_bytes = INPUT_SIZE * WEIGHT_WIDTH // 8
-    scale_row_bytes = GROUP_COUNT * SCALE_WIDTH // 8
 
     descriptors = [
         pack_descriptor(
@@ -297,7 +286,7 @@ def main() -> None:
             nbytes=size("metadata"),
             dims=(int(metadata_words.size), 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, scan_base, tile_count),
+            aux=(MATRIX_ID_O_PROJ, LAYER_ID, OUT_FEATURES, INPUT_SIZE),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_ACTIVATION,
@@ -305,14 +294,14 @@ def main() -> None:
             dtype=DTYPE_I32_Q12_12,
             rank=1,
             flags=ro,
-            element_bits=32,
+            element_bits=ACT_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("activation_q12_12"),
+            base_addr=addr("attn_out_q12_12"),
             nbytes=INPUT_SIZE * 4,
             dims=(INPUT_SIZE, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, 0, 0),
+            aux=(MATRIX_ID_O_PROJ, LAYER_ID, 0, 0),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_WEIGHT,
@@ -323,11 +312,11 @@ def main() -> None:
             element_bits=WEIGHT_WIDTH,
             group_size=GROUP_SIZE,
             scale_tensor_id=TENSOR_ID_SCALE,
-            base_addr=weight_base,
-            nbytes=vocab_size * weight_row_bytes,
-            dims=(vocab_size, INPUT_SIZE, 0, 0),
+            base_addr=O_PROJ_WEIGHT_BASE_ADDR,
+            nbytes=weight_bytes,
+            dims=(OUT_FEATURES, INPUT_SIZE, 0, 0),
             strides=(weight_row_bytes, 0, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, scan_base, tile_count),
+            aux=(MATRIX_ID_O_PROJ, LAYER_ID, 0, OUT_FEATURES),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_SCALE,
@@ -338,41 +327,41 @@ def main() -> None:
             element_bits=SCALE_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=scale_base,
-            nbytes=vocab_size * scale_row_bytes,
-            dims=(vocab_size, GROUP_COUNT, 0, 0),
+            base_addr=O_PROJ_SCALE_BASE_ADDR,
+            nbytes=scale_bytes,
+            dims=(OUT_FEATURES, GROUP_COUNT, 0, 0),
             strides=(scale_row_bytes, 2, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, scan_base, tile_count),
+            aux=(MATRIX_ID_O_PROJ, LAYER_ID, 0, OUT_FEATURES),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_OUTPUT,
             role=ROLE_OUTPUT,
-            dtype=DTYPE_U32,
+            dtype=DTYPE_I32_Q12_12,
             rank=1,
             flags=wo,
-            element_bits=32,
+            element_bits=OUT_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("output_token_score"),
-            nbytes=12,
-            dims=(3, 0, 0, 0),
+            base_addr=addr("o_proj_out_q12_12"),
+            nbytes=OUT_FEATURES * 4,
+            dims=(OUT_FEATURES, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, scan_base, tile_count),
+            aux=(MATRIX_ID_O_PROJ, LAYER_ID, 0, OUT_FEATURES),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_EXPECTED,
             role=ROLE_EXPECTED,
-            dtype=DTYPE_U32,
+            dtype=DTYPE_I32_Q12_12,
             rank=1,
             flags=expected_flags,
-            element_bits=32,
+            element_bits=OUT_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("expected_token_score"),
-            nbytes=12,
-            dims=(3, 0, 0, 0),
+            base_addr=addr("expected_o_proj_out_q12_12"),
+            nbytes=OUT_FEATURES * 4,
+            dims=(OUT_FEATURES, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_EMBED_LM_HEAD, 0, scan_base, tile_count),
+            aux=(MATRIX_ID_O_PROJ, LAYER_ID, 0, OUT_FEATURES),
         ),
     ]
 
@@ -389,57 +378,63 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(bytes(image))
     write_hex_lines(args.sim_hex, image_to_words32(bytes(image)), 32)
-    write_hex_lines(args.expected_hex, expected_words, 32)
+    write_hex_lines(args.expected_hex, expected_i32, 32)
+    write_scalar(SIM_VECTOR_DIR / f"{prefix}_weight_base_addr.hex", O_PROJ_WEIGHT_BASE_ADDR, 64)
+    write_scalar(SIM_VECTOR_DIR / f"{prefix}_scale_base_addr.hex", O_PROJ_SCALE_BASE_ADDR, 64)
 
     manifest = {
         "format_version": 1,
-        "name": "qmap_lm_head_argmax_runtime",
-        "lm_prefix": lm_prefix,
+        "name": "qmap_o_proj_runtime",
+        "prefix": prefix,
         "qmap_base": QMAP_BASE,
         "image_bytes": image_bytes,
         "sha256": sha256_file(args.output),
         "descriptor_count": DESCRIPTOR_COUNT,
         "descriptor_capacity": DESCRIPTOR_CAPACITY,
         "shape": {
-            "vocab_size": vocab_size,
-            "scan_base": scan_base,
-            "scan_rows": scan_rows,
-            "tile_rows": tile_rows,
-            "tile_count": tile_count,
             "input_size": INPUT_SIZE,
+            "out_features": OUT_FEATURES,
+            "group_size": GROUP_SIZE,
             "group_count": GROUP_COUNT,
         },
         "memory_layout": {
-            "weight_base_addr": weight_base,
-            "scale_base_addr": scale_base,
+            "weight_base_addr": O_PROJ_WEIGHT_BASE_ADDR,
+            "scale_base_addr": O_PROJ_SCALE_BASE_ADDR,
             "weight_row_bytes": weight_row_bytes,
             "scale_row_bytes": scale_row_bytes,
-            "output_addr": addr("output_token_score"),
-            "expected_addr": addr("expected_token_score"),
+            "weight_bytes": weight_bytes,
+            "scale_bytes": scale_bytes,
+            "activation_addr": addr("attn_out_q12_12"),
+            "output_addr": addr("o_proj_out_q12_12"),
+            "expected_addr": addr("expected_o_proj_out_q12_12"),
         },
         "expected": {
-            "best_token": best_token,
-            "best_score_q26": best_score,
-            "output_words32": [int(value) for value in expected_words.tolist()],
+            "output_words": int(expected_i32.size),
+            "min": int(np.min(expected_i32)),
+            "max": int(np.max(expected_i32)),
         },
         "files": {
             "binary": relpath(args.output),
             "sim_hex": relpath(args.sim_hex),
             "expected_hex": relpath(args.expected_hex),
+            "weight_words32": relpath(SIM_VECTOR_DIR / f"{prefix}_weight_words32.hex"),
+            "scale_words32": relpath(SIM_VECTOR_DIR / f"{prefix}_scale_words32.hex"),
         },
     }
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     args.manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
-    print("Exported QMAP LM-head argmax runtime packet")
+    print("Exported QMAP o_proj runtime packet")
     print("=" * 80)
-    print(f"QMAP base:     0x{QMAP_BASE:016X}")
-    print(f"Image bytes:   0x{image_bytes:X}")
-    print(f"Scan window:   [{scan_base}, {scan_base + scan_rows}) rows={scan_rows}, tiles={tile_count}")
-    print(f"Expected:      token={best_token}, score_q26={best_score}")
-    print(f"Binary:        {args.output}")
-    print(f"Simulation hex:{args.sim_hex}")
-    print(f"Manifest:      {args.manifest}")
+    print(f"QMAP base:       0x{QMAP_BASE:016X}")
+    print(f"Image bytes:     0x{image_bytes:X}")
+    print(f"Activation words:{activation_i32.size}")
+    print(f"Weight bytes:    0x{weight_bytes:X} @ 0x{O_PROJ_WEIGHT_BASE_ADDR:016X}")
+    print(f"Scale bytes:     0x{scale_bytes:X} @ 0x{O_PROJ_SCALE_BASE_ADDR:016X}")
+    print(f"Expected words:  {expected_i32.size}")
+    print(f"Binary:          {args.output}")
+    print(f"Simulation hex:  {args.sim_hex}")
+    print(f"Manifest:        {args.manifest}")
 
 
 if __name__ == "__main__":

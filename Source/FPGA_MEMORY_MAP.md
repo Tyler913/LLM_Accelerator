@@ -2,11 +2,18 @@
 
 Status: working draft, updated through the QMAP row1024 PL AXI master
 hardware smoke pass, the full local Layer 0 QKV projection AXI write-back
-simulation, and the local q/k norm + RoPE + KV-cache append + attention
-score/softmax/value/o_proj/post-attention residual-norm/MLP gate-up/MLP
-SiLU-multiply/MLP-down/final-MLP-residual/final-RMSNorm/LM-head-argmax plus
-memory-backed, runtime-tile-scheduled, and QMAP descriptor-backed LM-head
-simulation evidence on 2026-07-01
+simulation, the first local QMAP attention front-end wrapper, the first local
+QMAP attention score/value wrapper, the first local QMAP attention o_proj
+wrapper, the first local QMAP post-attention residual/RMSNorm wrapper, the
+first local QMAP MLP gate/up wrapper, the first local QMAP MLP
+SiLU/multiply wrapper, the first local QMAP MLP down wrapper, and the first
+local QMAP final MLP residual wrapper, plus the local q/k norm + RoPE + KV-cache
+append + attention score/softmax/value/o_proj/post-attention residual-norm/
+MLP gate-up/MLP SiLU-multiply/MLP-down/
+final-MLP-residual/final-RMSNorm/LM-head-argmax plus memory-backed,
+runtime-tile-scheduled, and QMAP descriptor-backed LM-head simulation evidence,
+including the full `151936`-row / `9496`-tile QMAP LM-head sweep and the first
+QMAP final-token tail wrapper, on 2026-07-04
 
 This document defines the first FPGA-visible memory layout for the Qwen3
 0.6B accelerator bring-up. It distinguishes hardware-proven base apertures
@@ -313,7 +320,7 @@ PL_DDR4_HIGH = 0x4_1FFF_FFFF
 | Region | Base | Size | Owner | Contents | Status |
 | --- | ---: | ---: | --- | --- | --- |
 | Header / memory-map metadata | `0x4_0000_0000` | 1 MiB | PS/PL | QMAP model manifest, runtime work packets, descriptor tables, version/checksum metadata | draft |
-| Weight region | `0x4_0010_0000` | 320 MiB | PS load, PL read | required Q4 weights and scales | draft; LM-head local memory-reader layout exercised from this base |
+| Weight region | `0x4_0010_0000` | 320 MiB | PS load, PL read | required Q4 weights and scales | draft; LM-head and Layer 0 `o_proj` plus gate/up local memory-reader layouts exercised from this region |
 | KV cache region | `0x4_1410_0000` | 32 MiB | PL read/write | per-layer K/V cache, context 256 first | draft |
 | Activation buffers | `0x4_1610_0000` | 64 MiB | PL read/write | one-token hidden, normed, Q/K/V, attention, MLP scratch, debug snapshots | draft |
 | RoPE table | `0x4_1A10_0000` | 8 MiB | PS load or PL read | cos/sin table if precomputed | draft |
@@ -333,12 +340,52 @@ lm_head_scale_base        = 0x4_04B3_0000
 lm_head_scale_row_bytes   = 32
 lm_head_scale_full_bytes  = 0x004A_3000
 lm_head_scale_high        = 0x4_04FD_2FFF
+
+o_proj_weight_base        = 0x4_0600_0000
+o_proj_weight_row_bytes   = 1024
+o_proj_weight_full_bytes  = 0x0010_0000
+o_proj_weight_high        = 0x4_060F_FFFF
+
+o_proj_scale_base         = 0x4_0610_0000
+o_proj_scale_row_bytes    = 64
+o_proj_scale_full_bytes   = 0x0001_0000
+o_proj_scale_high         = 0x4_0610_FFFF
+
+mlp_gate_weight_base      = 0x4_0620_0000
+mlp_gate_weight_row_bytes = 512
+mlp_gate_weight_full_bytes = 0x0018_0000
+mlp_gate_weight_high      = 0x4_0637_FFFF
+
+mlp_gate_scale_base       = 0x4_0638_0000
+mlp_gate_scale_row_bytes  = 32
+mlp_gate_scale_full_bytes = 0x0001_8000
+mlp_gate_scale_high       = 0x4_0639_7FFF
+
+mlp_up_weight_base        = 0x4_0640_0000
+mlp_up_weight_row_bytes   = 512
+mlp_up_weight_full_bytes  = 0x0018_0000
+mlp_up_weight_high        = 0x4_0657_FFFF
+
+mlp_up_scale_base         = 0x4_0658_0000
+mlp_up_scale_row_bytes    = 32
+mlp_up_scale_full_bytes   = 0x0001_8000
+mlp_up_scale_high         = 0x4_0659_7FFF
+
+mlp_down_weight_base      = 0x4_0660_0000
+mlp_down_weight_row_bytes = 1536
+mlp_down_weight_full_bytes = 0x0018_0000
+mlp_down_weight_high      = 0x4_0677_FFFF
+
+mlp_down_scale_base       = 0x4_0678_0000
+mlp_down_scale_row_bytes  = 96
+mlp_down_scale_full_bytes = 0x0001_8000
+mlp_down_scale_high       = 0x4_0679_7FFF
 ```
 
-The local memory-model testbench currently loads the `[0,1024)` scan window
-from exported hex files, not the complete 151,936-row table. The base addresses
-above are kept in the vectors so the reader path already uses the intended
-full-vocabulary physical layout.
+The compact local memory-model tests load the `[0,1024)` scan window from
+exported hex files. The full-vocabulary xsim runs load the complete
+151,936-row table through the same base addresses, so the reader path already
+uses the intended full-vocabulary physical layout.
 
 Draft relative coverage:
 
@@ -411,6 +458,16 @@ Formal QMAP inference layout draft:
 
 - Persistent model manifest base: `0x4_0000_0000`
 - Runtime work-packet base: `0x4_0008_0000`
+- QMAP LM-head runtime packet base: `0x4_0500_0000`
+- QMAP final-token tail runtime packet base: `0x4_0501_0000`
+- QMAP attention front-end runtime packet base: `0x4_0502_0000`
+- QMAP attention score/value runtime packet base: `0x4_0503_0000`
+- QMAP `o_proj` runtime packet base: `0x4_0504_0000`
+- QMAP post-attention residual/RMSNorm runtime packet base: `0x4_0505_0000`
+- QMAP MLP gate/up runtime packet base: `0x4_0506_0000`
+- QMAP MLP SiLU/multiply runtime packet base: `0x4_0507_0000`
+- QMAP MLP down runtime packet base: `0x4_0508_0000`
+- QMAP final MLP residual runtime packet base: `0x4_0509_0000`
 - Bring-up smoke images remain in the test-vector staging region.
 - The manifest describes tensors loaded once into weight, KV-cache,
   activation, RoPE, and logits regions.
@@ -422,6 +479,45 @@ Formal QMAP inference layout draft:
   self-contained packet for simulation and bring-up. The full generated packet
   uses the runtime work-packet base `0x4_0008_0000`, 12 active descriptors,
   32 descriptor slots, and covers full Layer 0 Q/K/V row counts.
+- The current `37_export_qmap_attention_frontend_image.py` exporter emits the
+  next per-layer body packet at `0x4_0502_0000`: Q/K/V projection outputs,
+  q/k gamma, RoPE cos/sin, a KV-cache descriptor, and Q RoPE output scratch.
+  The local wrapper proves exact K/V cache writes and exact Q RoPE write-back.
+- The current `38_export_qmap_attention_score_value_image.py` exporter emits
+  the next attention-body packet at `0x4_0503_0000`: Q RoPE input, K/V cache,
+  softmax exp LUT, and `attn_out[2048]` output scratch. The local wrapper
+  proves exact K/V cache reads and exact attention-output write-back.
+- The current `39_export_qmap_o_proj_image.py` exporter emits the next
+  per-layer body packet at `0x4_0504_0000`: `attn_out[2048]`, persistent
+  Layer 0 `o_proj` Q4 weight/scale references, and `o_proj_out[1024]` output
+  scratch. The local wrapper proves exact persistent weight/scale row reads
+  and exact output write-back.
+- The current `40_export_qmap_post_attention_residual_norm_image.py` exporter
+  emits the next per-layer body packet at `0x4_0505_0000`: residual input,
+  `o_proj_out[1024]`, signed post-attention RMSNorm gamma,
+  post-attention hidden output scratch, and post-norm output scratch. The
+  local wrapper proves exact hidden and post-norm write-back.
+- The current `41_export_qmap_mlp_gate_up_image.py` exporter emits the next
+  per-layer body packet at `0x4_0506_0000`: `post_norm[1024]`, persistent
+  Layer 0 gate/up Q4 weight/scale references, and gate/up output scratch. The
+  local wrapper proves exact persistent gate/up weight/scale row reads and
+  exact gate/up write-back.
+- The current `42_export_qmap_mlp_silu_mul_image.py` exporter emits the next
+  per-layer body packet at `0x4_0507_0000`: gate/up `[3072]`, a fixed UQ0.16
+  sigmoid LUT, hidden output scratch, and expected hidden debug data. The local
+  wrapper proves exact LUT/gate/up reads and exact `mlp_hidden[3072]`
+  write-back.
+- The current `43_export_qmap_mlp_down_image.py` exporter emits the next
+  per-layer body packet at `0x4_0508_0000`: `mlp_hidden[3072]`, persistent
+  Layer 0 down-proj Q4 weight/scale references, down output scratch, and
+  expected down debug data. The local wrapper proves exact persistent down
+  weight/scale row reads and exact `down_out[1024]` write-back.
+- The current `44_export_qmap_mlp_residual_add_image.py` exporter emits the
+  next per-layer body packet at `0x4_0509_0000`:
+  `post_attn_hidden[1024]`, `down_out[1024]`, layer-output scratch, and
+  expected layer-output debug data. The local wrapper proves exact
+  `layer_out[1024]` write-back and descriptor/protocol error paths with no
+  writes.
 
 The first Layer 0 QKV projection packet should reserve 32 descriptor slots and
 describe:
@@ -531,11 +627,11 @@ first dot64 image to row, tile, projection, layer, and full-model images.
 | layer N v_proj | `[1024, 1024]` | TODO | TODO | TODO | row-major candidate |
 | layer N q_norm weight | `[128]` | signed `I16_Q8_7` for current Layer 0 RTL | TODO | 256 B per layer | Layer 0 has negative q_norm gamma entries; full-model format remains subject to range review |
 | layer N k_norm weight | `[128]` | signed `I16_Q8_7` for current Layer 0 RTL | TODO | 256 B per layer | Current Layer 0 max fits; full-model format remains subject to range review |
-| layer N o_proj | `[1024, 2048]` | TODO | TODO | TODO | row-major candidate |
+| layer N o_proj | `[1024, 2048]` | packed signed Q4 weight + Q2.14 scales | `0x4_0600_0000` for current Layer 0 sim window | 0x0010_0000 weight + 0x0001_0000 scales | row-major, one 1024-byte weight row and one 64-byte scale row per output row |
 | layer N post-attn RMSNorm weight | `[1024]` | TODO | TODO | TODO | gamma |
-| layer N gate_proj | `[3072, 1024]` | TODO | TODO | TODO | MLP |
-| layer N up_proj | `[3072, 1024]` | TODO | TODO | TODO | MLP |
-| layer N down_proj | `[1024, 3072]` | TODO | TODO | TODO | MLP |
+| layer N gate_proj | `[3072, 1024]` | packed signed Q4 weight + Q2.14 scales | `0x4_0620_0000` / `0x4_0638_0000` for current Layer 0 sim window | 0x0018_0000 weight + 0x0001_8000 scales | MLP gate, one 512-byte weight row and one 32-byte scale row per output row |
+| layer N up_proj | `[3072, 1024]` | packed signed Q4 weight + Q2.14 scales | `0x4_0640_0000` / `0x4_0658_0000` for current Layer 0 sim window | 0x0018_0000 weight + 0x0001_8000 scales | MLP up, one 512-byte weight row and one 32-byte scale row per output row |
+| layer N down_proj | `[1024, 3072]` | packed signed Q4 weight + Q2.14 scales | `0x4_0660_0000` / `0x4_0678_0000` for current Layer 0 sim window | 0x0018_0000 weight + 0x0001_8000 scales | MLP down, one 1536-byte weight row and one 96-byte scale row per output row |
 | final RMSNorm weight | `[1024]` | TODO | TODO | TODO | gamma |
 
 Open decisions:
@@ -633,11 +729,11 @@ region can be fixed when the first QKV projection exporter is written.
 | gate | `[3072]` | `I32_Q12_12` | activation region or streamed | MLP intermediate | local RTL stage passed |
 | up | `[3072]` | `I32_Q12_12` | activation region or streamed | MLP intermediate | local RTL stage passed |
 | mlp_hidden | `[3072]` | `I32_Q12_12` | activation region or streamed | `silu(gate) * up`, down-projection input | local RTL stage passed |
-| down_out | `[1024]` | `I32_Q12_12` | activation region or streamed | final MLP residual input | local RTL stage passed |
-| layer_out | `[1024]` | `I32_Q14_10` or `I32_Q12_12` | activation region | `post_attn_hidden + down_out`, next layer input | local RTL stage passed |
-| final_norm | `[1024]` | `I32_Q12_12` | activation or logits region | LM-head input | local RTL stage passed |
-| logits_tile | tile-dependent | implementation-defined | logits/argmax region | LM-head tile scan | draft |
-| output_token | `[1]` | `U32` | logits/argmax region or control register | greedy argmax result | draft |
+| down_out | `[1024]` | `I32_Q12_12` | activation region or streamed | final MLP residual input | QMAP MLP down wrapper now writes exact output locally |
+| layer_out | `[1024]` | `I32_Q14_10` | activation region | `post_attn_hidden + down_out`, next layer input | QMAP final MLP residual wrapper now writes exact output locally |
+| final_norm | `[1024]` | `I32_Q12_12` | activation or logits region | LM-head input | final-token tail QMAP wrapper writes and rereads this buffer locally |
+| logits_tile | tile-dependent | implementation-defined | logits/argmax region | LM-head tile scan | full-vocab local QMAP wrapper passed |
+| output_token | `[1]` | `U32` | logits/argmax region or control register | greedy argmax result | final-token tail QMAP wrapper writes token/score locally |
 
 Open decisions:
 
@@ -666,9 +762,12 @@ Fields to define:
 
 ## Logits and Argmax
 
-The vocabulary size is 151,936. A full logits vector can be large, so the first
-hardware plan may scan the tied LM head in tiles and keep only the running
-argmax.
+The vocabulary size is 151,936. A full logits vector can be large, so the
+current hardware plan scans the tied LM head in 16-row tiles and keeps only the
+running argmax. The descriptor-backed local full-vocab proof passes with
+`9496` tiles, token `264`, score `1365150750`, and exact Q26 logit checks.
+The first QMAP final-token tail wrapper now also proves the preceding
+`final_hidden -> final_norm` write-back before that full-vocab scan.
 
 TODO:
 
@@ -866,6 +965,11 @@ Bring-up order:
       sequential residual add block and computes
       `post_attn_hidden[1024] + down_out[1024] -> layer_out[1024]` exactly
       against Q14.10 golden words.
+    - QMAP status: local wrapper passed. `qmap_mlp_residual_add_compute_path.sv`
+      consumes descriptor-visible `post_attn_hidden[1024]` and
+      `down_out[1024]`, writes exact Q14.10 `layer_out[1024]`, and covers both
+      invalid descriptor and malformed payload-`last` error paths with no
+      writes.
 20. Add local final RMSNorm.
     - status: local RTL passed. `final_rmsnorm_stage.sv` consumes the
       full-model Python reference's current-token final hidden vector, applies
@@ -886,13 +990,38 @@ Bring-up order:
       final-norm, weight, scale, scan-range, output, and expected/debug tensors,
       runs the scheduler, and writes token/score output words. The Python
       exporter also proves token `264` is the full-Q4/HF argmax. The full
-      `9496`-tile vocabulary simulation remains pending.
-22. Q4 GEMV RTL block starts from the 64-value dot-product smoke vector in
+      `9496`-tile vocabulary simulation now passes in Vivado xsim with exact
+      token `264`, score `1365150750`, and `151936` checked logits.
+22. Compose the first QMAP final-token tail wrapper.
+    - status: local RTL/xsim passed. `qmap_final_token_tail_compute_path.sv`
+      reads descriptor-provided final hidden and signed final RMSNorm gamma,
+      writes `final_norm[1024]` to the descriptor activation buffer, invokes
+      the descriptor-backed LM-head wrapper, and writes final token/score
+      words. Compact Icarus covers the invalid gamma descriptor path; full
+      Vivado xsim covers `9496` tiles / `151936` logits with exact token `264`
+      and score `1365150750`.
+23. Compose the first QMAP attention front-end wrapper.
+    - status: local RTL passed. `qmap_attention_frontend_compute_path.sv` reads
+      descriptor-provided Q/K/V projection outputs, q/k gamma, and RoPE cos/sin
+      tables, runs q/k norm + RoPE + KV-cache append, writes exact K/V cache
+      address/data words, and writes exact `q_rope[2048]` to the descriptor
+      output buffer. The testbench covers read/write backpressure, spurious
+      start while busy, invalid RoPE-cos dtype error handling, and all wrapper
+      states in the trace audit.
+24. Compose the first QMAP attention score/value wrapper.
+    - status: local RTL passed. `qmap_attention_score_value_compute_path.sv`
+      reads descriptor-provided Q RoPE and exp LUT payloads, converts K/V cache
+      requests into exact 4-byte memory reads, streams score into
+      softmax/value, captures `attn_out[2048]`, and writes it to the descriptor
+      output buffer. The testbench covers read/write backpressure, exact K/V
+      read order, exact output write data, invalid exp-LUT dtype error
+      handling, and all wrapper states in the trace audit.
+25. Q4 GEMV RTL block starts from the 64-value dot-product smoke vector in
     `qwen3_0p6b_q4_v0/q_proj_row0_group0_dot64.npz`, then expands to full
     Layer 0 Q/K/V using `qkv_layer0_last_token_q4.npz`.
-23. Extend vectors and memory regions for RoPE, KV cache, attention, MLP, and
+26. Extend vectors and memory regions for RoPE, KV cache, attention, MLP, and
     complete Layer 0.
-24. Use FP32 vectors as golden references, but design GEMV/weight-storage RTL
+27. Use FP32 vectors as golden references, but design GEMV/weight-storage RTL
     around the required Q4 path from the start. The current Q4 v0 artifact is
     the first packed-weight contract; extend it before scaling beyond Layer 0
     Q/K/V.
@@ -915,16 +1044,24 @@ Pass/fail fields to record:
 | Attention score stage | `attention_score_stage_real` from Q4/QMAP fixed Q and 5-position K cache | exact raw Q24.24 and scaled Q24.24 score match | 10240 K requests/responses, 80 scores, trace audit passed | passed in Icarus |
 | Attention softmax/value stage | `attention_softmax_value_stage_real` from fixed scores and 5-position V cache | exact UQ0.16 probabilities and Q12.12 `attn_out` words | 10240 V requests/responses, 2048 outputs, trace audit passed | passed in Icarus |
 | Attention o_proj stage | `o_proj_stage_real` from fixed `attn_out[2048]` and Layer 0 Q4 `o_proj.weight[1024,2048]` | exact Q12.12 `o_proj_out[1024]` word match | 1024 outputs, 618 output stall cycles, 35073 compute cycles | passed in Icarus |
+| QMAP attention o_proj wrapper | `qmap_o_proj_runtime.qmap.bin` plus persistent Layer 0 `o_proj` Q4 weight/scale vectors | exact Q12.12 `o_proj_out[1024]` write-back | 1024 weight-row reads, 1024 scale-row reads, 2070 read requests including invalid descriptor run, one 4096-byte output write burst, trace audit passed | passed in Icarus |
 | Post-attention residual + RMSNorm stage | `post_attention_residual_norm_stage_real` from fixed `o_proj_out[1024]` and Layer 0 residual input | exact Q14.10 residual and Q12.12 post-norm word match | 1024 residual words, 3132 stage cycles, trace audit passed | passed in Icarus |
+| QMAP post-attention residual + RMSNorm wrapper | `post_attention_residual_norm_runtime.qmap.bin` with residual input, `o_proj_out[1024]`, and signed post-attention gamma descriptors | exact Q14.10 post-attention hidden and exact Q12.12 post-norm write-back | 30 read requests including invalid descriptor run, 3616 response words, two 4096-byte output write bursts, trace audit passed | passed in Icarus |
+| QMAP MLP gate/up wrapper | `mlp_gate_up_runtime.qmap.bin` plus persistent Layer 0 gate/up Q4 weight/scale vectors | exact Q12.12 `gate[3072]` and `up[3072]` write-back | 3072 row completions, 12314 read requests including invalid descriptor run, 837280 response words, two 12288-byte output write bursts, trace audit passed | passed in Icarus |
 | MLP gate/up projection stage | `mlp_gate_up_proj_stage_real` from fixed `post_norm[1024]` and Layer 0 Q4 gate/up weights | exact Q12.12 gate and up word match | 3072 output pairs, 1394 output stall cycles, 52993 compute cycles, trace audit passed | passed in Icarus |
 | MLP SiLU/multiply stage | `mlp_silu_mul_stage_real` from fixed gate/up Q12.12 outputs and sigmoid LUT | exact Q12.12 `mlp_hidden[3072]` word match | 3072 inputs, 3072 outputs, 747 input stall cycles, 961 output stall cycles, trace audit passed | passed in Icarus |
+| QMAP MLP down wrapper | `mlp_down_runtime.qmap.bin` plus persistent Layer 0 down-proj Q4 weight/scale vectors | exact Q12.12 `down_out[1024]` write-back | 1024 row completions, 3098 read requests including invalid descriptor run, 421280 response words, one 4096-byte output write burst, trace audit passed | passed in Icarus |
 | MLP down projection stage | `mlp_down_proj_stage_real` from fixed `mlp_hidden[3072]` and Layer 0 Q4 `down_proj.weight[1024,3072]` | exact Q12.12 `down_out[1024]` word match | 1024 outputs, 497 output stall cycles, 52481 compute cycles, trace audit passed | passed in Icarus |
+| QMAP final MLP residual wrapper | `mlp_residual_add_runtime.qmap.bin` with `post_attn_hidden[1024]`, `down_out[1024]`, and layer-output scratch | exact Q14.10 `layer_out[1024]` write-back | valid write-back plus invalid descriptor and malformed payload-`last` no-write error paths, 27 read requests, 2577 response words, one 4096-byte output write burst, trace audit passed | passed in Icarus |
 | Final MLP residual add stage | `mlp_residual_add_stage_real` from fixed `post_attn_hidden[1024]` and `down_out[1024]` | exact Q14.10 `layer_out[1024]` word match | two full runs, 1024 outputs, 1026 stage cycles, spurious start covered, trace audit passed | passed in Icarus |
 | Final RMSNorm stage | `final_rmsnorm_stage_real` from full-model current-token final hidden and signed Q8.7 final gamma | exact Q12.12 final-norm word match plus exact debug scalars | two full runs, 2106 stage cycles, sum/sqrt/div/apply coverage, trace audit passed | passed in Icarus |
 | LM-head scan + greedy argmax stage | `lm_head_argmax_stage_real` from final RMSNorm output and tied Q4 LM-head rows `[0,1024)` | exact Q26 logit word match and best token `264` / score `1365150750` | two full runs, 128 tile requests, 128 tile responses, 2048 logits checked, trace audit passed | passed in Icarus |
 | LM-head memory-backed scan-window wrapper | `lm_head_argmax_stage_real` plus exported LM-head weight/scale memory words for rows `[0,1024)` | exact Q26 logit word match and best token `264` / score `1365150750` | two full runs, 1152 read requests, 278528 response words, 2048 logits checked, trace audit passed | passed in Icarus |
 | LM-head runtime tile scheduler | `lm_head_argmax_stage_real` plus exported LM-head weight/scale memory words and runtime tile counts | exact Q26 logit word match and best token `264` / score `1365150750` | 64-tile and 23-tile scans, 783 read requests, 189312 response words, 1392 logits checked, trace audit passed | passed in Icarus |
-| QMAP LM-head descriptor wrapper | `qmap_lm_head_argmax_runtime.qmap.bin` plus persistent LM-head weight/scale vectors | exact output token `264`, score `1365150750`, and Q26 logit checks | 64-tile and 23-tile descriptor scans, invalid tile_count error path, 812 read requests, 191984 response words, 2 output write bursts, trace audit passed | passed in Icarus |
+| QMAP LM-head descriptor wrapper | compact and full-vocab QMAP runtime packets plus persistent LM-head weight/scale vectors | exact output token `264`, score `1365150750`, and Q26 logit checks | compact: 64-tile and 23-tile descriptor scans plus invalid tile_count path; full: 9496 tiles, 151936 logits, 85475 read requests, 20664528 response words | compact passed in Icarus; full passed in xsim |
+| QMAP final-token tail wrapper | final hidden, signed final RMSNorm gamma, final-norm scratch, and persistent LM-head descriptors | exact final-norm write-back plus output token `264`, score `1365150750`, and Q26 logit checks | compact: 64 tiles, 1024 logits, invalid gamma descriptor path; full: 9496 tiles, 151936 logits, 85494 read requests, 20666912 response words, 1024 norm writes | compact passed in Icarus; full passed in xsim |
+| QMAP attention front-end wrapper | Q/K/V projection outputs, q/k gamma, RoPE cos/sin, KV-cache descriptor, and Q RoPE output descriptor | exact K/V cache address/data writes plus exact Q RoPE write-back | 31 read requests, 4944 read-response words, 2049 write requests, 4096 write-data words, invalid RoPE-cos dtype path, trace audit passed | passed in Icarus |
+| QMAP attention score/value wrapper | Q RoPE input, K/V cache descriptor, exp LUT, and attention-output descriptor | exact K/V cache read order plus exact `attn_out[2048]` write-back | 20496 read requests, 22961 read-response words, 10240 K reads, 10240 V reads, 2048 output writes, invalid exp-LUT dtype path, trace audit passed | passed in Icarus |
 | AXI4 write master | one aligned 4-beat write burst | exact AW/W/B behavior | no error | passed in Icarus |
 | RMSNorm | `rmsnorm_layer0_last_token.npz` | TODO | TODO | TODO |
 | Q4 Q GEMV | `qwen3_0p6b_q4_v0/qkv_layer0_last_token_q4.npz` | 0.22418976 | 0.01856172 | passed in Python verifier |
@@ -972,3 +1109,13 @@ Pass/fail fields to record:
 | 2026-07-01 | Add local memory-backed LM-head scan-window pass | Adds LM-head weight/scale memory hex exports, `lm_head_tile_mem_reader.sv`, `lm_head_argmax_mem_stage.sv`, and `tb_lm_head_argmax_mem_stage.sv`; the testbench proves the same 1024-row LM-head window through memory requests with `1152` read bursts and exact token `264` |
 | 2026-07-01 | Add local runtime LM-head tile scheduler pass | Adds `lm_head_argmax_tile_scheduler.sv` and `tb_lm_head_argmax_tile_scheduler.sv`; the testbench proves runtime scan counts of `64` and `23` tiles through the memory-backed LM-head stage, with exact token `264`, score `1365150750`, and `1392` checked logits |
 | 2026-07-01 | Add local QMAP LM-head descriptor wrapper pass | Adds `34_export_qmap_lm_head_argmax_image.py`, `qmap_lm_head_argmax_compute_path.sv`, and `tb_qmap_lm_head_argmax_compute_path.sv`; the testbench proves descriptor-provided final-norm, weight/scale, scan-range, output, and debug tensors across `64`-tile and `23`-tile scans plus an invalid descriptor error path |
+| 2026-07-02 | Add local full-vocab QMAP LM-head pass | Adds streaming full-vocab LM-head vector export and xsim full-vocab QMAP wrapper simulation; the run covers `9496` tiles / `151936` logits and returns exact token `264`, score `1365150750`, and `max_abs_logit_diff=0` |
+| 2026-07-02 | Add first QMAP final-token tail wrapper pass | Adds `36_export_qmap_final_token_tail_image.py`, `qmap_final_token_tail_compute_path.sv`, and `tb_qmap_final_token_tail_compute_path.sv`; compact Icarus and full-vocab xsim prove descriptor-visible `final_hidden -> final_norm write-back -> LM-head argmax -> output token/score` |
+| 2026-07-03 | Add first QMAP attention front-end wrapper pass | Adds `37_export_qmap_attention_frontend_image.py`, `qmap_attention_frontend_compute_path.sv`, and `tb_qmap_attention_frontend_compute_path.sv`; Icarus proves descriptor-visible `Q/K/V + q/k gamma + RoPE -> K/V cache append + Q RoPE write-back` |
+| 2026-07-03 | Add first QMAP attention score/value wrapper pass | Adds `38_export_qmap_attention_score_value_image.py`, `qmap_attention_score_value_compute_path.sv`, and `tb_qmap_attention_score_value_compute_path.sv`; Icarus proves descriptor-visible `Q RoPE + K/V cache + exp LUT -> attn_out[2048]` |
+| 2026-07-03 | Add first QMAP attention o_proj wrapper pass | Adds `39_export_qmap_o_proj_image.py`, `qmap_o_proj_compute_path.sv`, and `tb_qmap_o_proj_compute_path.sv`; Icarus proves descriptor-visible `attn_out[2048] + persistent o_proj Q4 weight/scale -> o_proj_out[1024]` |
+| 2026-07-04 | Add first QMAP post-attention residual/RMSNorm wrapper pass | Adds `40_export_qmap_post_attention_residual_norm_image.py`, `qmap_post_attention_residual_norm_compute_path.sv`, and `tb_qmap_post_attention_residual_norm_compute_path.sv`; Icarus proves descriptor-visible `residual + o_proj_out + post-attention gamma -> post-attention hidden + post_norm` |
+| 2026-07-04 | Add first QMAP MLP gate/up wrapper pass | Adds `41_export_qmap_mlp_gate_up_image.py`, `qmap_mlp_gate_up_compute_path.sv`, and `tb_qmap_mlp_gate_up_compute_path.sv`; Icarus proves descriptor-visible `post_norm[1024] + persistent gate/up Q4 weight/scale -> gate[3072] + up[3072]` |
+| 2026-07-04 | Add first QMAP MLP SiLU/multiply wrapper pass | Adds `42_export_qmap_mlp_silu_mul_image.py`, `qmap_mlp_silu_mul_compute_path.sv`, and `tb_qmap_mlp_silu_mul_compute_path.sv`; Icarus proves descriptor-visible `gate[3072] + up[3072] + sigmoid LUT -> mlp_hidden[3072]` |
+| 2026-07-04 | Add first QMAP MLP down wrapper pass | Adds `43_export_qmap_mlp_down_image.py`, `qmap_mlp_down_compute_path.sv`, and `tb_qmap_mlp_down_compute_path.sv`; Icarus proves descriptor-visible `mlp_hidden[3072] + persistent down-proj Q4 weight/scale -> down_out[1024]` |
+| 2026-07-04 | Add first QMAP final MLP residual wrapper pass | Adds `44_export_qmap_mlp_residual_add_image.py`, `qmap_mlp_residual_add_compute_path.sv`, and `tb_qmap_mlp_residual_add_compute_path.sv`; Icarus proves descriptor-visible `post_attn_hidden[1024] + down_out[1024] -> layer_out[1024]` with descriptor/protocol no-write error paths |
