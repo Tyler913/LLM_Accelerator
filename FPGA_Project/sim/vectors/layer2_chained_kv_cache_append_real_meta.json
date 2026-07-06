@@ -1,0 +1,70 @@
+{
+  "format_version": 1,
+  "name": "layer2_chained_kv_cache_append_real",
+  "module": "layer2.self_attn.kv_cache_append",
+  "layer_id": 2,
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "source": {
+    "q4_npz": "artifacts/test_vectors/qwen3_0p6b_q4_v0/qkv_layer2_last_token_q4.npz",
+    "qkv_expected_hex": "artifacts/test_vectors/qwen3_0p6b_qmap_v1/layer2_qkv_from_layer1_rtl_full_expected_words32.hex",
+    "source_label": "layer2_qkv_from_layer1_rtl_full",
+    "k_input_source": "K output slice from F:\\LLM_Accelerator\\artifacts\\test_vectors\\qwen3_0p6b_qmap_v1\\layer2_qkv_from_layer1_rtl_full_expected_words32.hex",
+    "v_input_source": "V output slice from F:\\LLM_Accelerator\\artifacts\\test_vectors\\qwen3_0p6b_qmap_v1\\layer2_qkv_from_layer1_rtl_full_expected_words32.hex"
+  },
+  "cache": {
+    "base_addr": "0x0000000414100000",
+    "layer_id": 2,
+    "max_context": 256,
+    "element_bytes": 4,
+    "write_order": "all K heads/dims first, then all V heads/dims",
+    "write_count": 2048,
+    "first_k_addr": "0x0000000414500800",
+    "last_k_addr": "0x00000004145E09FC",
+    "first_v_addr": "0x0000000414600800",
+    "last_v_addr": "0x00000004146E09FC"
+  },
+  "formats": {
+    "k_input": "signed 24-bit Q12.12 post-RoPE K",
+    "v_input": "signed 24-bit Q12.12 V projection output",
+    "write_data": "signed 24-bit Q12.12 sign-extended to 32-bit word",
+    "write_addr": "64-bit byte address"
+  },
+  "saturation": {
+    "k_gamma_quantize_count": 0,
+    "cos_quantize_count": 66,
+    "sin_quantize_count": 0,
+    "k_norm_output": false,
+    "k_rope_output": false
+  },
+  "debug": {
+    "k_projection_recompute_vs_artifact_max_abs_diff": null,
+    "v_projection_recompute_vs_artifact_max_abs_diff": null,
+    "k_rope_q12_12_max_abs": 569225,
+    "v_input_q12_12_max_abs": 732,
+    "k_norm_head0": {
+      "sum_squares": 13787973,
+      "mean_square": 107718,
+      "rms_q12_12": 328,
+      "inv_rms_uq8_16": 818400
+    }
+  },
+  "files": {
+    "k_input": "layer2_chained_kv_cache_append_real_k_input.hex",
+    "v_input": "layer2_chained_kv_cache_append_real_v_input.hex",
+    "expected_addr": "layer2_chained_kv_cache_append_real_expected_addr.hex",
+    "expected_data": "layer2_chained_kv_cache_append_real_expected_data.hex",
+    "expected_kind": "layer2_chained_kv_cache_append_real_expected_kind.hex",
+    "expected_head": "layer2_chained_kv_cache_append_real_expected_head.hex",
+    "expected_dim": "layer2_chained_kv_cache_append_real_expected_dim.hex"
+  }
+}

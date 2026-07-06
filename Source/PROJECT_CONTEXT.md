@@ -467,25 +467,81 @@ writes exact K/V cache entries and exact Q RoPE output. The next QMAP
 attention score/value wrapper now also passes locally: it consumes Q RoPE,
 reads K/V cache through descriptor-derived addresses, streams scores into
 softmax/value, and writes exact `attn_out[2048]`. The QMAP `o_proj` wrapper
-now also passes locally: it consumes `attn_out[2048]`, reads persistent Layer 0
-Q4 `o_proj` weight/scale rows, and writes exact `o_proj_out[1024]`. Hardware
-confirmation is still pending. The QMAP post-attention residual/RMSNorm
+now also passes locally: it consumes `attn_out[2048]`, reads persistent Q4
+`o_proj` weight/scale rows, and writes exact `o_proj_out[1024]` for the Layer 0
+and true Layer 1 packet instances. Hardware confirmation is still pending. The
+QMAP post-attention residual/RMSNorm
 wrapper now also passes locally: it consumes descriptor-visible residual
 input, `o_proj_out[1024]`, and signed post-attention gamma, then writes exact
-post-attention hidden and post-norm buffers. The QMAP MLP gate/up wrapper now
-also passes locally: it consumes descriptor-visible `post_norm[1024]`, reads
-persistent Layer 0 gate/up Q4 weight/scale rows, and writes exact gate/up
-`[3072]` buffers. The QMAP MLP SiLU/multiply wrapper now also passes locally:
+post-attention hidden and post-norm buffers for the Layer 0 and true Layer 1
+packet instances. The QMAP MLP gate/up wrapper now also passes locally: it
+consumes descriptor-visible `post_norm[1024]`, reads
+persistent Q4 gate/up weight/scale rows, and writes exact gate/up `[3072]`
+buffers for the Layer 0 and true Layer 1 packet instances. The QMAP MLP
+SiLU/multiply wrapper now also passes locally:
 it consumes descriptor-visible gate/up `[3072]` plus a fixed UQ0.16 sigmoid
-LUT and writes exact `mlp_hidden[3072]`. The QMAP MLP down wrapper now also
-passes locally: it consumes descriptor-visible `mlp_hidden[3072]`, reads
-persistent Layer 0 down-proj Q4 weight/scale rows, and writes exact
-`down_out[1024]`. The QMAP final MLP residual wrapper now also passes locally:
+LUT and writes exact `mlp_hidden[3072]` for the Layer 0 and true Layer 1 packet
+instances. The QMAP MLP down wrapper now also passes locally: it consumes
+descriptor-visible `mlp_hidden[3072]`, reads persistent per-layer down-proj Q4
+weight/scale rows, and writes exact `down_out[1024]` for Layer 0 and true
+Layer 1 packet instances. The QMAP final MLP
+residual wrapper now also passes locally:
 it consumes descriptor-visible `post_attn_hidden[1024]` and `down_out[1024]`,
 then writes exact `layer_out[1024]` while catching descriptor/protocol error
-paths with no writes. The next model-facing direction is to compose the locally
-passing per-layer body wrappers behind a single Layer 0 scheduler/driver, not
-to repeat small AXI smoke tests.
+paths with no writes. The first local Layer 0 body scheduler now also passes:
+it chains the QMAP post-attention residual/RMSNorm, MLP gate/up,
+SiLU/multiply, down, and final residual wrappers behind one memory port, with
+later descriptors patched to read the previous wrapper's actual write-back
+buffers. The wider local Layer 0 scheduler now also passes: it chains the QMAP
+attention front-end, attention score/value, `o_proj`, and the body scheduler
+behind one memory port with exact K/V cache, Q RoPE, attention, `o_proj`, MLP,
+and final `layer_out[1024]` write-back. The first local Layer 0 compute
+scheduler now also passes: it runs full QKV projection first, patches the
+attention front-end Q/K/V descriptors to those QKV output buffers, and then
+runs the wider Layer 0 scheduler through final `layer_out[1024]`. This is a
+local RTL simulation checkpoint, not a new board checkpoint. The first local
+one-token/layer-loop boundary now also passes for a true chained two-layer
+path: it exposes layer index/count, token position, hidden-buffer bases,
+KV-cache base, per-layer QMAP packet base tables, done/error masks, and shared
+memory ownership, then runs Layer 0 and true Layer 1 in sequence with exact
+write-back through Layer 1 `layer_out[1024]`. It also rejects missing-table or
+out-of-range layer-loop requests with no memory traffic. The QKV
+exporter/AXI wrapper path is now parameterized for true Layer
+1 data: `45_export_layer_qkv_q4_vectors.py` exports Layer 1 last-token Q/K/V
+Q4 vectors, `21_export_qmap_qkv_projection_image.py --layer-id 1` emits Layer
+1 QMAP packets, and the full `2048/1024/1024` Layer 1 QKV packet at
+`0x4_1008_0000` passes local AXI write-back comparison. The first downstream
+Layer 1 attention front-end packet now also passes at `0x4_1502_0000`, using
+parameterized q/k norm+RoPE, KV-cache append, and QMAP packet exporters to
+match exact K/V cache writes plus exact Q RoPE write-back. The next Layer 1
+attention score/value packet now also passes at `0x4_1503_0000`, using
+parameterized score/value golden exporters and a QMAP packet exporter to match
+exact K/V cache reads plus exact `attn_out[2048]` write-back. The true Layer 1
+`o_proj` packet now also passes at `0x4_1504_0000`, reading persistent Layer 1
+`o_proj` Q4 weight/scale bases at `0x4_0700_0000` / `0x4_0710_0000` and
+writing exact `o_proj_out[1024]`. The true Layer 1 post-attention
+residual/RMSNorm packet now also passes at `0x4_1505_0000`, writing exact
+`post_attention_hidden[1024]` and `post_norm[1024]`. The true Layer 1 MLP
+gate/up packet now also passes at `0x4_1506_0000`, reading persistent Layer 1
+gate/up Q4 weight/scale bases at `0x4_0720_0000` / `0x4_0738_0000` and
+`0x4_0740_0000` / `0x4_0758_0000`, then writing exact gate/up `[3072]`. The
+true Layer 1 MLP SiLU/multiply packet now also passes at `0x4_1507_0000`,
+consuming those gate/up outputs plus the fixed sigmoid LUT and writing exact
+`mlp_hidden[3072]`. The true Layer 1 MLP down packet now also passes at
+`0x4_1508_0000`, reading persistent Layer 1 down-proj Q4 weight/scale bases at
+`0x4_0760_0000` / `0x4_0778_0000` and writing exact `down_out[1024]`. The true
+Layer 1 final MLP residual packet now also passes at `0x4_1509_0000`,
+consuming Layer 1 post-attention hidden plus Layer 1 `down_out[1024]` and
+writing exact `layer_out[1024]`. The focused true Layer 0 -> Layer 1 loop now
+passes locally with exact write-back, layer done mask `0x3`, and zero
+mismatches. The chained per-layer artifact flow is now reusable through
+`47_export_chained_layer_qmap_artifacts.py`, and Layer 2 artifacts generated
+from the Layer 1 output pass focused Layer2-only scheduler validation with
+active layer 2, layer done mask `0x4`, and zero mismatches. The next
+model-facing direction is composing the chained layer-loop output with the
+existing final-token tail wrapper, with the compiled true three-layer scheduler
+entry kept as a deliberate long regression, not repeating small AXI smoke
+tests.
 
 Keep the exact next action in `Source/CURRENT_STATE.md`; keep detailed address
 planning in `Source/FPGA_MEMORY_MAP.md`.

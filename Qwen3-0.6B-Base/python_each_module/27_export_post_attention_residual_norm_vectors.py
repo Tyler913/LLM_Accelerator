@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import math
@@ -25,10 +26,9 @@ from common import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
 RMSNORM_EXPORTER_PATH = Path(__file__).with_name("17_export_rmsnorm_fixed_vectors.py")
-O_PROJ_PREFIX = "o_proj_stage_real"
 
-PREFIX = "post_attention_residual_norm_stage_real"
-MODULE_NAME = "layer0.post_attention_residual_norm_stage"
+DEFAULT_O_PROJ_PREFIX = "o_proj_stage_real"
+DEFAULT_PREFIX = "post_attention_residual_norm_stage_real"
 
 INPUT_SIZE = 1024
 RESIDUAL_WIDTH = 24
@@ -152,7 +152,23 @@ def fixed_to_float(values: np.ndarray, frac_bits: int) -> np.ndarray:
     return values.astype(np.float64) / float(1 << frac_bits)
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Export fixed-point post-attention residual/RMSNorm vectors.")
+    parser.add_argument("--layer-id", type=int, default=0)
+    parser.add_argument("--o-proj-prefix", default=DEFAULT_O_PROJ_PREFIX)
+    parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+    parser.add_argument("--residual-hex", type=Path, default=None, help="Optional I32/Q14.10 residual input override")
+    parser.add_argument("--residual-source-name", default=None)
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+    layer_id = int(args.layer_id)
+    o_proj_prefix = str(args.o_proj_prefix)
+    prefix = str(args.prefix)
+    module_name = f"layer{layer_id}.post_attention_residual_norm_stage"
+
     rms = load_rmsnorm_exporter()
 
     tokenizer, model, backbone = load_model()
@@ -163,12 +179,14 @@ def main() -> None:
 
     selected_position = prompt_len - 1
     selected_token_id = int(input_ids[0, selected_position].item())
-    layer0 = backbone.layers[0]
+    if layer_id < 0 or layer_id >= len(backbone.layers):
+        raise ValueError(f"layer_id {layer_id} is outside model layer range 0..{len(backbone.layers) - 1}")
+    layer = backbone.layers[layer_id]
 
     records: dict[str, dict[str, torch.Tensor]] = {}
     hooks = [
-        layer0.register_forward_hook(capture_module_io(records, "layer0")),
-        layer0.post_attention_layernorm.register_forward_hook(capture_module_io(records, "post_attention_norm")),
+        layer.register_forward_hook(capture_module_io(records, "layer")),
+        layer.post_attention_layernorm.register_forward_hook(capture_module_io(records, "post_attention_norm")),
     ]
     try:
         with torch.no_grad():
@@ -178,7 +196,7 @@ def main() -> None:
             hook.remove()
 
     residual_fp32 = np.ascontiguousarray(
-        require_input0(records, "layer0")[0, selected_position, :].to(torch.float32).numpy(),
+        require_input0(records, "layer")[0, selected_position, :].to(torch.float32).numpy(),
         dtype=np.float32,
     )
     hf_post_attention_hidden = np.ascontiguousarray(
@@ -190,17 +208,17 @@ def main() -> None:
         dtype=np.float32,
     )
     gamma = np.ascontiguousarray(
-        tensor_to_float32(layer0.post_attention_layernorm.weight).numpy(),
+        tensor_to_float32(layer.post_attention_layernorm.weight).numpy(),
         dtype=np.float32,
     )
-    eps = float(get_rms_norm_eps(layer0.post_attention_layernorm, model.config))
+    eps = float(get_rms_norm_eps(layer.post_attention_layernorm, model.config))
 
     if residual_fp32.shape != (INPUT_SIZE,):
         raise RuntimeError(f"Expected residual shape {(INPUT_SIZE,)}, got {residual_fp32.shape}")
     if gamma.shape != (INPUT_SIZE,):
         raise RuntimeError(f"Expected gamma shape {(INPUT_SIZE,)}, got {gamma.shape}")
-    o_proj_path = SIM_VECTOR_DIR / f"{O_PROJ_PREFIX}_expected_q12_12.hex"
-    o_proj_meta_path = SIM_VECTOR_DIR / f"{O_PROJ_PREFIX}_meta.json"
+    o_proj_path = SIM_VECTOR_DIR / f"{o_proj_prefix}_expected_q12_12.hex"
+    o_proj_meta_path = SIM_VECTOR_DIR / f"{o_proj_prefix}_meta.json"
     o_proj_q12_12 = read_signed_hex_lines(o_proj_path, O_PROJ_WIDTH)
     if o_proj_q12_12.shape != (INPUT_SIZE,):
         raise RuntimeError(f"Expected o_proj vector shape {(INPUT_SIZE,)}, got {o_proj_q12_12.shape}")
@@ -210,8 +228,34 @@ def main() -> None:
             raise RuntimeError("o_proj vector selected position does not match prompt")
         if int(o_proj_meta["selected_token_id"]) != selected_token_id:
             raise RuntimeError("o_proj vector selected token does not match prompt")
+        if int(o_proj_meta.get("layer_id", layer_id)) != layer_id:
+            raise RuntimeError("o_proj vector layer_id does not match requested layer")
 
     residual_q14_10 = rms.quantize_signed(residual_fp32, RESIDUAL_WIDTH, RESIDUAL_FRAC)
+    residual_source = {
+        "mode": "hf_layer_input_quantized",
+        "source_name": None,
+        "source_hex": None,
+        "override_max_abs_diff_vs_hf_quantized": None,
+    }
+    if args.residual_hex is not None:
+        residual_override = read_signed_hex_lines(args.residual_hex, 32)
+        if residual_override.shape != (INPUT_SIZE,):
+            raise RuntimeError(
+                f"residual override shape mismatch: expected {(INPUT_SIZE,)}, got {residual_override.shape}"
+            )
+        low, high = signed_limits(RESIDUAL_WIDTH)
+        if np.any((residual_override < low) | (residual_override > high)):
+            raise RuntimeError(f"residual override contains values outside signed {RESIDUAL_WIDTH}-bit range")
+        residual_source = {
+            "mode": "hex_override",
+            "source_name": args.residual_source_name,
+            "source_hex": str(args.residual_hex),
+            "override_max_abs_diff_vs_hf_quantized": int(
+                np.max(np.abs(residual_override - residual_q14_10))
+            ),
+        }
+        residual_q14_10 = residual_override.astype(np.int64)
     o_proj_q14_10 = o_proj_q12_12 >> (O_PROJ_FRAC - RESIDUAL_FRAC)
     post_attention_hidden_q14_10, residual_saturation_count = saturate_signed_array(
         residual_q14_10 + o_proj_q14_10,
@@ -226,19 +270,19 @@ def main() -> None:
     residual_float = fixed_to_float(residual_q14_10, RESIDUAL_FRAC)
 
     files = {
-        "residual_input": SIM_VECTOR_DIR / f"{PREFIX}_residual_input.hex",
-        "o_proj_input": SIM_VECTOR_DIR / f"{PREFIX}_o_proj_input.hex",
-        "expected_residual": SIM_VECTOR_DIR / f"{PREFIX}_expected_residual.hex",
-        "gamma": SIM_VECTOR_DIR / f"{PREFIX}_gamma.hex",
-        "expected_norm": SIM_VECTOR_DIR / f"{PREFIX}_expected_norm.hex",
-        "sum_squares": SIM_VECTOR_DIR / f"{PREFIX}_sum_squares.hex",
-        "mean_square": SIM_VECTOR_DIR / f"{PREFIX}_mean_square.hex",
-        "sqrt_radicand": SIM_VECTOR_DIR / f"{PREFIX}_sqrt_radicand.hex",
-        "rms": SIM_VECTOR_DIR / f"{PREFIX}_rms.hex",
-        "inv_rms": SIM_VECTOR_DIR / f"{PREFIX}_inv_rms.hex",
-        "residual_saturation": SIM_VECTOR_DIR / f"{PREFIX}_residual_saturation.hex",
-        "norm_saturation": SIM_VECTOR_DIR / f"{PREFIX}_norm_saturation.hex",
-        "meta": SIM_VECTOR_DIR / f"{PREFIX}_meta.json",
+        "residual_input": SIM_VECTOR_DIR / f"{prefix}_residual_input.hex",
+        "o_proj_input": SIM_VECTOR_DIR / f"{prefix}_o_proj_input.hex",
+        "expected_residual": SIM_VECTOR_DIR / f"{prefix}_expected_residual.hex",
+        "gamma": SIM_VECTOR_DIR / f"{prefix}_gamma.hex",
+        "expected_norm": SIM_VECTOR_DIR / f"{prefix}_expected_norm.hex",
+        "sum_squares": SIM_VECTOR_DIR / f"{prefix}_sum_squares.hex",
+        "mean_square": SIM_VECTOR_DIR / f"{prefix}_mean_square.hex",
+        "sqrt_radicand": SIM_VECTOR_DIR / f"{prefix}_sqrt_radicand.hex",
+        "rms": SIM_VECTOR_DIR / f"{prefix}_rms.hex",
+        "inv_rms": SIM_VECTOR_DIR / f"{prefix}_inv_rms.hex",
+        "residual_saturation": SIM_VECTOR_DIR / f"{prefix}_residual_saturation.hex",
+        "norm_saturation": SIM_VECTOR_DIR / f"{prefix}_norm_saturation.hex",
+        "meta": SIM_VECTOR_DIR / f"{prefix}_meta.json",
     }
 
     write_hex_lines(files["residual_input"], residual_q14_10, RESIDUAL_WIDTH)
@@ -256,8 +300,9 @@ def main() -> None:
 
     meta: dict[str, Any] = {
         "format_version": 1,
-        "name": PREFIX,
-        "module": MODULE_NAME,
+        "name": prefix,
+        "module": module_name,
+        "layer_id": layer_id,
         "prompt": PROMPT,
         "token_ids": [int(value) for value in input_ids.flatten().tolist()],
         "selected_position": int(selected_position),
@@ -265,7 +310,8 @@ def main() -> None:
         "selected_token_text": tokenizer.decode([selected_token_id]),
         "eps_float": eps,
         "eps_q20": int(EPS_Q20),
-        "source_o_proj_prefix": O_PROJ_PREFIX,
+        "residual_source": residual_source,
+        "source_o_proj_prefix": o_proj_prefix,
         "formats": {
             "residual_input": f"signed {RESIDUAL_WIDTH}-bit Q14.{RESIDUAL_FRAC}",
             "o_proj_input": f"signed {O_PROJ_WIDTH}-bit Q12.{O_PROJ_FRAC}",
@@ -309,7 +355,7 @@ def main() -> None:
 
     print("Exported fixed-point post-attention residual/RMSNorm RTL test vectors")
     print("=" * 80)
-    print(f"Module: {MODULE_NAME}")
+    print(f"Module: {module_name}")
     print(f"Prompt: {PROMPT!r}")
     print(f"Selected position: {selected_position}")
     print(f"Selected token id: {selected_token_id} / {tokenizer.decode([selected_token_id])!r}")

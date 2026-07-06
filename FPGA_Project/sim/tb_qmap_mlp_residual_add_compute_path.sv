@@ -18,9 +18,11 @@ module tb_qmap_mlp_residual_add_compute_path;
     localparam int VECTOR_WORDS         = INPUT_SIZE;
     localparam int VECTOR_BURSTS        = VECTOR_BYTES / MAX_READ_BYTES;
     localparam int QMAP_IMAGE_BYTES     = 32'h0000_5000;
+    localparam logic [ADDR_WIDTH-1 : 0] DEFAULT_QMAP_BASE_ADDR = `QMAP_MLP_RESIDUAL_ADD_BASE_ADDR;
     localparam int QMAP_WORDS           = QMAP_IMAGE_BYTES / MEM_DATA_BYTES;
     localparam int DESCRIPTOR_WORDS     = 32;
     localparam int DESCRIPTOR_TABLE_WORD_OFFSET = 32'h0100 / 4;
+    localparam int DESCRIPTOR_TABLE_OFFSET_BYTES = 32'h0100;
     localparam int DESC_DTYPE_WORD      = 2;
     localparam int DESC_BASE_LO_WORD    = 8;
     localparam int DESC_BASE_HI_WORD    = 9;
@@ -288,7 +290,6 @@ module tb_qmap_mlp_residual_add_compute_path;
             $readmemh(expected_layer_file, expected_layer_mem);
             $readmemh({vector_dir, "/", prefix, "_residual_saturation.hex"}, expected_saturation_mem);
 
-            qmap_base_addr = `QMAP_MLP_RESIDUAL_ADD_BASE_ADDR;
             post_base_addr = descriptor_base_addr(SLOT_POST_ATTN);
             down_base_addr = descriptor_base_addr(SLOT_DOWN);
             output_base_addr = descriptor_base_addr(SLOT_OUTPUT);
@@ -408,7 +409,7 @@ module tb_qmap_mlp_residual_add_compute_path;
                     end
                 end
                 else begin
-                    expected_addr = `QMAP_MLP_RESIDUAL_ADD_DESCRIPTOR_TABLE_ADDR +
+                    expected_addr = qmap_base_addr + DESCRIPTOR_TABLE_OFFSET_BYTES +
                                     ((reader_req_index - 1) * `QMAP_DESCRIPTOR_BYTES);
                     if ((mem_rd_req_addr !== expected_addr) ||
                         (mem_rd_req_len_bytes != `QMAP_DESCRIPTOR_BYTES)) begin
@@ -839,6 +840,7 @@ module tb_qmap_mlp_residual_add_compute_path;
         qmap_image_file = "FPGA_Project/sim/vectors/qmap_mlp_residual_add_image_words32.hex";
         expected_layer_file = "FPGA_Project/sim/vectors/qmap_mlp_residual_add_expected_words32.hex";
         tracefile = "FPGA_Project/sim/qmap_mlp_residual_add_compute_path_trace.csv";
+        qmap_base_addr = DEFAULT_QMAP_BASE_ADDR;
         if ($value$plusargs("vectordir=%s", vector_dir)) begin
         end
         if ($value$plusargs("prefix=%s", prefix)) begin
@@ -848,6 +850,8 @@ module tb_qmap_mlp_residual_add_compute_path;
         if ($value$plusargs("expected_layer=%s", expected_layer_file)) begin
         end
         if ($value$plusargs("tracefile=%s", tracefile)) begin
+        end
+        if ($value$plusargs("qmap_base=%h", qmap_base_addr)) begin
         end
 
         trace_fd = $fopen(tracefile, "w");
@@ -907,7 +911,8 @@ module tb_qmap_mlp_residual_add_compute_path;
         $fclose(trace_fd);
         trace_fd = 0;
 
-        $display("qmap_mlp_residual_add_compute_path descriptor-backed Layer 0 final MLP residual test");
+        $display("qmap_mlp_residual_add_compute_path descriptor-backed final MLP residual test");
+        $display("  qmap base               = 0x%016h", qmap_base_addr);
         $display("  output count normal       = %0d", normal_output_count);
         $display("  stage cycles normal       = %0d", normal_stage_cycle_count);
         $display("  layer words written       = %0d", normal_output_write_count);

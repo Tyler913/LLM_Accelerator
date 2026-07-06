@@ -34,9 +34,11 @@ module tb_qmap_mlp_down_compute_path;
     localparam int OUTPUT_WORDS            = OUT_FEATURES;
     localparam int OUTPUT_BYTES            = OUTPUT_WORDS * WORD_BYTES;
     localparam int QMAP_IMAGE_BYTES        = 32'h0000_6000;
+    localparam logic [ADDR_WIDTH-1 : 0] DEFAULT_QMAP_BASE_ADDR = `QMAP_MLP_DOWN_BASE_ADDR;
     localparam int QMAP_WORDS              = QMAP_IMAGE_BYTES / WORD_BYTES;
     localparam int DESCRIPTOR_WORDS        = 32;
     localparam int DESCRIPTOR_TABLE_WORD_OFFSET = 32'h0100 / 4;
+    localparam int DESCRIPTOR_TABLE_OFFSET_BYTES = 32'h0100;
     localparam int DESC_DTYPE_WORD         = 2;
     localparam int DESC_BASE_LO_WORD       = 8;
     localparam int DESC_BASE_HI_WORD       = 9;
@@ -309,7 +311,6 @@ module tb_qmap_mlp_down_compute_path;
             $readmemh({vector_dir, "/", prefix, "_weight_words32.hex"}, weight_words_mem);
             $readmemh({vector_dir, "/", prefix, "_scale_words32.hex"}, scale_words_mem);
 
-            qmap_base_addr = `QMAP_MLP_DOWN_BASE_ADDR;
             activation_base_addr = descriptor_base_addr(SLOT_ACTIVATION);
             weight_base_addr = descriptor_base_addr(SLOT_WEIGHT);
             scale_base_addr = descriptor_base_addr(SLOT_SCALE);
@@ -381,6 +382,7 @@ module tb_qmap_mlp_down_compute_path;
         integer expected_row;
         integer expected_chunk;
         integer expected_len;
+        integer reader_req_index;
         logic [ADDR_WIDTH-1 : 0] expected_addr;
         begin
             active_read_region = REGION_QMAP;
@@ -443,11 +445,25 @@ module tb_qmap_mlp_down_compute_path;
             else begin
                 active_read_region = REGION_QMAP;
                 active_read_index = (mem_rd_req_addr - qmap_base_addr) >> 2;
-                if ((mem_rd_req_addr < qmap_base_addr) ||
-                    (mem_rd_req_addr >= (qmap_base_addr + QMAP_IMAGE_BYTES))) begin
-                    $display("FAIL: QMAP read outside image addr=0x%016h len=%0d",
-                             mem_rd_req_addr, mem_rd_req_len_bytes);
-                    mismatch_count = mismatch_count + 1;
+                reader_req_index = mem_qmap_req_count % QMAP_READER_REQS;
+                if (reader_req_index == 0) begin
+                    expected_addr = qmap_base_addr;
+                    if ((mem_rd_req_addr !== expected_addr) ||
+                        (mem_rd_req_len_bytes != `QMAP_HEADER_FETCH_BYTES)) begin
+                        $display("FAIL: QMAP header read mismatch addr=0x%016h expected=0x%016h len=%0d",
+                                 mem_rd_req_addr, expected_addr, mem_rd_req_len_bytes);
+                        mismatch_count = mismatch_count + 1;
+                    end
+                end
+                else begin
+                    expected_addr = qmap_base_addr + DESCRIPTOR_TABLE_OFFSET_BYTES +
+                                    ((reader_req_index - 1) * `QMAP_DESCRIPTOR_BYTES);
+                    if ((mem_rd_req_addr !== expected_addr) ||
+                        (mem_rd_req_len_bytes != `QMAP_DESCRIPTOR_BYTES)) begin
+                        $display("FAIL: QMAP descriptor read mismatch reader_idx=%0d addr=0x%016h expected=0x%016h len=%0d",
+                                 reader_req_index, mem_rd_req_addr, expected_addr, mem_rd_req_len_bytes);
+                        mismatch_count = mismatch_count + 1;
+                    end
                 end
                 mem_qmap_req_count = mem_qmap_req_count + 1;
             end
@@ -811,6 +827,7 @@ module tb_qmap_mlp_down_compute_path;
         qmap_image_file = "FPGA_Project/sim/vectors/qmap_mlp_down_image_words32.hex";
         expected_file = "FPGA_Project/sim/vectors/qmap_mlp_down_expected_words32.hex";
         tracefile = "FPGA_Project/sim/qmap_mlp_down_compute_path_trace.csv";
+        qmap_base_addr = DEFAULT_QMAP_BASE_ADDR;
         if ($value$plusargs("vectordir=%s", vector_dir)) begin
         end
         if ($value$plusargs("prefix=%s", prefix)) begin
@@ -820,6 +837,8 @@ module tb_qmap_mlp_down_compute_path;
         if ($value$plusargs("expected=%s", expected_file)) begin
         end
         if ($value$plusargs("tracefile=%s", tracefile)) begin
+        end
+        if ($value$plusargs("qmap_base=%h", qmap_base_addr)) begin
         end
 
         trace_fd = $fopen(tracefile, "w");
@@ -872,7 +891,8 @@ module tb_qmap_mlp_down_compute_path;
         $fclose(trace_fd);
         trace_fd = 0;
 
-        $display("qmap_mlp_down_compute_path descriptor-backed Layer 0 MLP down test");
+        $display("qmap_mlp_down_compute_path descriptor-backed MLP down test");
+        $display("  qmap base               = 0x%016h", qmap_base_addr);
         $display("  rows done normal        = %0d", normal_rows_done);
         $display("  output words written    = %0d", normal_output_write_count);
         $display("  read req/rsp fires      = %0d / %0d", mem_req_fire_count, mem_rsp_fire_count);

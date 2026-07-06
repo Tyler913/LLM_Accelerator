@@ -3,7 +3,7 @@ import hashlib
 import json
 import struct
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 
@@ -118,6 +118,25 @@ def require_shape(data: np.lib.npyio.NpzFile, name: str, shape: tuple[int, ...])
     return value
 
 
+def read_i32_hex(path: Path) -> np.ndarray:
+    if not path.is_file():
+        raise FileNotFoundError(f"Missing activation override hex: {path}")
+
+    values: list[int] = []
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        raw = int(text.replace("_", ""), 16)
+        if raw < 0 or raw > 0xFFFF_FFFF:
+            raise ValueError(f"{path}:{lineno}: word32 hex out of range: {text}")
+        if raw & 0x8000_0000:
+            raw -= 0x1_0000_0000
+        values.append(raw)
+
+    return np.asarray(values, dtype=np.int32)
+
+
 def unpack_signed_int4_matrix(packed: np.ndarray, values_per_row: int) -> np.ndarray:
     if packed.shape[1] != values_per_row // Q4_VALUES_PER_BYTE:
         raise ValueError(
@@ -146,7 +165,7 @@ def compute_matrix_outputs(
     activation_q12_12: np.ndarray,
     packed_weight: np.ndarray,
     scale_q2_14: np.ndarray,
-    actual_q4_float: np.ndarray,
+    actual_q4_float: Optional[np.ndarray],
     matrix_name: str,
     row_count: int,
 ) -> dict[str, Any]:
@@ -174,15 +193,18 @@ def compute_matrix_outputs(
     recomputed_float32 = (row_sum_q26.astype(np.float64) / float(1 << (ACT_FRAC + SCALE_FRAC))).astype(
         np.float32
     )
-    source_float32 = actual_q4_float[:row_count].astype(np.float32)
-    max_recompute_diff = float(np.max(np.abs(recomputed_float32 - source_float32)))
-    if max_recompute_diff != 0.0:
-        raise RuntimeError(
-            f"{matrix_name} Q26 recompute mismatch against artifact: {max_recompute_diff}"
-        )
-
     q12_float32 = (q12_12.astype(np.float64) / float(1 << ACT_FRAC)).astype(np.float32)
-    max_q12_diff = float(np.max(np.abs(q12_float32 - source_float32)))
+    if actual_q4_float is None:
+        max_recompute_diff = None
+        max_q12_diff = None
+    else:
+        source_float32 = actual_q4_float[:row_count].astype(np.float32)
+        max_recompute_diff = float(np.max(np.abs(recomputed_float32 - source_float32)))
+        if max_recompute_diff != 0.0:
+            raise RuntimeError(
+                f"{matrix_name} Q26 recompute mismatch against artifact: {max_recompute_diff}"
+            )
+        max_q12_diff = float(np.max(np.abs(q12_float32 - source_float32)))
 
     return {
         "packed_rows": packed_rows,
@@ -411,6 +433,7 @@ def payload_map(payloads: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 def descriptor_specs(
     *,
     qmap_base: int,
+    layer_id: int,
     payloads: dict[str, dict[str, Any]],
     q_rows: int,
     k_rows: int,
@@ -444,7 +467,7 @@ def descriptor_specs(
                 nbytes=size("metadata"),
                 dims=(metadata_words, 0, 0, 0),
                 strides=(4, 0, 0, 0),
-                aux=(MATRIX_ID_QKV_EXPECTED, 0, 0, 0),
+                aux=(MATRIX_ID_QKV_EXPECTED, layer_id, 0, 0),
             ),
         },
         {
@@ -462,7 +485,7 @@ def descriptor_specs(
                 nbytes=size("activation_q12_12"),
                 dims=(HIDDEN_SIZE, 0, 0, 0),
                 strides=(4, 0, 0, 0),
-                aux=(MATRIX_ID_QKV_EXPECTED, 0, 0, 0),
+                aux=(MATRIX_ID_QKV_EXPECTED, layer_id, 0, 0),
             ),
         },
         {
@@ -480,7 +503,7 @@ def descriptor_specs(
                 nbytes=size("q_weight_q4_packed"),
                 dims=(q_rows, HIDDEN_SIZE, 0, 0),
                 strides=(HIDDEN_SIZE // 2, 0, 0, 0),
-                aux=(MATRIX_ID_Q_PROJ, 0, 0, 0),
+                aux=(MATRIX_ID_Q_PROJ, layer_id, 0, 0),
             ),
         },
         {
@@ -498,7 +521,7 @@ def descriptor_specs(
                 nbytes=size("q_scale_q2_14"),
                 dims=(q_rows, GROUP_COUNT, 0, 0),
                 strides=(GROUP_COUNT * 2, 2, 0, 0),
-                aux=(MATRIX_ID_Q_PROJ, 0, 0, 0),
+                aux=(MATRIX_ID_Q_PROJ, layer_id, 0, 0),
             ),
         },
         {
@@ -516,7 +539,7 @@ def descriptor_specs(
                 nbytes=size("k_weight_q4_packed"),
                 dims=(k_rows, HIDDEN_SIZE, 0, 0),
                 strides=(HIDDEN_SIZE // 2, 0, 0, 0),
-                aux=(MATRIX_ID_K_PROJ, 0, 0, 0),
+                aux=(MATRIX_ID_K_PROJ, layer_id, 0, 0),
             ),
         },
         {
@@ -534,7 +557,7 @@ def descriptor_specs(
                 nbytes=size("k_scale_q2_14"),
                 dims=(k_rows, GROUP_COUNT, 0, 0),
                 strides=(GROUP_COUNT * 2, 2, 0, 0),
-                aux=(MATRIX_ID_K_PROJ, 0, 0, 0),
+                aux=(MATRIX_ID_K_PROJ, layer_id, 0, 0),
             ),
         },
         {
@@ -552,7 +575,7 @@ def descriptor_specs(
                 nbytes=size("v_weight_q4_packed"),
                 dims=(v_rows, HIDDEN_SIZE, 0, 0),
                 strides=(HIDDEN_SIZE // 2, 0, 0, 0),
-                aux=(MATRIX_ID_V_PROJ, 0, 0, 0),
+                aux=(MATRIX_ID_V_PROJ, layer_id, 0, 0),
             ),
         },
         {
@@ -570,7 +593,7 @@ def descriptor_specs(
                 nbytes=size("v_scale_q2_14"),
                 dims=(v_rows, GROUP_COUNT, 0, 0),
                 strides=(GROUP_COUNT * 2, 2, 0, 0),
-                aux=(MATRIX_ID_V_PROJ, 0, 0, 0),
+                aux=(MATRIX_ID_V_PROJ, layer_id, 0, 0),
             ),
         },
         {
@@ -588,7 +611,7 @@ def descriptor_specs(
                 nbytes=size("q_out"),
                 dims=(q_rows, 0, 0, 0),
                 strides=(4, 0, 0, 0),
-                aux=(MATRIX_ID_Q_PROJ, 0, 0, 0),
+                aux=(MATRIX_ID_Q_PROJ, layer_id, 0, 0),
             ),
         },
         {
@@ -606,7 +629,7 @@ def descriptor_specs(
                 nbytes=size("k_out"),
                 dims=(k_rows, 0, 0, 0),
                 strides=(4, 0, 0, 0),
-                aux=(MATRIX_ID_K_PROJ, 0, 0, 0),
+                aux=(MATRIX_ID_K_PROJ, layer_id, 0, 0),
             ),
         },
         {
@@ -624,7 +647,7 @@ def descriptor_specs(
                 nbytes=size("v_out"),
                 dims=(v_rows, 0, 0, 0),
                 strides=(4, 0, 0, 0),
-                aux=(MATRIX_ID_V_PROJ, 0, 0, 0),
+                aux=(MATRIX_ID_V_PROJ, layer_id, 0, 0),
             ),
         },
         {
@@ -642,7 +665,7 @@ def descriptor_specs(
                 nbytes=size("expected_qkv_q12_12"),
                 dims=(q_rows + k_rows + v_rows, 0, 0, 0),
                 strides=(4, 0, 0, 0),
-                aux=(MATRIX_ID_QKV_EXPECTED, 0, 0, 0),
+                aux=(MATRIX_ID_QKV_EXPECTED, layer_id, 0, 0),
             ),
         },
     ]
@@ -652,17 +675,39 @@ def build_qmap_image(
     *,
     source_npz: Path,
     qmap_base: int,
+    layer_id: int,
     q_rows: int,
     k_rows: int,
     v_rows: int,
+    activation_hex: Optional[Path] = None,
+    activation_source_name: Optional[str] = None,
 ) -> tuple[bytes, dict[str, Any], np.ndarray]:
     if not source_npz.is_file():
         raise FileNotFoundError(
             f"Missing {source_npz}. Run 13_export_q4_gemv_vectors.py first."
         )
+    if layer_id < 0 or layer_id > 0xFFFF_FFFF:
+        raise ValueError(f"layer_id must fit uint32, got {layer_id}")
 
     data = np.load(source_npz)
-    activation_q4_12 = require_shape(data, "input_norm_q4_12", (HIDDEN_SIZE,)).astype(np.int32)
+    source_activation_q4_12 = require_shape(data, "input_norm_q4_12", (HIDDEN_SIZE,)).astype(np.int32)
+    if activation_hex is None:
+        activation_q4_12 = source_activation_q4_12
+        activation_mode = "source_npz"
+        activation_hex_relpath = None
+        activation_override_max_abs_diff_vs_npz = 0
+    else:
+        activation_q4_12 = read_i32_hex(activation_hex)
+        if activation_q4_12.shape != (HIDDEN_SIZE,):
+            raise ValueError(
+                f"activation override shape mismatch: expected {(HIDDEN_SIZE,)}, "
+                f"got {activation_q4_12.shape}"
+            )
+        activation_mode = "hex_override"
+        activation_hex_relpath = relpath(activation_hex)
+        activation_override_max_abs_diff_vs_npz = int(
+            np.max(np.abs(activation_q4_12.astype(np.int64) - source_activation_q4_12.astype(np.int64)))
+        )
     input_norm_fp32 = require_shape(data, "input_norm_fp32", (HIDDEN_SIZE,))
     q_weight = require_shape(data, "q_weight_q4_packed", (Q_ROWS_FULL, HIDDEN_SIZE // 2))
     q_scale = require_shape(data, "q_scale_q2_14", (Q_ROWS_FULL, GROUP_COUNT))
@@ -675,7 +720,9 @@ def build_qmap_image(
         activation_q12_12=activation_q4_12,
         packed_weight=q_weight,
         scale_q2_14=q_scale,
-        actual_q4_float=require_shape(data, "actual_q_q4", (Q_ROWS_FULL,)),
+        actual_q4_float=None
+        if activation_hex is not None
+        else require_shape(data, "actual_q_q4", (Q_ROWS_FULL,)),
         matrix_name="q_proj",
         row_count=q_rows,
     )
@@ -683,7 +730,9 @@ def build_qmap_image(
         activation_q12_12=activation_q4_12,
         packed_weight=k_weight,
         scale_q2_14=k_scale,
-        actual_q4_float=require_shape(data, "actual_k_q4", (KV_ROWS_FULL,)),
+        actual_q4_float=None
+        if activation_hex is not None
+        else require_shape(data, "actual_k_q4", (KV_ROWS_FULL,)),
         matrix_name="k_proj",
         row_count=k_rows,
     )
@@ -691,7 +740,9 @@ def build_qmap_image(
         activation_q12_12=activation_q4_12,
         packed_weight=v_weight,
         scale_q2_14=v_scale,
-        actual_q4_float=require_shape(data, "actual_v_q4", (KV_ROWS_FULL,)),
+        actual_q4_float=None
+        if activation_hex is not None
+        else require_shape(data, "actual_v_q4", (KV_ROWS_FULL,)),
         matrix_name="v_proj",
         row_count=v_rows,
     )
@@ -699,11 +750,15 @@ def build_qmap_image(
     activation_round = np.round(input_norm_fp32.astype(np.float64) * float(1 << ACT_FRAC)).astype(
         np.int32
     )
-    input_requant_max_abs_diff = int(np.max(np.abs(activation_round - activation_q4_12)))
+    input_requant_max_abs_diff = (
+        None
+        if activation_hex is not None
+        else int(np.max(np.abs(activation_round - activation_q4_12)))
+    )
 
     metadata_words = np.array(
         [
-            0,  # layer index
+            layer_id,
             int(np.asarray(data["prompt_position"]).item()),
             int(np.asarray(data["token_id"]).item()),
             q_rows,
@@ -733,6 +788,7 @@ def build_qmap_image(
     payloads_by_name = payload_map(payloads)
     descriptors = descriptor_specs(
         qmap_base=qmap_base,
+        layer_id=layer_id,
         payloads=payloads_by_name,
         q_rows=q_rows,
         k_rows=k_rows,
@@ -764,8 +820,16 @@ def build_qmap_image(
     parsed_descriptors = [parse_descriptor(image_bytes_blob, slot) for slot in range(DESCRIPTOR_COUNT)]
     manifest = {
         "format": "qmap_v1",
-        "name": "qwen3_0p6b_layer0_qkv_projection_packet",
+        "name": f"qwen3_0p6b_layer{layer_id}_qkv_projection_packet",
         "source_npz": relpath(source_npz),
+        "activation_source": {
+            "mode": activation_mode,
+            "source_name": activation_source_name,
+            "source_hex": activation_hex_relpath,
+            "source_npz_tensor": "input_norm_q4_12",
+            "override_max_abs_diff_vs_npz": activation_override_max_abs_diff_vs_npz,
+        },
+        "layer_id": layer_id,
         "image_base_addr": format_addr(qmap_base),
         "descriptor_table_addr": format_addr(qmap_base + DESCRIPTOR_TABLE_OFFSET),
         "payload_base_addr": format_addr(qmap_base + PAYLOAD_BASE_OFFSET),
@@ -918,7 +982,7 @@ def write_outputs(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Export a QMAP v1 Layer 0 QKV projection work-packet image."
+        description="Export a QMAP v1 QKV projection work-packet image."
     )
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT, help="Input Q4 NPZ")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output QMAP image")
@@ -946,9 +1010,22 @@ def parse_args() -> argparse.Namespace:
         default=QMAP_BASE,
         help="Physical QMAP base address, default 0x4_0008_0000",
     )
+    parser.add_argument("--layer-id", type=int, default=0, help="Decoder layer index")
     parser.add_argument("--q-rows", type=int, default=Q_ROWS_FULL, help="q_proj output rows")
     parser.add_argument("--k-rows", type=int, default=KV_ROWS_FULL, help="k_proj output rows")
     parser.add_argument("--v-rows", type=int, default=KV_ROWS_FULL, help="v_proj output rows")
+    parser.add_argument(
+        "--activation-hex",
+        type=Path,
+        default=None,
+        help="Optional I32_Q12_12 activation word32 hex override",
+    )
+    parser.add_argument(
+        "--activation-source-name",
+        type=str,
+        default=None,
+        help="Optional human-readable activation source label for the manifest",
+    )
     return parser.parse_args()
 
 
@@ -957,9 +1034,12 @@ def main() -> None:
     image, manifest, expected_qkv = build_qmap_image(
         source_npz=args.input,
         qmap_base=args.qmap_base,
+        layer_id=args.layer_id,
         q_rows=args.q_rows,
         k_rows=args.k_rows,
         v_rows=args.v_rows,
+        activation_hex=args.activation_hex,
+        activation_source_name=args.activation_source_name,
     )
     write_outputs(
         image=image,
@@ -971,7 +1051,7 @@ def main() -> None:
         expected_hex=args.expected_hex,
     )
 
-    print("Exported QMAP v1 Layer 0 QKV projection packet")
+    print(f"Exported QMAP v1 Layer {args.layer_id} QKV projection packet")
     print("=" * 80)
     print(f"Input: {relpath(args.input)}")
     print(f"Output: {relpath(args.output)}")

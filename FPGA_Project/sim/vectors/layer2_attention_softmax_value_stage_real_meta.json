@@ -1,0 +1,78 @@
+{
+  "format_version": 1,
+  "name": "layer2_attention_softmax_value_stage_real",
+  "module": "layer2.self_attn.attention_softmax_value_stage",
+  "layer_id": 2,
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "shape": {
+    "num_q_heads": 16,
+    "num_kv_heads": 8,
+    "head_dim": 128,
+    "kv_repeat": 2,
+    "cache_length": 5,
+    "score_count": 80,
+    "v_request_count": 10240,
+    "output_count": 2048
+  },
+  "formats": {
+    "score_input": "signed 64-bit Q24.24",
+    "v_cache": "signed 24-bit Q12.12",
+    "exp_lut": "unsigned 24-bit UQ0.20",
+    "prob": "unsigned 24-bit UQ0.16",
+    "output": "signed 24-bit Q12.12"
+  },
+  "fixed_point": {
+    "exp_lut_step": "1/16",
+    "exp_lut_max_negative": 16.0,
+    "exp_lut_size": 257,
+    "prob_frac": 16,
+    "attention_scale_float": 0.08838834764831845,
+    "attention_scale_q0_31": 189812531
+  },
+  "saturation": {
+    "q_gamma_quantize_count": 0,
+    "k_gamma_quantize_count": 0,
+    "cos_quantize_count_total": 412,
+    "sin_quantize_count_total": 2,
+    "norm_output": false,
+    "rope_output": false,
+    "value_output": false
+  },
+  "debug": {
+    "scaled_score_float_min": 0.9807659983634949,
+    "scaled_score_float_max": 19.93458580970764,
+    "prob_row_sum_min": 65533,
+    "prob_row_sum_max": 65535,
+    "prob_nonzero_count": 77,
+    "lut_index_min": 0,
+    "lut_index_max": 195,
+    "v_cache_q12_12_max_abs": 11615,
+    "attn_out_q12_12_max_abs": 3506,
+    "fixed_prob_vs_fp32_max_abs_diff": 0.18333542346954346,
+    "fixed_prob_vs_fp32_mean_abs_diff": 0.01780978792519363,
+    "fixed_attn_out_vs_fp32_max_abs_diff": 0.07531548663973808,
+    "fixed_attn_out_vs_fp32_mean_abs_diff": 0.014234231613812653
+  },
+  "files": {
+    "score_input": "layer2_attention_softmax_value_stage_real_score_input.hex",
+    "score_q_head": "layer2_attention_softmax_value_stage_real_score_q_head.hex",
+    "score_kv_head": "layer2_attention_softmax_value_stage_real_score_kv_head.hex",
+    "score_position": "layer2_attention_softmax_value_stage_real_score_position.hex",
+    "v_cache": "layer2_attention_softmax_value_stage_real_v_cache.hex",
+    "exp_lut": "layer2_attention_softmax_value_stage_real_exp_lut.hex",
+    "cache_length": "layer2_attention_softmax_value_stage_real_cache_length.hex",
+    "expected_prob": "layer2_attention_softmax_value_stage_real_expected_prob.hex",
+    "expected_lut_index": "layer2_attention_softmax_value_stage_real_expected_lut_index.hex",
+    "expected_out": "layer2_attention_softmax_value_stage_real_expected_out.hex"
+  }
+}

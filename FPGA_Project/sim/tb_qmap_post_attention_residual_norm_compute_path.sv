@@ -6,6 +6,7 @@
 module tb_qmap_post_attention_residual_norm_compute_path;
 
     localparam int ADDR_WIDTH      = 64;
+    localparam logic [ADDR_WIDTH-1 : 0] DEFAULT_QMAP_BASE_ADDR = `QMAP_POST_ATTN_NORM_BASE_ADDR;
     localparam int DESCRIPTOR_SLOTS = 8;
     localparam int INPUT_SIZE      = 1024;
     localparam int RESIDUAL_WIDTH  = 24;
@@ -288,7 +289,6 @@ module tb_qmap_post_attention_residual_norm_compute_path;
             $readmemh({vector_dir, "/", prefix, "_residual_saturation.hex"}, expected_residual_saturation_mem);
             $readmemh({vector_dir, "/", prefix, "_norm_saturation.hex"}, expected_norm_saturation_mem);
 
-            qmap_base_addr = `QMAP_POST_ATTN_NORM_BASE_ADDR;
             residual_base_addr = descriptor_base_addr(SLOT_RESIDUAL);
             o_proj_base_addr = descriptor_base_addr(SLOT_O_PROJ);
             gamma_base_addr = descriptor_base_addr(SLOT_GAMMA);
@@ -740,6 +740,7 @@ module tb_qmap_post_attention_residual_norm_compute_path;
         expected_hidden_file = "FPGA_Project/sim/vectors/qmap_post_attention_residual_norm_expected_hidden_words32.hex";
         expected_norm_file = "FPGA_Project/sim/vectors/qmap_post_attention_residual_norm_expected_norm_words32.hex";
         tracefile = "FPGA_Project/sim/qmap_post_attention_residual_norm_compute_path_trace.csv";
+        qmap_base_addr = DEFAULT_QMAP_BASE_ADDR;
         if ($value$plusargs("vectordir=%s", vector_dir)) begin
         end
         if ($value$plusargs("prefix=%s", prefix)) begin
@@ -751,6 +752,8 @@ module tb_qmap_post_attention_residual_norm_compute_path;
         if ($value$plusargs("expected_norm=%s", expected_norm_file)) begin
         end
         if ($value$plusargs("tracefile=%s", tracefile)) begin
+        end
+        if ($value$plusargs("qmap_base=%h", qmap_base_addr)) begin
         end
 
         trace_fd = $fopen(tracefile, "w");
@@ -796,7 +799,10 @@ module tb_qmap_post_attention_residual_norm_compute_path;
         $fclose(trace_fd);
         trace_fd = 0;
 
-        $display("qmap_post_attention_residual_norm_compute_path descriptor-backed Layer 0 test");
+        $display("qmap_post_attention_residual_norm_compute_path descriptor-backed test");
+        $display("  qmap base             = 0x%016h", qmap_base_addr);
+        $display("  prefix                = %s", prefix);
+        $display("  qmap image            = %s", qmap_image_file);
         $display("  residual count normal = %0d", normal_residual_count);
         $display("  stage cycles normal   = %0d", normal_stage_cycle_count);
         $display("  hidden/norm writes    = %0d / %0d", normal_hidden_write_count, normal_norm_write_count);

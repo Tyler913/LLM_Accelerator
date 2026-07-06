@@ -2,7 +2,7 @@
 
 `include "qmap_defs.svh"
 
-// QMAP-backed Layer 0 final MLP residual-add wrapper:
+// QMAP-backed final MLP residual-add wrapper for one descriptor-selected layer:
 //
 //   post_attn_hidden[1024] + down_out[1024] -> layer_out[1024]
 //

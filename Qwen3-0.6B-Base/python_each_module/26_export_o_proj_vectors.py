@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 from pathlib import Path
@@ -31,8 +32,7 @@ SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
 Q4_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_q4_v0"
 SOFTMAX_EXPORTER_PATH = Path(__file__).with_name("25_export_attention_softmax_value_vectors.py")
 
-PREFIX = "o_proj_stage_real"
-MODULE_NAME = "layer0.self_attn.o_proj_stage"
+DEFAULT_PREFIX = "o_proj_stage_real"
 
 INPUT_SIZE = 2048
 OUT_FEATURES = 1024
@@ -53,6 +53,10 @@ ROW_ACC_WIDTH = 64
 Q26_TO_Q12_SHIFT = SCALE_FRAC
 
 
+def relpath(path: Path) -> str:
+    return path.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+
+
 def load_softmax_exporter() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "attention_softmax_value_exporter",
@@ -71,6 +75,21 @@ def write_hex_lines(path: Path, values: np.ndarray, width_bits: int) -> None:
     hex_digits = (width_bits + 3) // 4
     lines = [f"{int(value) & mask:0{hex_digits}x}" for value in values.reshape(-1)]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def read_i32_hex(path: Path) -> np.ndarray:
+    if not path.is_file():
+        raise FileNotFoundError(f"Missing activation override hex: {path}")
+    values: list[int] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        raw = int(stripped, 16) & 0xFFFF_FFFF
+        if raw & 0x8000_0000:
+            raw -= 0x1_0000_0000
+        values.append(raw)
+    return np.array(values, dtype=np.int64)
 
 
 def pack_words32(values: np.ndarray, width_bits: int) -> np.ndarray:
@@ -141,7 +160,22 @@ def q26_to_q12_12(row_sum_q26: np.ndarray) -> tuple[np.ndarray, int]:
     return saturate_signed_array(shifted, OUT_WIDTH)
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Export fixed-point o_proj RTL vectors.")
+    parser.add_argument("--layer-id", type=int, default=0)
+    parser.add_argument("--input", type=Path, default=None, help="QKV Q4 NPZ artifact for this layer.")
+    parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+    parser.add_argument("--activation-hex", type=Path, default=None, help="Optional I32_Q12_12 attention output override")
+    parser.add_argument("--activation-source-name", default=None)
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+    layer_id = int(args.layer_id)
+    prefix = str(args.prefix)
+    module_name = f"layer{layer_id}.self_attn.o_proj_stage"
+
     softmax_exporter = load_softmax_exporter()
     qk = softmax_exporter.load_qk_exporter()
 
@@ -151,14 +185,17 @@ def main() -> None:
     if batch_size != 1:
         raise RuntimeError(f"Expected batch size 1, got {batch_size}")
 
-    layer0 = backbone.layers[0]
-    attn0 = layer0.self_attn
+    if layer_id < 0 or layer_id >= len(backbone.layers):
+        raise ValueError(f"layer_id {layer_id} is outside model layer range 0..{len(backbone.layers) - 1}")
+
+    layer = backbone.layers[layer_id]
+    attn = layer.self_attn
     rms_eps = float(getattr(model.config, "rms_norm_eps", 1e-6))
 
     records: dict[str, dict[str, torch.Tensor]] = {}
     hooks = [
-        layer0.input_layernorm.register_forward_hook(capture_module_io(records, "input_norm")),
-        attn0.o_proj.register_forward_hook(capture_module_io(records, "o_proj")),
+        layer.input_layernorm.register_forward_hook(capture_module_io(records, "input_norm")),
+        attn.o_proj.register_forward_hook(capture_module_io(records, "o_proj")),
     ]
     try:
         with torch.no_grad():
@@ -174,7 +211,7 @@ def main() -> None:
     selected_position = prompt_len - 1
     selected_token_id = int(input_ids[0, selected_position].item())
 
-    q4_path = Q4_VECTOR_DIR / "qkv_layer0_last_token_q4.npz"
+    q4_path = args.input if args.input is not None else Q4_VECTOR_DIR / f"qkv_layer{layer_id}_last_token_q4.npz"
     if q4_path.is_file():
         data = np.load(q4_path)
         artifact_position = int(np.asarray(data["prompt_position"]).item())
@@ -183,8 +220,8 @@ def main() -> None:
             raise RuntimeError("Q4 artifact selected token does not match prompt")
 
     input_norm_q12_12 = softmax_exporter.quantize_activation_q4_12(input_norm_fp32)
-    q_gamma_float = qk.as_float_array(attn0.q_norm.weight)
-    k_gamma_float = qk.as_float_array(attn0.k_norm.weight)
+    q_gamma_float = qk.as_float_array(attn.q_norm.weight)
+    k_gamma_float = qk.as_float_array(attn.k_norm.weight)
     q_gamma_q8_7, q_gamma_saturation_count = qk.quantize_signed(
         q_gamma_float,
         qk.GAMMA_WIDTH,
@@ -275,7 +312,7 @@ def main() -> None:
     v_cache = v_cache_q12_12[: selected_position + 1]
     cache_length = k_cache.shape[0]
 
-    score_scale_q0_31 = int(round(float(attn0.scaling) * float(1 << softmax_exporter.SCALE_FRAC)))
+    score_scale_q0_31 = int(round(float(attn.scaling) * float(1 << softmax_exporter.SCALE_FRAC)))
     scaled_scores = np.zeros((softmax_exporter.NUM_Q_HEADS, cache_length), dtype=np.int64)
     for q_head in range(softmax_exporter.NUM_Q_HEADS):
         kv_head = q_head // softmax_exporter.KV_REPEAT
@@ -296,22 +333,46 @@ def main() -> None:
     probs_q0_16, _lut_indices = softmax_exporter.fixed_softmax_probs(scaled_scores, exp_lut)
     attn_out_q12_12, value_saturation = softmax_exporter.fixed_value_accum(probs_q0_16, v_cache)
     activation_q12_12 = attn_out_q12_12.reshape(INPUT_SIZE).astype(np.int64)
+    activation_source = {
+        "mode": "exporter_recomputed_attention",
+        "source_name": None,
+        "source_hex": None,
+        "override_max_abs_diff_vs_recomputed": None,
+    }
+    if args.activation_hex is not None:
+        activation_override = read_i32_hex(args.activation_hex)
+        if activation_override.shape != (INPUT_SIZE,):
+            raise RuntimeError(
+                f"activation override shape mismatch: expected {(INPUT_SIZE,)}, got {activation_override.shape}"
+            )
+        low, high = signed_limits(ACT_WIDTH)
+        if np.any((activation_override < low) | (activation_override > high)):
+            raise RuntimeError(f"activation override contains values outside signed {ACT_WIDTH}-bit range")
+        activation_source = {
+            "mode": "hex_override",
+            "source_name": args.activation_source_name,
+            "source_hex": relpath(args.activation_hex),
+            "override_max_abs_diff_vs_recomputed": int(
+                np.max(np.abs(activation_override - activation_q12_12))
+            ),
+        }
+        activation_q12_12 = activation_override.astype(np.int64)
 
-    o_weight_fp32 = np.ascontiguousarray(tensor_to_float32(attn0.o_proj.weight).numpy(), dtype=np.float32)
+    o_weight_fp32 = np.ascontiguousarray(tensor_to_float32(attn.o_proj.weight).numpy(), dtype=np.float32)
     weight_q4, scale_q2_14 = quantize_weight_q4_general(o_weight_fp32)
     row_sum_q26 = compute_q4_gemv_q26(activation_q12_12, weight_q4, scale_q2_14)
     expected_q12_12, output_saturation_count = q26_to_q12_12(row_sum_q26)
 
     with torch.no_grad():
         input_norm_t = torch.from_numpy(input_norm_fp32).unsqueeze(0)
-        q_flat_fp32 = manual_linear_from_weight(input_norm_t, tensor_to_float32(attn0.q_proj.weight))
-        k_flat_fp32 = manual_linear_from_weight(input_norm_t, tensor_to_float32(attn0.k_proj.weight))
-        v_flat_fp32 = manual_linear_from_weight(input_norm_t, tensor_to_float32(attn0.v_proj.weight))
+        q_flat_fp32 = manual_linear_from_weight(input_norm_t, tensor_to_float32(attn.q_proj.weight))
+        k_flat_fp32 = manual_linear_from_weight(input_norm_t, tensor_to_float32(attn.k_proj.weight))
+        v_flat_fp32 = manual_linear_from_weight(input_norm_t, tensor_to_float32(attn.v_proj.weight))
         q_view = q_flat_fp32.view(batch_size, prompt_len, softmax_exporter.NUM_Q_HEADS, softmax_exporter.HEAD_DIM)
         k_view = k_flat_fp32.view(batch_size, prompt_len, softmax_exporter.NUM_KV_HEADS, softmax_exporter.HEAD_DIM)
         v_view = v_flat_fp32.view(batch_size, prompt_len, softmax_exporter.NUM_KV_HEADS, softmax_exporter.HEAD_DIM)
-        q_norm = manual_rms_norm(q_view, tensor_to_float32(attn0.q_norm.weight), rms_eps)
-        k_norm = manual_rms_norm(k_view, tensor_to_float32(attn0.k_norm.weight), rms_eps)
+        q_norm = manual_rms_norm(q_view, tensor_to_float32(attn.q_norm.weight), rms_eps)
+        k_norm = manual_rms_norm(k_view, tensor_to_float32(attn.k_norm.weight), rms_eps)
         q_states = q_norm.transpose(1, 2)
         k_states = k_norm.transpose(1, 2)
         v_states = v_view.transpose(1, 2)
@@ -323,12 +384,12 @@ def main() -> None:
             q_rope_fp32[:, :, selected_position : selected_position + 1, :],
             k_repeated_fp32[:, :, :cache_length, :],
             v_repeated_fp32[:, :, :cache_length, :],
-            float(attn0.scaling),
+            float(attn.scaling),
         )
         attn_concat_fp32 = attn_fp32.transpose(1, 2).contiguous().reshape(batch_size, 1, INPUT_SIZE)
         o_proj_fp32_from_fp32_attn = manual_linear_from_weight(
             attn_concat_fp32,
-            tensor_to_float32(attn0.o_proj.weight),
+            tensor_to_float32(attn.o_proj.weight),
         )[0, 0].numpy()
         o_proj_input_reference = require_input0(records, "o_proj")[0, selected_position].numpy()
         o_proj_output_reference = require_output(records, "o_proj")[0, selected_position].numpy()
@@ -339,14 +400,14 @@ def main() -> None:
     output_ref_diff = fixed_o_proj_float - o_proj_output_reference.astype(np.float64)
 
     files = {
-        "activation": SIM_VECTOR_DIR / f"{PREFIX}_activation.hex",
-        "weight": SIM_VECTOR_DIR / f"{PREFIX}_weight.hex",
-        "weight_words32": SIM_VECTOR_DIR / f"{PREFIX}_weight_words32.hex",
-        "scale": SIM_VECTOR_DIR / f"{PREFIX}_scale.hex",
-        "scale_words32": SIM_VECTOR_DIR / f"{PREFIX}_scale_words32.hex",
-        "expected_q26": SIM_VECTOR_DIR / f"{PREFIX}_expected_q26.hex",
-        "expected_q12_12": SIM_VECTOR_DIR / f"{PREFIX}_expected_q12_12.hex",
-        "meta": SIM_VECTOR_DIR / f"{PREFIX}_meta.json",
+        "activation": SIM_VECTOR_DIR / f"{prefix}_activation.hex",
+        "weight": SIM_VECTOR_DIR / f"{prefix}_weight.hex",
+        "weight_words32": SIM_VECTOR_DIR / f"{prefix}_weight_words32.hex",
+        "scale": SIM_VECTOR_DIR / f"{prefix}_scale.hex",
+        "scale_words32": SIM_VECTOR_DIR / f"{prefix}_scale_words32.hex",
+        "expected_q26": SIM_VECTOR_DIR / f"{prefix}_expected_q26.hex",
+        "expected_q12_12": SIM_VECTOR_DIR / f"{prefix}_expected_q12_12.hex",
+        "meta": SIM_VECTOR_DIR / f"{prefix}_meta.json",
     }
     write_hex_lines(files["activation"], activation_q12_12, ACT_WIDTH)
     write_hex_lines(files["weight"], weight_q4.reshape(-1), WEIGHT_WIDTH)
@@ -358,9 +419,11 @@ def main() -> None:
 
     meta: dict[str, Any] = {
         "format_version": 1,
-        "name": PREFIX,
-        "module": MODULE_NAME,
+        "name": prefix,
+        "module": module_name,
+        "layer_id": layer_id,
         "prompt": PROMPT,
+        "activation_source": activation_source,
         "token_ids": [int(value) for value in input_ids.flatten().tolist()],
         "selected_position": selected_position,
         "selected_token_id": selected_token_id,
@@ -405,7 +468,7 @@ def main() -> None:
 
     print("Exported fixed-point o_proj RTL test vectors")
     print("=" * 80)
-    print(f"Module: {MODULE_NAME}")
+    print(f"Module: {module_name}")
     print(f"Prompt: {PROMPT!r}")
     print(f"Selected position: {selected_position}")
     print(f"Selected token id: {selected_token_id} / {tokenizer.decode([selected_token_id])!r}")

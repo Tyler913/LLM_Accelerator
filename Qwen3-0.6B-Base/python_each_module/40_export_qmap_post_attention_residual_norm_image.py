@@ -111,6 +111,10 @@ def write_hex_lines(path: Path, values: np.ndarray, width_bits: int) -> None:
     path.write_text("\n".join(f"{int(value) & mask:0{digits}x}" for value in flat) + "\n", encoding="utf-8")
 
 
+def parse_int_auto(value: str) -> int:
+    return int(value.replace("_", ""), 0)
+
+
 def image_to_words32(image: bytes) -> np.ndarray:
     padded = image + bytes((-len(image)) % 4)
     return np.array(struct.unpack("<" + "I" * (len(padded) // 4), padded), dtype=np.uint32)
@@ -194,9 +198,11 @@ def add_payload(payloads: list[dict[str, Any]], *, name: str, cursor: int, paylo
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Export a QMAP runtime packet for Layer 0 post-attention residual/RMSNorm simulation."
+        description="Export a QMAP runtime packet for post-attention residual/RMSNorm simulation."
     )
     parser.add_argument("--prefix", default=PREFIX)
+    parser.add_argument("--layer-id", type=int, default=LAYER_ID)
+    parser.add_argument("--qmap-base", type=parse_int_auto, default=QMAP_BASE)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
@@ -208,6 +214,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     prefix = str(args.prefix)
+    layer_id = int(args.layer_id)
+    qmap_base = int(args.qmap_base)
 
     residual_input = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_residual_input.hex", RESIDUAL_WIDTH, signed=True)
     o_proj_input = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_o_proj_input.hex", O_PROJ_WIDTH, signed=True)
@@ -247,7 +255,7 @@ def main() -> None:
     }
     metadata_words = np.array(
         [
-            LAYER_ID,
+            layer_id,
             INPUT_SIZE,
             RESIDUAL_WIDTH,
             O_PROJ_WIDTH,
@@ -288,7 +296,7 @@ def main() -> None:
     payload_by_name = {item["name"]: item for item in payloads}
 
     def addr(name: str) -> int:
-        return QMAP_BASE + int(payload_by_name[name]["offset"])
+        return qmap_base + int(payload_by_name[name]["offset"])
 
     def size(name: str) -> int:
         return len(payload_by_name[name]["payload"])
@@ -296,7 +304,7 @@ def main() -> None:
     ro = TENSOR_F_ROW_MAJOR | TENSOR_F_READ_ONLY
     wo = TENSOR_F_ROW_MAJOR | TENSOR_F_WRITE_ONLY
     expected_flags = TENSOR_F_ROW_MAJOR | TENSOR_F_READ_ONLY | TENSOR_F_DEBUG_ONLY
-    common_aux = (STAGE_ID_POST_ATTN_RESIDUAL_NORM, LAYER_ID, INPUT_SIZE, 0)
+    common_aux = (STAGE_ID_POST_ATTN_RESIDUAL_NORM, layer_id, INPUT_SIZE, 0)
 
     descriptors = [
         pack_descriptor(
@@ -342,7 +350,7 @@ def main() -> None:
             nbytes=vector_bytes,
             dims=(INPUT_SIZE, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_O_PROJ, LAYER_ID, INPUT_SIZE, 0),
+            aux=(MATRIX_ID_O_PROJ, layer_id, INPUT_SIZE, 0),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_GAMMA,
@@ -422,7 +430,7 @@ def main() -> None:
     ]
 
     image = bytearray(image_bytes)
-    image[0:HEADER_BYTES] = pack_header(QMAP_BASE, image_bytes)
+    image[0:HEADER_BYTES] = pack_header(qmap_base, image_bytes)
     for slot, descriptor in enumerate(descriptors):
         offset = DESCRIPTOR_TABLE_OFFSET + slot * DESCRIPTOR_BYTES
         image[offset : offset + DESCRIPTOR_BYTES] = descriptor
@@ -443,14 +451,15 @@ def main() -> None:
 
     manifest = {
         "format_version": 1,
-        "name": "qmap_post_attention_residual_norm_runtime",
+        "name": f"qmap_layer{layer_id}_post_attention_residual_norm_runtime",
         "prefix": prefix,
-        "qmap_base": QMAP_BASE,
+        "qmap_base": qmap_base,
         "image_bytes": image_bytes,
         "sha256": sha256_file(args.output),
         "descriptor_count": DESCRIPTOR_COUNT,
         "descriptor_capacity": DESCRIPTOR_CAPACITY,
         "shape": {
+            "layer_id": layer_id,
             "input_size": INPUT_SIZE,
             "residual_width": RESIDUAL_WIDTH,
             "o_proj_width": O_PROJ_WIDTH,
@@ -494,7 +503,8 @@ def main() -> None:
 
     print("Exported QMAP post-attention residual/RMSNorm runtime packet")
     print("=" * 80)
-    print(f"QMAP base:       0x{QMAP_BASE:016X}")
+    print(f"QMAP base:       0x{qmap_base:016X}")
+    print(f"Layer:           {layer_id}")
     print(f"Image bytes:     0x{image_bytes:X}")
     print(f"Input words:     {INPUT_SIZE}")
     print(f"Output words:    {expected_norm_i32.size}")

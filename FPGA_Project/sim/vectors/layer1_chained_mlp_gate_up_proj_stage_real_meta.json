@@ -1,0 +1,65 @@
+{
+  "format_version": 1,
+  "name": "layer1_chained_mlp_gate_up_proj_stage_real",
+  "module": "layer1.mlp.gate_up_proj_stage",
+  "layer_id": 1,
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "source_post_norm_prefix": "layer1_chained_post_attention_residual_norm_stage_real",
+  "shape": {
+    "input_size": 1024,
+    "out_features": 3072,
+    "group_size": 64,
+    "group_count": 16
+  },
+  "formats": {
+    "activation": "signed 24-bit Q12.12",
+    "weight_words32": "signed int4 packed into 32-bit words, 8 weights per word, lowest index in low nibble",
+    "scale_words32": "unsigned 16-bit Q2.14, 2 scales per 32-bit word",
+    "chunks4096": "simulation-optimized 4096-bit chunks, lowest flattened index in low bits",
+    "row_sum": "signed 56-bit Q26",
+    "output": "signed 24-bit Q12.12"
+  },
+  "saturation": {
+    "gate_output_count": 0,
+    "up_output_count": 0
+  },
+  "debug": {
+    "post_norm_q12_12_max_abs": 136162,
+    "fixed_input_vs_hf_post_norm_max_abs_diff": 4.90257203578949,
+    "gate_q26_min": -581067751,
+    "gate_q26_max": 146051852,
+    "up_q26_min": -223176337,
+    "up_q26_max": 251019688,
+    "gate_q12_12_max_abs": 35466,
+    "up_q12_12_max_abs": 15321,
+    "fixed_gate_vs_hf_max_abs_diff": 4.0005412101745605,
+    "fixed_gate_vs_hf_mean_abs_diff": 0.4967008797575545,
+    "fixed_up_vs_hf_max_abs_diff": 1.4896408319473267,
+    "fixed_up_vs_hf_mean_abs_diff": 0.2038372271714858
+  },
+  "files": {
+    "activation": "layer1_chained_mlp_gate_up_proj_stage_real_activation.hex",
+    "gate_weight_words32": "layer1_chained_mlp_gate_up_proj_stage_real_gate_weight_words32.hex",
+    "gate_scale_words32": "layer1_chained_mlp_gate_up_proj_stage_real_gate_scale_words32.hex",
+    "gate_weight_chunks4096": "layer1_chained_mlp_gate_up_proj_stage_real_gate_weight_chunks4096.hex",
+    "gate_scale_chunks4096": "layer1_chained_mlp_gate_up_proj_stage_real_gate_scale_chunks4096.hex",
+    "up_weight_words32": "layer1_chained_mlp_gate_up_proj_stage_real_up_weight_words32.hex",
+    "up_scale_words32": "layer1_chained_mlp_gate_up_proj_stage_real_up_scale_words32.hex",
+    "up_weight_chunks4096": "layer1_chained_mlp_gate_up_proj_stage_real_up_weight_chunks4096.hex",
+    "up_scale_chunks4096": "layer1_chained_mlp_gate_up_proj_stage_real_up_scale_chunks4096.hex",
+    "gate_expected_q26": "layer1_chained_mlp_gate_up_proj_stage_real_gate_expected_q26.hex",
+    "gate_expected_q12_12": "layer1_chained_mlp_gate_up_proj_stage_real_gate_expected_q12_12.hex",
+    "up_expected_q26": "layer1_chained_mlp_gate_up_proj_stage_real_up_expected_q26.hex",
+    "up_expected_q12_12": "layer1_chained_mlp_gate_up_proj_stage_real_up_expected_q12_12.hex"
+  }
+}

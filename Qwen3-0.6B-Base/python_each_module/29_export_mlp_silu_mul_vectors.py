@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import math
 from pathlib import Path
@@ -19,10 +20,8 @@ from common import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
-GATE_UP_PREFIX = "mlp_gate_up_proj_stage_real"
-
-PREFIX = "mlp_silu_mul_stage_real"
-MODULE_NAME = "layer0.mlp.silu_mul_stage"
+DEFAULT_GATE_UP_PREFIX = "mlp_gate_up_proj_stage_real"
+DEFAULT_PREFIX = "mlp_silu_mul_stage_real"
 
 FEATURES = 3072
 IN_WIDTH = 24
@@ -93,7 +92,21 @@ def gate_to_lut_index(gate_q12_12: np.ndarray) -> np.ndarray:
     return np.clip(rounded, 0, SIGMOID_LUT_SIZE - 1).astype(np.int64)
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Export fixed-point MLP SiLU/multiply RTL vectors.")
+    parser.add_argument("--layer-id", type=int, default=0)
+    parser.add_argument("--gate-up-prefix", default=DEFAULT_GATE_UP_PREFIX)
+    parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+    layer_id = int(args.layer_id)
+    gate_up_prefix = str(args.gate_up_prefix)
+    prefix = str(args.prefix)
+    module_name = f"layer{layer_id}.mlp.silu_mul_stage"
+
     tokenizer, model, backbone = load_model()
     input_ids = encode_prompt(tokenizer)
     batch_size, prompt_len = input_ids.shape
@@ -102,12 +115,15 @@ def main() -> None:
 
     selected_position = prompt_len - 1
     selected_token_id = int(input_ids[0, selected_position].item())
-    layer0 = backbone.layers[0]
-    mlp0 = layer0.mlp
+    if layer_id < 0 or layer_id >= len(backbone.layers):
+        raise ValueError(f"layer_id {layer_id} is outside model layer range 0..{len(backbone.layers) - 1}")
+
+    layer = backbone.layers[layer_id]
+    mlp = layer.mlp
 
     records: dict[str, dict[str, torch.Tensor]] = {}
     hooks = [
-        mlp0.down_proj.register_forward_hook(capture_module_io(records, "down_proj")),
+        mlp.down_proj.register_forward_hook(capture_module_io(records, "down_proj")),
     ]
     try:
         with torch.no_grad():
@@ -116,9 +132,9 @@ def main() -> None:
         for hook in hooks:
             hook.remove()
 
-    gate_path = SIM_VECTOR_DIR / f"{GATE_UP_PREFIX}_gate_expected_q12_12.hex"
-    up_path = SIM_VECTOR_DIR / f"{GATE_UP_PREFIX}_up_expected_q12_12.hex"
-    gate_up_meta_path = SIM_VECTOR_DIR / f"{GATE_UP_PREFIX}_meta.json"
+    gate_path = SIM_VECTOR_DIR / f"{gate_up_prefix}_gate_expected_q12_12.hex"
+    up_path = SIM_VECTOR_DIR / f"{gate_up_prefix}_up_expected_q12_12.hex"
+    gate_up_meta_path = SIM_VECTOR_DIR / f"{gate_up_prefix}_meta.json"
     gate_q12_12 = read_signed_hex_lines(gate_path, IN_WIDTH)
     up_q12_12 = read_signed_hex_lines(up_path, IN_WIDTH)
     if gate_q12_12.shape != (FEATURES,) or up_q12_12.shape != (FEATURES,):
@@ -131,6 +147,8 @@ def main() -> None:
             raise RuntimeError("gate/up vector selected position does not match prompt")
         if int(gate_up_meta["selected_token_id"]) != selected_token_id:
             raise RuntimeError("gate/up vector selected token does not match prompt")
+        if int(gate_up_meta.get("layer_id", layer_id)) != layer_id:
+            raise RuntimeError("gate/up vector layer_id does not match requested layer")
 
     sigmoid_lut = build_sigmoid_lut()
     lut_index = gate_to_lut_index(gate_q12_12)
@@ -152,14 +170,14 @@ def main() -> None:
     hidden_vs_ideal = fixed_hidden_float - ideal_fixed_hidden
 
     files = {
-        "gate_input": SIM_VECTOR_DIR / f"{PREFIX}_gate_input.hex",
-        "up_input": SIM_VECTOR_DIR / f"{PREFIX}_up_input.hex",
-        "sigmoid_lut": SIM_VECTOR_DIR / f"{PREFIX}_sigmoid_lut.hex",
-        "expected_lut_index": SIM_VECTOR_DIR / f"{PREFIX}_expected_lut_index.hex",
-        "expected_sigmoid_q0_16": SIM_VECTOR_DIR / f"{PREFIX}_expected_sigmoid_q0_16.hex",
-        "expected_silu_gate_q12_12": SIM_VECTOR_DIR / f"{PREFIX}_expected_silu_gate_q12_12.hex",
-        "expected_hidden_q12_12": SIM_VECTOR_DIR / f"{PREFIX}_expected_hidden_q12_12.hex",
-        "meta": SIM_VECTOR_DIR / f"{PREFIX}_meta.json",
+        "gate_input": SIM_VECTOR_DIR / f"{prefix}_gate_input.hex",
+        "up_input": SIM_VECTOR_DIR / f"{prefix}_up_input.hex",
+        "sigmoid_lut": SIM_VECTOR_DIR / f"{prefix}_sigmoid_lut.hex",
+        "expected_lut_index": SIM_VECTOR_DIR / f"{prefix}_expected_lut_index.hex",
+        "expected_sigmoid_q0_16": SIM_VECTOR_DIR / f"{prefix}_expected_sigmoid_q0_16.hex",
+        "expected_silu_gate_q12_12": SIM_VECTOR_DIR / f"{prefix}_expected_silu_gate_q12_12.hex",
+        "expected_hidden_q12_12": SIM_VECTOR_DIR / f"{prefix}_expected_hidden_q12_12.hex",
+        "meta": SIM_VECTOR_DIR / f"{prefix}_meta.json",
     }
 
     write_hex_lines(files["gate_input"], gate_q12_12, IN_WIDTH)
@@ -172,14 +190,15 @@ def main() -> None:
 
     meta: dict[str, Any] = {
         "format_version": 1,
-        "name": PREFIX,
-        "module": MODULE_NAME,
+        "name": prefix,
+        "module": module_name,
+        "layer_id": layer_id,
         "prompt": PROMPT,
         "token_ids": [int(value) for value in input_ids.flatten().tolist()],
         "selected_position": int(selected_position),
         "selected_token_id": int(selected_token_id),
         "selected_token_text": tokenizer.decode([selected_token_id]),
-        "source_gate_up_prefix": GATE_UP_PREFIX,
+        "source_gate_up_prefix": gate_up_prefix,
         "shape": {
             "features": FEATURES,
         },
@@ -221,7 +240,7 @@ def main() -> None:
 
     print("Exported fixed-point MLP SiLU/multiply RTL test vectors")
     print("=" * 80)
-    print(f"Module: {MODULE_NAME}")
+    print(f"Module: {module_name}")
     print(f"Prompt: {PROMPT!r}")
     print(f"Selected position: {selected_position}")
     print(f"Selected token id: {selected_token_id} / {tokenizer.decode([selected_token_id])!r}")

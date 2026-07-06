@@ -1,0 +1,69 @@
+{
+  "format_version": 1,
+  "name": "layer1_attention_score_stage_real",
+  "module": "layer1.self_attn.attention_score_stage",
+  "layer_id": 1,
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "shape": {
+    "num_q_heads": 16,
+    "num_kv_heads": 8,
+    "head_dim": 128,
+    "kv_repeat": 2,
+    "cache_length": 5,
+    "score_count": 80,
+    "k_request_count": 10240
+  },
+  "formats": {
+    "q_input": "signed 24-bit Q12.12 current-token Q after q_norm and RoPE",
+    "k_cache": "signed 24-bit Q12.12 cached K after k_norm and RoPE",
+    "score_raw": "signed 64-bit Q24.24 dot-product sum",
+    "score_scaled": "signed 64-bit Q24.24; score_raw * Q0.31 attention scale >> 31"
+  },
+  "fixed_point": {
+    "attention_scale_float": 0.08838834764831845,
+    "attention_scale_q0_31": 189812531,
+    "score_frac": 24,
+    "scale_frac": 31
+  },
+  "saturation": {
+    "q_gamma_quantize_count": 0,
+    "k_gamma_quantize_count": 0,
+    "cos_quantize_count_total": 412,
+    "sin_quantize_count_total": 2,
+    "norm_output": false,
+    "rope_output": false
+  },
+  "debug": {
+    "q_current_q12_12_max_abs": 58242,
+    "k_cache_q12_12_max_abs": 757721,
+    "raw_score_min": -740388007,
+    "raw_score_max": 4733120270,
+    "scaled_score_min": -65441673,
+    "scaled_score_max": 418352679,
+    "scaled_score_float_min": -3.9006276726722717,
+    "scaled_score_float_max": 24.93576282262802,
+    "fixed_scaled_vs_fp32_score_max_abs_diff": 0.7791273593902588,
+    "fixed_scaled_vs_fp32_score_mean_abs_diff": 0.2308286763727665
+  },
+  "files": {
+    "q_input": "layer1_attention_score_stage_real_q_input.hex",
+    "k_cache": "layer1_attention_score_stage_real_k_cache.hex",
+    "score_scale": "layer1_attention_score_stage_real_score_scale_q0_31.hex",
+    "cache_length": "layer1_attention_score_stage_real_cache_length.hex",
+    "expected_raw": "layer1_attention_score_stage_real_expected_raw.hex",
+    "expected_scaled": "layer1_attention_score_stage_real_expected_scaled.hex",
+    "expected_q_head": "layer1_attention_score_stage_real_expected_q_head.hex",
+    "expected_kv_head": "layer1_attention_score_stage_real_expected_kv_head.hex",
+    "expected_position": "layer1_attention_score_stage_real_expected_position.hex"
+  }
+}

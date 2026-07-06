@@ -21,10 +21,12 @@ module tb_qmap_attention_score_value_compute_path;
     localparam int TOTAL_WRITES     = Q_COUNT;
     localparam int KV_REPEAT        = NUM_Q_HEADS / NUM_KV_HEADS;
 
-    localparam logic [ADDR_WIDTH-1 : 0] QMAP_BASE_ADDR = 64'h0000_0004_0503_0000;
+    localparam logic [ADDR_WIDTH-1 : 0] DEFAULT_QMAP_BASE_ADDR = 64'h0000_0004_0503_0000;
     localparam logic [ADDR_WIDTH-1 : 0] CACHE_BASE_ADDR = 64'h0000_0004_1410_0000;
-    localparam logic [ADDR_WIDTH-1 : 0] ATTN_OUT_ADDR = 64'h0000_0004_0503_2980;
-    localparam logic [ADDR_WIDTH-1 : 0] EXP_DTYPE_ADDR = QMAP_BASE_ADDR + 64'h0100 + (64'd3 * 64'd128) + 64'd8;
+    localparam logic [ADDR_WIDTH-1 : 0] CACHE_KIND_STRIDE_BYTES =
+        NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM * 4;
+    localparam logic [ADDR_WIDTH-1 : 0] CACHE_LAYER_STRIDE_BYTES =
+        2 * CACHE_KIND_STRIDE_BYTES;
 
     logic clk;
     logic rst_n;
@@ -65,13 +67,21 @@ module tb_qmap_attention_score_value_compute_path;
     logic wr_data_last;
     logic wr_done;
     logic wr_error;
+    logic [ADDR_WIDTH-1 : 0] qmap_base_addr;
+    logic [ADDR_WIDTH-1 : 0] attn_out_addr;
+    logic [ADDR_WIDTH-1 : 0] exp_dtype_addr;
 
     logic [31 : 0] qmap_image_mem [0:IMAGE_WORDS-1];
     logic signed [IN_WIDTH-1 : 0] k_cache_mem [0:CACHE_LENGTH*KV_COUNT-1];
     logic signed [IN_WIDTH-1 : 0] v_cache_mem [0:CACHE_LENGTH*KV_COUNT-1];
     logic [31 : 0] expected_attn_out_mem [0:Q_COUNT-1];
+    logic [ADDR_WIDTH-1 : 0] cache_window_base_addr;
 
     string vector_dir;
+    string qmap_image_file;
+    string k_cache_file;
+    string v_cache_file;
+    string attn_out_expected_file;
     string wavefile;
     string tracefile;
     integer trace_fd;
@@ -136,12 +146,13 @@ module tb_qmap_attention_score_value_compute_path;
     integer invalid_write_req_count;
     integer invalid_write_data_count;
     integer invalid_done_cycle;
+    integer cache_layer_id;
 
     qmap_attention_score_value_compute_path dut (
         .i_clk(clk),
         .i_rst_n(rst_n),
         .i_start(start),
-        .i_qmap_base_addr(QMAP_BASE_ADDR),
+        .i_qmap_base_addr(qmap_base_addr),
         .o_busy(busy),
         .o_done(done),
         .o_error(error),
@@ -199,6 +210,9 @@ module tb_qmap_attention_score_value_compute_path;
                 !((accepted >= 12000) && (accepted <= 12040) && ((cycle % 4) != 0));
         end
     endfunction
+
+    assign attn_out_addr = qmap_base_addr + 64'h2980;
+    assign exp_dtype_addr = qmap_base_addr + 64'h0100 + (64'd3 * 64'd128) + 64'd8;
 
     function automatic logic wr_req_ready_pattern(input integer cycle, input integer accepted);
         begin
@@ -266,24 +280,24 @@ module tb_qmap_attention_score_value_compute_path;
     function automatic logic is_qmap_addr(input logic [ADDR_WIDTH-1 : 0] addr);
         begin
             is_qmap_addr =
-                (addr >= QMAP_BASE_ADDR) &&
-                (addr < (QMAP_BASE_ADDR + IMAGE_BYTES));
+                (addr >= qmap_base_addr) &&
+                (addr < (qmap_base_addr + IMAGE_BYTES));
         end
     endfunction
 
     function automatic logic is_cache_addr(input logic [ADDR_WIDTH-1 : 0] addr);
         begin
             is_cache_addr =
-                (addr >= CACHE_BASE_ADDR) &&
-                (addr < (CACHE_BASE_ADDR + (2 * NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM * 4)));
+                (addr >= cache_window_base_addr) &&
+                (addr < (cache_window_base_addr + CACHE_LAYER_STRIDE_BYTES));
         end
     endfunction
 
     function automatic logic [31 : 0] qmap_word(input logic [ADDR_WIDTH-1 : 0] addr);
         integer index;
         begin
-            index = (addr - QMAP_BASE_ADDR) >> 2;
-            if (corrupt_exp_dtype && (addr == EXP_DTYPE_ADDR)) begin
+            index = (addr - qmap_base_addr) >> 2;
+            if (corrupt_exp_dtype && (addr == exp_dtype_addr)) begin
                 qmap_word = 32'd5;
             end
             else if ((index >= 0) && (index < IMAGE_WORDS)) begin
@@ -306,7 +320,7 @@ module tb_qmap_attention_score_value_compute_path;
         integer cache_index;
         logic signed [IN_WIDTH-1 : 0] value;
         begin
-            element_index = (addr - CACHE_BASE_ADDR) >> 2;
+            element_index = (addr - cache_window_base_addr) >> 2;
             kind = element_index / (NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM);
             rem0 = element_index % (NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM);
             head = rem0 / (MAX_CONTEXT * HEAD_DIM);
@@ -359,7 +373,7 @@ module tb_qmap_attention_score_value_compute_path;
                 (kv_head * MAX_CONTEXT * HEAD_DIM) +
                 (position * HEAD_DIM) +
                 dim;
-            expected_cache_addr = CACHE_BASE_ADDR + (element_index * 4);
+            expected_cache_addr = cache_window_base_addr + (element_index * 4);
         end
     endfunction
 
@@ -414,7 +428,7 @@ module tb_qmap_attention_score_value_compute_path;
         begin
             if (!is_cache_addr(addr)) begin
             end
-            else if (((addr - CACHE_BASE_ADDR) >> 2) < (NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM)) begin
+            else if (((addr - cache_window_base_addr) >> 2) < (NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM)) begin
                 expected_q_head = k_req_accept_count / (CACHE_LENGTH * HEAD_DIM);
                 expected_position = (k_req_accept_count / HEAD_DIM) % CACHE_LENGTH;
                 expected_dim = k_req_accept_count % HEAD_DIM;
@@ -440,7 +454,7 @@ module tb_qmap_attention_score_value_compute_path;
     task check_cache_read_response(input logic [ADDR_WIDTH-1 : 0] addr);
         begin
             if (is_cache_addr(addr)) begin
-                if (((addr - CACHE_BASE_ADDR) >> 2) < (NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM)) begin
+                if (((addr - cache_window_base_addr) >> 2) < (NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM)) begin
                     k_rsp_accept_count = k_rsp_accept_count + 1;
                 end
                 else begin
@@ -593,7 +607,7 @@ module tb_qmap_attention_score_value_compute_path;
             end
 
             if (wr_req_valid && wr_req_ready) begin
-                if ((wr_req_addr !== ATTN_OUT_ADDR) || (wr_req_len_bytes != (Q_COUNT * 4))) begin
+                if ((wr_req_addr !== attn_out_addr) || (wr_req_len_bytes != (Q_COUNT * 4))) begin
                     fail_once("FAIL: attention output write request mismatch");
                 end
                 wr_active = 1'b1;
@@ -688,11 +702,34 @@ module tb_qmap_attention_score_value_compute_path;
 
     initial begin : main_test
         vector_dir = "FPGA_Project/sim/vectors";
+        qmap_image_file = {vector_dir, "/qmap_attention_score_value_image_words32.hex"};
+        k_cache_file = {vector_dir, "/attention_score_stage_real_k_cache.hex"};
+        v_cache_file = {vector_dir, "/attention_softmax_value_stage_real_v_cache.hex"};
+        attn_out_expected_file = {vector_dir, "/qmap_attention_score_value_attn_out_expected_words32.hex"};
         tracefile = "FPGA_Project/sim/qmap_attention_score_value_compute_path_trace.csv";
         if ($value$plusargs("vectordir=%s", vector_dir)) begin
+            qmap_image_file = {vector_dir, "/qmap_attention_score_value_image_words32.hex"};
+            k_cache_file = {vector_dir, "/attention_score_stage_real_k_cache.hex"};
+            v_cache_file = {vector_dir, "/attention_softmax_value_stage_real_v_cache.hex"};
+            attn_out_expected_file = {vector_dir, "/qmap_attention_score_value_attn_out_expected_words32.hex"};
+        end
+        if ($value$plusargs("qmap_image=%s", qmap_image_file)) begin
+        end
+        if ($value$plusargs("k_cache=%s", k_cache_file)) begin
+        end
+        if ($value$plusargs("v_cache=%s", v_cache_file)) begin
+        end
+        if ($value$plusargs("attn_out_expected=%s", attn_out_expected_file)) begin
+        end
+        qmap_base_addr = DEFAULT_QMAP_BASE_ADDR;
+        if ($value$plusargs("qmap_base=%h", qmap_base_addr)) begin
         end
         if ($value$plusargs("tracefile=%s", tracefile)) begin
         end
+        cache_layer_id = 0;
+        if ($value$plusargs("cache_layer=%d", cache_layer_id)) begin
+        end
+        cache_window_base_addr = CACHE_BASE_ADDR + (cache_layer_id * CACHE_LAYER_STRIDE_BYTES);
 
         rst_n = 1'b0;
         start = 1'b0;
@@ -701,10 +738,10 @@ module tb_qmap_attention_score_value_compute_path;
         print_count = 0;
         trace_fd = 0;
 
-        $readmemh({vector_dir, "/qmap_attention_score_value_image_words32.hex"}, qmap_image_mem);
-        $readmemh({vector_dir, "/attention_score_stage_real_k_cache.hex"}, k_cache_mem);
-        $readmemh({vector_dir, "/attention_softmax_value_stage_real_v_cache.hex"}, v_cache_mem);
-        $readmemh({vector_dir, "/qmap_attention_score_value_attn_out_expected_words32.hex"}, expected_attn_out_mem);
+        $readmemh(qmap_image_file, qmap_image_mem);
+        $readmemh(k_cache_file, k_cache_mem);
+        $readmemh(v_cache_file, v_cache_mem);
+        $readmemh(attn_out_expected_file, expected_attn_out_mem);
 
         trace_fd = $fopen(tracefile, "w");
         if (trace_fd == 0) begin
@@ -808,7 +845,12 @@ module tb_qmap_attention_score_value_compute_path;
 
         $fclose(trace_fd);
 
-        $display("qmap_attention_score_value_compute_path real Layer 0 current-token test");
+        $display("qmap_attention_score_value_compute_path current-token test");
+        $display("  qmap base             = 0x%016h", qmap_base_addr);
+        $display("  cache layer/base      = %0d / 0x%016h", cache_layer_id, cache_window_base_addr);
+        $display("  image                 = %s", qmap_image_file);
+        $display("  k/v cache files       = %s / %s", k_cache_file, v_cache_file);
+        $display("  expected attn out     = %s", attn_out_expected_file);
         $display("  K reads accepted       = %0d", normal_k_req_count);
         $display("  V reads accepted       = %0d", normal_v_req_count);
         $display("  attn_out writes        = %0d", normal_write_data_count);

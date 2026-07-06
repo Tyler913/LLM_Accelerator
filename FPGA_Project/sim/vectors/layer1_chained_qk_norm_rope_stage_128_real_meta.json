@@ -1,0 +1,86 @@
+{
+  "format_version": 1,
+  "name": "layer1_chained_qk_norm_rope_stage_128_real",
+  "module": "layer1.self_attn.qk_norm_rope_stage",
+  "layer_id": 1,
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "source": {
+    "q4_npz": "artifacts/test_vectors/qwen3_0p6b_q4_v0/qkv_layer1_last_token_q4.npz",
+    "qkv_expected_hex": "artifacts/test_vectors/qwen3_0p6b_qmap_v1/layer1_qkv_from_layer0_rtl_full_expected_words32.hex",
+    "source_label": "layer1_qkv_from_layer0_rtl_full",
+    "q_input_source": "Q output slice from F:\\LLM_Accelerator\\artifacts\\test_vectors\\qwen3_0p6b_qmap_v1\\layer1_qkv_from_layer0_rtl_full_expected_words32.hex",
+    "k_input_source": "K output slice from F:\\LLM_Accelerator\\artifacts\\test_vectors\\qwen3_0p6b_qmap_v1\\layer1_qkv_from_layer0_rtl_full_expected_words32.hex"
+  },
+  "formats": {
+    "q_input": "signed 24-bit Q12.12",
+    "k_input": "signed 24-bit Q12.12",
+    "q_gamma": "signed 16-bit Q8.7",
+    "k_gamma": "signed 16-bit Q8.7",
+    "cos_sin": "signed 16-bit Q1.15",
+    "norm_output": "signed 24-bit Q12.12",
+    "rope_output": "signed 24-bit Q12.12",
+    "inv_rms": "unsigned 24-bit UQ8.16"
+  },
+  "fixed_point": {
+    "eps_q24": 17,
+    "rms_output_shift": 23,
+    "rope_output_shift": 15
+  },
+  "saturation": {
+    "q_gamma_quantize_count": 0,
+    "k_gamma_quantize_count": 0,
+    "cos_quantize_count": 66,
+    "sin_quantize_count": 0,
+    "norm_output": false,
+    "rope_output": false
+  },
+  "debug": {
+    "q_projection_recompute_vs_artifact_max_abs_diff": null,
+    "k_projection_recompute_vs_artifact_max_abs_diff": null,
+    "q_input_q12_12_max_abs": 1514,
+    "k_input_q12_12_max_abs": 909,
+    "q_norm_q12_12_max_abs": 35951,
+    "k_norm_q12_12_max_abs": 432331,
+    "q_rope_q12_12_max_abs": 35950,
+    "k_rope_q12_12_max_abs": 432319,
+    "q_norm_head0": {
+      "sum_squares": 6406917,
+      "mean_square": 50054,
+      "rms_q12_12": 223,
+      "inv_rms_uq8_16": 1203746
+    },
+    "k_norm_head0": {
+      "sum_squares": 7736837,
+      "mean_square": 60444,
+      "rms_q12_12": 245,
+      "inv_rms_uq8_16": 1095654
+    },
+    "q_rope_float_max_abs": 8.77685546875,
+    "k_rope_float_max_abs": 105.546630859375
+  },
+  "files": {
+    "q_input": "layer1_chained_qk_norm_rope_stage_128_real_q_input.hex",
+    "k_input": "layer1_chained_qk_norm_rope_stage_128_real_k_input.hex",
+    "q_gamma": "layer1_chained_qk_norm_rope_stage_128_real_q_gamma.hex",
+    "k_gamma": "layer1_chained_qk_norm_rope_stage_128_real_k_gamma.hex",
+    "cos": "layer1_chained_qk_norm_rope_stage_128_real_cos.hex",
+    "sin": "layer1_chained_qk_norm_rope_stage_128_real_sin.hex",
+    "q_norm_expected": "layer1_chained_qk_norm_rope_stage_128_real_q_norm_expected.hex",
+    "k_norm_expected": "layer1_chained_qk_norm_rope_stage_128_real_k_norm_expected.hex",
+    "q_rope_expected": "layer1_chained_qk_norm_rope_stage_128_real_q_rope_expected.hex",
+    "k_rope_expected": "layer1_chained_qk_norm_rope_stage_128_real_k_rope_expected.hex",
+    "norm_saturation": "layer1_chained_qk_norm_rope_stage_128_real_norm_saturation.hex",
+    "rope_saturation": "layer1_chained_qk_norm_rope_stage_128_real_rope_saturation.hex",
+    "saturation": "layer1_chained_qk_norm_rope_stage_128_real_saturation.hex"
+  }
+}

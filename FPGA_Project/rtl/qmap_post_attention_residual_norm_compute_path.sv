@@ -2,7 +2,7 @@
 
 `include "qmap_defs.svh"
 
-// QMAP-backed Layer 0 post-attention residual/RMSNorm wrapper:
+// QMAP-backed per-layer post-attention residual/RMSNorm wrapper:
 //
 //   residual_input[1024] + o_proj_out[1024]
 //       -> post_attention_residual_norm_stage
@@ -468,13 +468,19 @@ module qmap_post_attention_residual_norm_compute_path #(
             ((desc_flags[SLOT_EXPECTED_HIDDEN] & `QMAP_TENSOR_F_DEBUG_ONLY) == 32'd0) ||
             ((desc_flags[SLOT_EXPECTED_NORM] & `QMAP_TENSOR_F_DEBUG_ONLY) == 32'd0) ||
             (desc_aux0[SLOT_METADATA] != `QMAP_STAGE_ID_POST_ATTN_RESIDUAL_NORM) ||
-            (desc_aux1[SLOT_METADATA] != 32'd0) ||
             (desc_aux2[SLOT_METADATA] != INPUT_SIZE) ||
             (desc_aux0[SLOT_RESIDUAL] != `QMAP_STAGE_ID_POST_ATTN_RESIDUAL_NORM) ||
             (desc_aux0[SLOT_O_PROJ] != `QMAP_MATRIX_ID_O_PROJ) ||
             (desc_aux0[SLOT_GAMMA] != `QMAP_STAGE_ID_POST_ATTN_RESIDUAL_NORM) ||
             (desc_aux0[SLOT_HIDDEN] != `QMAP_STAGE_ID_POST_ATTN_RESIDUAL_NORM) ||
-            (desc_aux0[SLOT_NORM] != `QMAP_STAGE_ID_POST_ATTN_RESIDUAL_NORM)) begin
+            (desc_aux0[SLOT_NORM] != `QMAP_STAGE_ID_POST_ATTN_RESIDUAL_NORM) ||
+            (desc_aux1[SLOT_RESIDUAL] != desc_aux1[SLOT_METADATA]) ||
+            (desc_aux1[SLOT_O_PROJ] != desc_aux1[SLOT_METADATA]) ||
+            (desc_aux1[SLOT_GAMMA] != desc_aux1[SLOT_METADATA]) ||
+            (desc_aux1[SLOT_HIDDEN] != desc_aux1[SLOT_METADATA]) ||
+            (desc_aux1[SLOT_NORM] != desc_aux1[SLOT_METADATA]) ||
+            (desc_aux1[SLOT_EXPECTED_HIDDEN] != desc_aux1[SLOT_METADATA]) ||
+            (desc_aux1[SLOT_EXPECTED_NORM] != desc_aux1[SLOT_METADATA])) begin
             validate_error = 1'b1;
         end
     end

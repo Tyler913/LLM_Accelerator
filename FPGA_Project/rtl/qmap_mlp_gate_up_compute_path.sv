@@ -2,7 +2,7 @@
 
 `include "qmap_defs.svh"
 
-// QMAP-backed Layer 0 MLP gate/up projection wrapper:
+// QMAP-backed per-layer MLP gate/up projection wrapper:
 //
 //   post_attention_norm[1024] + persistent gate/up Q4 weight/scale
 //       -> two q4_gemv_row_1024 cores in parallel
@@ -596,10 +596,10 @@ module qmap_mlp_gate_up_compute_path #(
             (desc_nbytes[SLOT_UP_OUTPUT] != OUTPUT_BYTES) ||
             (desc_nbytes[SLOT_GATE_EXPECTED] != OUTPUT_BYTES) ||
             (desc_nbytes[SLOT_UP_EXPECTED] != OUTPUT_BYTES) ||
-            (desc_base_addr[SLOT_GATE_WEIGHT] != `QMAP_MLP_GATE_WEIGHT_BASE_ADDR) ||
-            (desc_base_addr[SLOT_GATE_SCALE] != `QMAP_MLP_GATE_SCALE_BASE_ADDR) ||
-            (desc_base_addr[SLOT_UP_WEIGHT] != `QMAP_MLP_UP_WEIGHT_BASE_ADDR) ||
-            (desc_base_addr[SLOT_UP_SCALE] != `QMAP_MLP_UP_SCALE_BASE_ADDR) ||
+            (desc_base_addr[SLOT_GATE_WEIGHT][1 : 0] != 2'b00) ||
+            (desc_base_addr[SLOT_GATE_SCALE][1 : 0] != 2'b00) ||
+            (desc_base_addr[SLOT_UP_WEIGHT][1 : 0] != 2'b00) ||
+            (desc_base_addr[SLOT_UP_SCALE][1 : 0] != 2'b00) ||
             ((desc_flags[SLOT_ACTIVATION] & `QMAP_TENSOR_F_READ_ONLY) == 32'd0) ||
             ((desc_flags[SLOT_GATE_WEIGHT] & `QMAP_TENSOR_F_READ_ONLY) == 32'd0) ||
             ((desc_flags[SLOT_GATE_WEIGHT] & `QMAP_TENSOR_F_PACKED_Q4_LOW_EVEN) == 32'd0) ||
@@ -631,12 +631,16 @@ module qmap_mlp_gate_up_compute_path #(
             (desc_aux1[SLOT_UP_SCALE] != desc_aux1[SLOT_METADATA]) ||
             (desc_aux1[SLOT_GATE_OUTPUT] != desc_aux1[SLOT_METADATA]) ||
             (desc_aux1[SLOT_UP_OUTPUT] != desc_aux1[SLOT_METADATA]) ||
+            (desc_aux1[SLOT_GATE_EXPECTED] != desc_aux1[SLOT_METADATA]) ||
+            (desc_aux1[SLOT_UP_EXPECTED] != desc_aux1[SLOT_METADATA]) ||
             (desc_aux3[SLOT_GATE_WEIGHT] != OUT_FEATURES) ||
             (desc_aux3[SLOT_GATE_SCALE] != OUT_FEATURES) ||
             (desc_aux3[SLOT_UP_WEIGHT] != OUT_FEATURES) ||
             (desc_aux3[SLOT_UP_SCALE] != OUT_FEATURES) ||
             (desc_aux3[SLOT_GATE_OUTPUT] != OUT_FEATURES) ||
-            (desc_aux3[SLOT_UP_OUTPUT] != OUT_FEATURES)) begin
+            (desc_aux3[SLOT_UP_OUTPUT] != OUT_FEATURES) ||
+            (desc_aux3[SLOT_GATE_EXPECTED] != OUT_FEATURES) ||
+            (desc_aux3[SLOT_UP_EXPECTED] != OUT_FEATURES)) begin
             validate_error = 1'b1;
         end
     end

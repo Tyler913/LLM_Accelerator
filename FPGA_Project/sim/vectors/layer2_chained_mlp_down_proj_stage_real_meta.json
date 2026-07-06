@@ -1,0 +1,56 @@
+{
+  "format_version": 1,
+  "name": "layer2_chained_mlp_down_proj_stage_real",
+  "module": "layer2.mlp.down_proj_stage",
+  "layer_id": 2,
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "source_mlp_hidden_prefix": "layer2_chained_mlp_silu_mul_stage_real",
+  "shape": {
+    "input_size": 3072,
+    "out_features": 1024,
+    "group_size": 64,
+    "group_count": 48
+  },
+  "formats": {
+    "activation": "signed 24-bit Q12.12",
+    "weight_words32": "signed int4 packed into 32-bit words, 8 weights per word, lowest index in low nibble",
+    "scale_words32": "unsigned 16-bit Q2.14, 2 scales per 32-bit word",
+    "chunks4096": "simulation-optimized 4096-bit chunks, lowest flattened index in low bits",
+    "row_sum": "signed 58-bit Q26",
+    "output": "signed 24-bit Q12.12"
+  },
+  "saturation": {
+    "down_output_count": 0
+  },
+  "debug": {
+    "activation_q12_12_min": -3920,
+    "activation_q12_12_max": 4735,
+    "activation_q12_12_max_abs": 4735,
+    "down_q26_min": -31072333,
+    "down_q26_max": 112718534,
+    "down_q12_12_min": -1897,
+    "down_q12_12_max": 6879,
+    "down_q12_12_max_abs": 6879,
+    "fixed_down_vs_hf_max_abs_diff": 0.2505629435181618,
+    "fixed_down_vs_hf_mean_abs_diff": 0.07165342698522181
+  },
+  "files": {
+    "activation": "layer2_chained_mlp_down_proj_stage_real_activation.hex",
+    "weight_words32": "layer2_chained_mlp_down_proj_stage_real_weight_words32.hex",
+    "scale_words32": "layer2_chained_mlp_down_proj_stage_real_scale_words32.hex",
+    "weight_chunks4096": "layer2_chained_mlp_down_proj_stage_real_weight_chunks4096.hex",
+    "scale_chunks4096": "layer2_chained_mlp_down_proj_stage_real_scale_chunks4096.hex",
+    "expected_q26": "layer2_chained_mlp_down_proj_stage_real_expected_q26.hex",
+    "expected_q12_12": "layer2_chained_mlp_down_proj_stage_real_expected_q12_12.hex"
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "format_version": 1,
+  "layer_id": 1,
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "source": {
+    "q_rope_hex": "FPGA_Project/sim/vectors/qmap_layer1_chained_attention_frontend_q_rope_expected_words32.hex",
+    "base_k_cache_hex": "FPGA_Project/sim/vectors/layer1_attention_score_stage_real_k_cache.hex",
+    "base_v_cache_hex": "FPGA_Project/sim/vectors/layer1_attention_softmax_value_stage_real_v_cache.hex",
+    "current_k_hex": "FPGA_Project/sim/vectors/layer1_chained_kv_cache_append_real_k_input.hex",
+    "current_v_hex": "FPGA_Project/sim/vectors/layer1_chained_kv_cache_append_real_v_input.hex",
+    "score_scale_hex": "FPGA_Project/sim/vectors/layer1_attention_score_stage_real_score_scale_q0_31.hex"
+  },
+  "shape": {
+    "num_q_heads": 16,
+    "num_kv_heads": 8,
+    "head_dim": 128,
+    "kv_repeat": 2,
+    "cache_length": 5,
+    "score_count": 80,
+    "output_count": 2048
+  },
+  "fixed_point": {
+    "attention_scale_q0_31": 189812531,
+    "score_frac": 24,
+    "prob_frac": 16,
+    "out_frac": 12
+  },
+  "name": "layer1_chained_attention_softmax_value_stage_real",
+  "module": "layer1.self_attn.attention_softmax_value_stage",
+  "files": {
+    "score_input": "FPGA_Project/sim/vectors/layer1_chained_attention_softmax_value_stage_real_score_input.hex",
+    "score_q_head": "FPGA_Project/sim/vectors/layer1_chained_attention_softmax_value_stage_real_score_q_head.hex",
+    "score_kv_head": "FPGA_Project/sim/vectors/layer1_chained_attention_softmax_value_stage_real_score_kv_head.hex",
+    "score_position": "FPGA_Project/sim/vectors/layer1_chained_attention_softmax_value_stage_real_score_position.hex",
+    "v_cache": "FPGA_Project/sim/vectors/layer1_chained_attention_softmax_value_stage_real_v_cache.hex",
+    "exp_lut": "FPGA_Project/sim/vectors/layer1_chained_attention_softmax_value_stage_real_exp_lut.hex",
+    "cache_length": "FPGA_Project/sim/vectors/layer1_chained_attention_softmax_value_stage_real_cache_length.hex",
+    "expected_prob": "FPGA_Project/sim/vectors/layer1_chained_attention_softmax_value_stage_real_expected_prob.hex",
+    "expected_lut_index": "FPGA_Project/sim/vectors/layer1_chained_attention_softmax_value_stage_real_expected_lut_index.hex",
+    "expected_out": "FPGA_Project/sim/vectors/layer1_chained_attention_softmax_value_stage_real_expected_out.hex"
+  },
+  "debug": {
+    "value_saturation": false,
+    "prob_min": 0,
+    "prob_max": 65536,
+    "attn_out_q12_12_max_abs": 2253
+  }
+}

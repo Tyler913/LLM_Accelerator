@@ -16,6 +16,8 @@
 //     +EXPECTED_HEX=artifacts/test_vectors/qwen3_0p6b_qmap_v1/layer0_qkv_projection_medium_expected_words32.hex \
 //     +IMAGE_WORDS=7168 +EXPECTED_WORDS=32 +TIMEOUT_CYCLES=250000
 //
+// Non-Layer0 packets can also override +QMAP_BASE=0000000410080000.
+//
 // Run from the repository root:
 //
 //   iverilog -g2012 -I FPGA_Project/rtl -o FPGA_Project/sim/tb_qmap_qkv_projection_axi_smoke_top.vvp \
@@ -122,6 +124,7 @@ module tb_qmap_qkv_projection_axi_smoke_top;
     integer row_count;
     integer output_word_index;
     logic [63 : 0] output_base_addr;
+    logic [ADDR_WIDTH-1 : 0] qmap_base_addr;
     reg [8*256-1 : 0] image_hex_path;
     reg [8*256-1 : 0] expected_hex_path;
 
@@ -130,6 +133,7 @@ module tb_qmap_qkv_projection_axi_smoke_top;
         .aresetn(aresetn),
         .i_start(start),
         .i_clear(clear),
+        .i_qmap_base_addr(qmap_base_addr),
         .o_busy(busy),
         .o_done_sticky(done_sticky),
         .o_error_sticky(error_sticky),
@@ -184,6 +188,7 @@ module tb_qmap_qkv_projection_axi_smoke_top;
         expected_word_count = DEFAULT_EXPECTED_WORDS;
         expected_read_burst_count = 0;
         timeout_cycles = DEFAULT_TIMEOUT_CYCLES;
+        qmap_base_addr = `QMAP_QKV_BASE_ADDR;
 
         if (!$value$plusargs("IMAGE_HEX=%s", image_hex_path)) begin
         end
@@ -196,6 +201,8 @@ module tb_qmap_qkv_projection_axi_smoke_top;
         if (!$value$plusargs("EXPECTED_READ_BURSTS=%d", expected_read_burst_count)) begin
         end
         if (!$value$plusargs("TIMEOUT_CYCLES=%d", timeout_cycles)) begin
+        end
+        if (!$value$plusargs("QMAP_BASE=%h", qmap_base_addr)) begin
         end
 
         if ((image_word_count < 1) || (image_word_count > MEM_WORDS)) begin
@@ -245,17 +252,17 @@ module tb_qmap_qkv_projection_axi_smoke_top;
                     $display("FAIL: unsupported AXI read attributes");
                     $finish(1);
                 end
-                if ((M_AXI_ARADDR < `QMAP_QKV_BASE_ADDR) ||
-                    (((M_AXI_ARADDR - `QMAP_QKV_BASE_ADDR) >> 2) >= image_word_count)) begin
+                if ((M_AXI_ARADDR < qmap_base_addr) ||
+                    (((M_AXI_ARADDR - qmap_base_addr) >> 2) >= image_word_count)) begin
                     $display("FAIL: AXI read address out of packet range: 0x%016h", M_AXI_ARADDR);
                     $finish(1);
                 end
 
                 axi_read_active     <= 1'b1;
-                axi_read_index      <= (M_AXI_ARADDR - `QMAP_QKV_BASE_ADDR) >> 2;
+                axi_read_index      <= (M_AXI_ARADDR - qmap_base_addr) >> 2;
                 axi_read_beats_left <= {1'b0, M_AXI_ARLEN} + 1'b1;
                 M_AXI_RVALID        <= 1'b1;
-                M_AXI_RDATA         <= mem[(M_AXI_ARADDR - `QMAP_QKV_BASE_ADDR) >> 2];
+                M_AXI_RDATA         <= mem[(M_AXI_ARADDR - qmap_base_addr) >> 2];
                 M_AXI_RLAST         <= (M_AXI_ARLEN == 8'd0);
                 read_burst_count    <= read_burst_count + 1;
             end else if (M_AXI_RVALID && M_AXI_RREADY) begin
@@ -292,14 +299,14 @@ module tb_qmap_qkv_projection_axi_smoke_top;
                     $display("FAIL: unsupported AXI write attributes");
                     $finish(1);
                 end
-                if ((M_AXI_AWADDR < `QMAP_QKV_BASE_ADDR) ||
-                    (((M_AXI_AWADDR - `QMAP_QKV_BASE_ADDR) >> 2) >= image_word_count)) begin
+                if ((M_AXI_AWADDR < qmap_base_addr) ||
+                    (((M_AXI_AWADDR - qmap_base_addr) >> 2) >= image_word_count)) begin
                     $display("FAIL: AXI write address out of packet range: 0x%016h", M_AXI_AWADDR);
                     $finish(1);
                 end
 
                 axi_write_active     <= 1'b1;
-                axi_write_index      <= (M_AXI_AWADDR - `QMAP_QKV_BASE_ADDR) >> 2;
+                axi_write_index      <= (M_AXI_AWADDR - qmap_base_addr) >> 2;
                 axi_write_beats_left <= {1'b0, M_AXI_AWLEN} + 1'b1;
                 write_burst_count    <= write_burst_count + 1;
             end
@@ -346,7 +353,7 @@ module tb_qmap_qkv_projection_axi_smoke_top;
                 mem[descriptor_word_index(slot, DESC_BASE_HI_WORD)],
                 mem[descriptor_word_index(slot, DESC_BASE_LO_WORD)]
             };
-            output_word_index = (output_base_addr - `QMAP_QKV_BASE_ADDR) >> 2;
+            output_word_index = (output_base_addr - qmap_base_addr) >> 2;
             row_count = mem[descriptor_word_index(slot, DESC_DIM0_WORD)];
 
             for (row = 0 ; row < row_count ; row = row + 1) begin
@@ -397,6 +404,7 @@ module tb_qmap_qkv_projection_axi_smoke_top;
         $display("QMAP QKV AXI smoke top checks");
         $display("  image_hex                = %0s", image_hex_path);
         $display("  expected_hex             = %0s", expected_hex_path);
+        $display("  qmap_base                = 0x%016h", qmap_base_addr);
         $display("  image_words              = %0d", image_word_count);
         $display("  expected_words           = %0d", expected_word_count);
         $display("  AXI read bursts          = %0d", read_burst_count);

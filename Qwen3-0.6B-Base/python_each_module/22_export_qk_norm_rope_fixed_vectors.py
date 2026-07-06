@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import math
 from pathlib import Path
@@ -244,6 +245,25 @@ def write_scalar(path: Path, value: int, width_bits: int) -> None:
     path.write_text(twos_complement_hex(value, width_bits) + "\n", encoding="utf-8")
 
 
+def read_hex_lines(path: Path, width_bits: int, *, signed: bool) -> np.ndarray:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    sign_bit = 1 << (width_bits - 1)
+    full = 1 << width_bits
+    values: list[int] = []
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        raw = int(text.replace("_", ""), 16)
+        if raw < 0 or raw >= full:
+            raise ValueError(f"{path}:{lineno}: value out of {width_bits}-bit range: {text}")
+        if signed and (raw & sign_bit):
+            raw -= full
+        values.append(raw)
+    return np.asarray(values, dtype=np.int64)
+
+
 def as_float_array(x: torch.Tensor) -> np.ndarray:
     return np.ascontiguousarray(tensor_to_float32(x).numpy(), dtype=np.float32)
 
@@ -252,10 +272,43 @@ def fixed_to_float(values: np.ndarray, frac_bits: int) -> np.ndarray:
     return values.astype(np.float64) / float(1 << frac_bits)
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Export fixed-point q/k norm + RoPE RTL test vectors."
+    )
+    parser.add_argument("--layer-id", type=int, default=0, help="Decoder layer index")
+    parser.add_argument("--input", type=Path, default=None, help="Input per-layer Q4 QKV NPZ")
+    parser.add_argument("--prefix", type=str, default=None, help="Output filename prefix")
+    parser.add_argument(
+        "--qkv-expected-hex",
+        type=Path,
+        default=None,
+        help="Optional Q/K/V I32_Q12_12 expected hex to use instead of recomputing projections",
+    )
+    parser.add_argument(
+        "--source-label",
+        type=str,
+        default=None,
+        help="Optional human-readable source label for generated metadata",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
-    q4_path = Q4_VECTOR_DIR / "qkv_layer0_last_token_q4.npz"
+    args = parse_args()
+    if args.layer_id < 0:
+        raise ValueError(f"layer-id must be non-negative, got {args.layer_id}")
+
+    prefix = args.prefix if args.prefix is not None else (
+        PREFIX if args.layer_id == 0 else f"layer{args.layer_id}_qk_norm_rope_stage_128_real"
+    )
+    module_name = f"layer{args.layer_id}.self_attn.qk_norm_rope_stage"
+    q4_path = args.input if args.input is not None else (
+        Q4_VECTOR_DIR / f"qkv_layer{args.layer_id}_last_token_q4.npz"
+    )
+    q4_path = q4_path.resolve()
     if not q4_path.is_file():
-        raise FileNotFoundError(f"Missing {q4_path}. Run 13_export_q4_gemv_vectors.py first.")
+        raise FileNotFoundError(f"Missing {q4_path}. Export the requested layer Q4 vectors first.")
 
     tokenizer, model, backbone = load_model()
     input_ids = encode_prompt(tokenizer)
@@ -273,28 +326,62 @@ def main() -> None:
     if selected_token_id != int(input_ids[0, selected_position].item()):
         raise RuntimeError("Q4 artifact token id does not match tokenizer output")
 
-    layer0 = backbone.layers[0]
-    attn0 = layer0.self_attn
+    if args.layer_id >= len(backbone.layers):
+        raise ValueError(f"layer-id {args.layer_id} is outside model layer range")
 
-    activation_q12_12 = data["input_norm_q4_12"].astype(np.int64)
-    q_input_flat, q_row_sum_q26 = compute_projection_q12_12(
-        activation_q12_12=activation_q12_12,
-        packed_weight=data["q_weight_q4_packed"],
-        scale_q2_14=data["q_scale_q2_14"],
-        row_count=Q_ROWS,
-    )
-    k_input_flat, k_row_sum_q26 = compute_projection_q12_12(
-        activation_q12_12=activation_q12_12,
-        packed_weight=data["k_weight_q4_packed"],
-        scale_q2_14=data["k_scale_q2_14"],
-        row_count=K_ROWS,
-    )
+    layer = backbone.layers[args.layer_id]
+    attn = layer.self_attn
+
+    if args.qkv_expected_hex is None:
+        activation_q12_12 = data["input_norm_q4_12"].astype(np.int64)
+        q_input_flat, q_row_sum_q26 = compute_projection_q12_12(
+            activation_q12_12=activation_q12_12,
+            packed_weight=data["q_weight_q4_packed"],
+            scale_q2_14=data["q_scale_q2_14"],
+            row_count=Q_ROWS,
+        )
+        k_input_flat, k_row_sum_q26 = compute_projection_q12_12(
+            activation_q12_12=activation_q12_12,
+            packed_weight=data["k_weight_q4_packed"],
+            scale_q2_14=data["k_scale_q2_14"],
+            row_count=K_ROWS,
+        )
+        q_recompute_float = (
+            q_row_sum_q26.astype(np.float64) / float(1 << (ACT_FRAC + SCALE_FRAC))
+        ).astype(np.float32)
+        k_recompute_float = (
+            k_row_sum_q26.astype(np.float64) / float(1 << (ACT_FRAC + SCALE_FRAC))
+        ).astype(np.float32)
+        q_projection_diff = float(
+            np.max(np.abs(q_recompute_float - data["actual_q_q4"].astype(np.float32)))
+        )
+        k_projection_diff = float(
+            np.max(np.abs(k_recompute_float - data["actual_k_q4"].astype(np.float32)))
+        )
+        q_input_source = "integer QMAP/Q4 q_proj recompute, then arithmetic >> 14 to I32_Q12_12"
+        k_input_source = "integer QMAP/Q4 k_proj recompute, then arithmetic >> 14 to I32_Q12_12"
+    else:
+        qkv_words = read_hex_lines(args.qkv_expected_hex, 32, signed=True)
+        expected_words = Q_ROWS + K_ROWS + K_ROWS
+        if qkv_words.shape != (expected_words,):
+            raise RuntimeError(
+                f"qkv expected shape mismatch: {qkv_words.shape}, expected {(expected_words,)}"
+            )
+        q_low, q_high = signed_limits(IN_WIDTH)
+        if np.any((qkv_words < q_low) | (qkv_words > q_high)):
+            raise RuntimeError(f"qkv expected values exceed signed {IN_WIDTH}-bit range")
+        q_input_flat = qkv_words[:Q_ROWS]
+        k_input_flat = qkv_words[Q_ROWS : Q_ROWS + K_ROWS]
+        q_projection_diff = None
+        k_projection_diff = None
+        q_input_source = f"Q output slice from {args.qkv_expected_hex}"
+        k_input_source = f"K output slice from {args.qkv_expected_hex}"
 
     q_input_heads = q_input_flat.reshape(NUM_Q_HEADS, HEAD_DIM)
     k_input_heads = k_input_flat.reshape(NUM_K_HEADS, HEAD_DIM)
 
-    q_gamma_float = as_float_array(attn0.q_norm.weight)
-    k_gamma_float = as_float_array(attn0.k_norm.weight)
+    q_gamma_float = as_float_array(attn.q_norm.weight)
+    k_gamma_float = as_float_array(attn.k_norm.weight)
     if q_gamma_float.shape != (HEAD_DIM,) or k_gamma_float.shape != (HEAD_DIM,):
         raise RuntimeError(
             f"Unexpected gamma shapes q={q_gamma_float.shape}, k={k_gamma_float.shape}"
@@ -331,20 +418,20 @@ def main() -> None:
     rope_saturation = q_rope_saturation or k_rope_saturation
 
     files = {
-        "q_input": SIM_VECTOR_DIR / f"{PREFIX}_q_input.hex",
-        "k_input": SIM_VECTOR_DIR / f"{PREFIX}_k_input.hex",
-        "q_gamma": SIM_VECTOR_DIR / f"{PREFIX}_q_gamma.hex",
-        "k_gamma": SIM_VECTOR_DIR / f"{PREFIX}_k_gamma.hex",
-        "cos": SIM_VECTOR_DIR / f"{PREFIX}_cos.hex",
-        "sin": SIM_VECTOR_DIR / f"{PREFIX}_sin.hex",
-        "q_norm_expected": SIM_VECTOR_DIR / f"{PREFIX}_q_norm_expected.hex",
-        "k_norm_expected": SIM_VECTOR_DIR / f"{PREFIX}_k_norm_expected.hex",
-        "q_rope_expected": SIM_VECTOR_DIR / f"{PREFIX}_q_rope_expected.hex",
-        "k_rope_expected": SIM_VECTOR_DIR / f"{PREFIX}_k_rope_expected.hex",
-        "norm_saturation": SIM_VECTOR_DIR / f"{PREFIX}_norm_saturation.hex",
-        "rope_saturation": SIM_VECTOR_DIR / f"{PREFIX}_rope_saturation.hex",
-        "saturation": SIM_VECTOR_DIR / f"{PREFIX}_saturation.hex",
-        "meta": SIM_VECTOR_DIR / f"{PREFIX}_meta.json",
+        "q_input": SIM_VECTOR_DIR / f"{prefix}_q_input.hex",
+        "k_input": SIM_VECTOR_DIR / f"{prefix}_k_input.hex",
+        "q_gamma": SIM_VECTOR_DIR / f"{prefix}_q_gamma.hex",
+        "k_gamma": SIM_VECTOR_DIR / f"{prefix}_k_gamma.hex",
+        "cos": SIM_VECTOR_DIR / f"{prefix}_cos.hex",
+        "sin": SIM_VECTOR_DIR / f"{prefix}_sin.hex",
+        "q_norm_expected": SIM_VECTOR_DIR / f"{prefix}_q_norm_expected.hex",
+        "k_norm_expected": SIM_VECTOR_DIR / f"{prefix}_k_norm_expected.hex",
+        "q_rope_expected": SIM_VECTOR_DIR / f"{prefix}_q_rope_expected.hex",
+        "k_rope_expected": SIM_VECTOR_DIR / f"{prefix}_k_rope_expected.hex",
+        "norm_saturation": SIM_VECTOR_DIR / f"{prefix}_norm_saturation.hex",
+        "rope_saturation": SIM_VECTOR_DIR / f"{prefix}_rope_saturation.hex",
+        "saturation": SIM_VECTOR_DIR / f"{prefix}_saturation.hex",
+        "meta": SIM_VECTOR_DIR / f"{prefix}_meta.json",
     }
 
     write_hex_lines(files["q_input"], q_input_heads, IN_WIDTH)
@@ -361,17 +448,11 @@ def main() -> None:
     write_scalar(files["rope_saturation"], 1 if rope_saturation else 0, 1)
     write_scalar(files["saturation"], 1 if (norm_saturation or rope_saturation) else 0, 1)
 
-    q_recompute_float = (
-        q_row_sum_q26.astype(np.float64) / float(1 << (ACT_FRAC + SCALE_FRAC))
-    ).astype(np.float32)
-    k_recompute_float = (
-        k_row_sum_q26.astype(np.float64) / float(1 << (ACT_FRAC + SCALE_FRAC))
-    ).astype(np.float32)
-
     meta: dict[str, Any] = {
         "format_version": 1,
-        "name": PREFIX,
-        "module": MODULE_NAME,
+        "name": prefix,
+        "module": module_name,
+        "layer_id": args.layer_id,
         "prompt": PROMPT,
         "token_ids": [int(value) for value in input_ids.flatten().tolist()],
         "selected_position": int(selected_position),
@@ -379,8 +460,12 @@ def main() -> None:
         "selected_token_text": tokenizer.decode([selected_token_id]),
         "source": {
             "q4_npz": q4_path.relative_to(REPO_ROOT).as_posix(),
-            "q_input_source": "integer QMAP/Q4 q_proj recompute, then arithmetic >> 14 to I32_Q12_12",
-            "k_input_source": "integer QMAP/Q4 k_proj recompute, then arithmetic >> 14 to I32_Q12_12",
+            "qkv_expected_hex": None
+            if args.qkv_expected_hex is None
+            else args.qkv_expected_hex.resolve().relative_to(REPO_ROOT).as_posix(),
+            "source_label": args.source_label,
+            "q_input_source": q_input_source,
+            "k_input_source": k_input_source,
         },
         "formats": {
             "q_input": f"signed {IN_WIDTH}-bit Q12.{IN_FRAC}",
@@ -406,12 +491,8 @@ def main() -> None:
             "rope_output": bool(rope_saturation),
         },
         "debug": {
-            "q_projection_recompute_vs_artifact_max_abs_diff": float(
-                np.max(np.abs(q_recompute_float - data["actual_q_q4"].astype(np.float32)))
-            ),
-            "k_projection_recompute_vs_artifact_max_abs_diff": float(
-                np.max(np.abs(k_recompute_float - data["actual_k_q4"].astype(np.float32)))
-            ),
+            "q_projection_recompute_vs_artifact_max_abs_diff": q_projection_diff,
+            "k_projection_recompute_vs_artifact_max_abs_diff": k_projection_diff,
             "q_input_q12_12_max_abs": int(np.max(np.abs(q_input_flat))),
             "k_input_q12_12_max_abs": int(np.max(np.abs(k_input_flat))),
             "q_norm_q12_12_max_abs": int(np.max(np.abs(q_norm_q12_12))),
@@ -443,7 +524,7 @@ def main() -> None:
 
     print("Exported fixed-point q/k norm + RoPE RTL test vectors")
     print("=" * 80)
-    print(f"Module: {MODULE_NAME}")
+    print(f"Module: {module_name}")
     print(f"Prompt: {PROMPT!r}")
     print(f"Selected position: {selected_position}")
     print(f"Selected token id: {selected_token_id} / {tokenizer.decode([selected_token_id])!r}")
@@ -456,11 +537,14 @@ def main() -> None:
     print(f"Debug meta:       {files['meta']}")
     print(f"Norm saturation:  {int(norm_saturation)}")
     print(f"RoPE saturation:  {int(rope_saturation)}")
-    print(
-        "Projection recompute diff: "
-        f"q={meta['debug']['q_projection_recompute_vs_artifact_max_abs_diff']:.8g} "
-        f"k={meta['debug']['k_projection_recompute_vs_artifact_max_abs_diff']:.8g}"
-    )
+    if q_projection_diff is None or k_projection_diff is None:
+        print("Projection recompute diff: skipped for external QKV expected input")
+    else:
+        print(
+            "Projection recompute diff: "
+            f"q={q_projection_diff:.8g} "
+            f"k={k_projection_diff:.8g}"
+        )
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import argparse
 from pathlib import Path
 from typing import Any
 
@@ -20,10 +21,8 @@ from common import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
-POST_NORM_PREFIX = "post_attention_residual_norm_stage_real"
-
-PREFIX = "mlp_gate_up_proj_stage_real"
-MODULE_NAME = "layer0.mlp.gate_up_proj_stage"
+DEFAULT_POST_NORM_PREFIX = "post_attention_residual_norm_stage_real"
+DEFAULT_PREFIX = "mlp_gate_up_proj_stage_real"
 
 INPUT_SIZE = 1024
 OUT_FEATURES = 3072
@@ -138,7 +137,21 @@ def q26_to_q12_12(row_sum_q26: np.ndarray) -> tuple[np.ndarray, int]:
     return saturate_signed_array(shifted, OUT_WIDTH)
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Export fixed-point MLP gate/up Q4 projection RTL vectors.")
+    parser.add_argument("--layer-id", type=int, default=0)
+    parser.add_argument("--post-norm-prefix", default=DEFAULT_POST_NORM_PREFIX)
+    parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+    layer_id = int(args.layer_id)
+    post_norm_prefix = str(args.post_norm_prefix)
+    prefix = str(args.prefix)
+    module_name = f"layer{layer_id}.mlp.gate_up_proj_stage"
+
     tokenizer, model, backbone = load_model()
     input_ids = encode_prompt(tokenizer)
     batch_size, prompt_len = input_ids.shape
@@ -147,14 +160,17 @@ def main() -> None:
 
     selected_position = prompt_len - 1
     selected_token_id = int(input_ids[0, selected_position].item())
-    layer0 = backbone.layers[0]
-    mlp0 = layer0.mlp
+    if layer_id < 0 or layer_id >= len(backbone.layers):
+        raise ValueError(f"layer_id {layer_id} is outside model layer range 0..{len(backbone.layers) - 1}")
+
+    layer = backbone.layers[layer_id]
+    mlp = layer.mlp
 
     records: dict[str, dict[str, torch.Tensor]] = {}
     hooks = [
-        layer0.post_attention_layernorm.register_forward_hook(capture_module_io(records, "post_norm")),
-        mlp0.gate_proj.register_forward_hook(capture_module_io(records, "gate_proj")),
-        mlp0.up_proj.register_forward_hook(capture_module_io(records, "up_proj")),
+        layer.post_attention_layernorm.register_forward_hook(capture_module_io(records, "post_norm")),
+        mlp.gate_proj.register_forward_hook(capture_module_io(records, "gate_proj")),
+        mlp.up_proj.register_forward_hook(capture_module_io(records, "up_proj")),
     ]
     try:
         with torch.no_grad():
@@ -163,8 +179,8 @@ def main() -> None:
         for hook in hooks:
             hook.remove()
 
-    post_norm_path = SIM_VECTOR_DIR / f"{POST_NORM_PREFIX}_expected_norm.hex"
-    post_norm_meta_path = SIM_VECTOR_DIR / f"{POST_NORM_PREFIX}_meta.json"
+    post_norm_path = SIM_VECTOR_DIR / f"{post_norm_prefix}_expected_norm.hex"
+    post_norm_meta_path = SIM_VECTOR_DIR / f"{post_norm_prefix}_meta.json"
     activation_q12_12 = read_signed_hex_lines(post_norm_path, ACT_WIDTH)
     if activation_q12_12.shape != (INPUT_SIZE,):
         raise RuntimeError(f"Expected post-norm vector shape {(INPUT_SIZE,)}, got {activation_q12_12.shape}")
@@ -174,9 +190,11 @@ def main() -> None:
             raise RuntimeError("post-norm vector selected position does not match prompt")
         if int(post_norm_meta["selected_token_id"]) != selected_token_id:
             raise RuntimeError("post-norm vector selected token does not match prompt")
+        if int(post_norm_meta.get("layer_id", layer_id)) != layer_id:
+            raise RuntimeError("post-norm vector layer_id does not match requested layer")
 
-    gate_weight_fp32 = np.ascontiguousarray(tensor_to_float32(mlp0.gate_proj.weight).numpy(), dtype=np.float32)
-    up_weight_fp32 = np.ascontiguousarray(tensor_to_float32(mlp0.up_proj.weight).numpy(), dtype=np.float32)
+    gate_weight_fp32 = np.ascontiguousarray(tensor_to_float32(mlp.gate_proj.weight).numpy(), dtype=np.float32)
+    up_weight_fp32 = np.ascontiguousarray(tensor_to_float32(mlp.up_proj.weight).numpy(), dtype=np.float32)
     gate_weight_q4, gate_scale_q2_14 = quantize_weight_q4(gate_weight_fp32)
     up_weight_q4, up_scale_q2_14 = quantize_weight_q4(up_weight_fp32)
 
@@ -193,20 +211,20 @@ def main() -> None:
     up_diff = fixed_to_float(up_q12_12, OUT_FRAC) - hf_up.astype(np.float64)
 
     files = {
-        "activation": SIM_VECTOR_DIR / f"{PREFIX}_activation.hex",
-        "gate_weight_words32": SIM_VECTOR_DIR / f"{PREFIX}_gate_weight_words32.hex",
-        "gate_scale_words32": SIM_VECTOR_DIR / f"{PREFIX}_gate_scale_words32.hex",
-        "gate_weight_chunks4096": SIM_VECTOR_DIR / f"{PREFIX}_gate_weight_chunks4096.hex",
-        "gate_scale_chunks4096": SIM_VECTOR_DIR / f"{PREFIX}_gate_scale_chunks4096.hex",
-        "up_weight_words32": SIM_VECTOR_DIR / f"{PREFIX}_up_weight_words32.hex",
-        "up_scale_words32": SIM_VECTOR_DIR / f"{PREFIX}_up_scale_words32.hex",
-        "up_weight_chunks4096": SIM_VECTOR_DIR / f"{PREFIX}_up_weight_chunks4096.hex",
-        "up_scale_chunks4096": SIM_VECTOR_DIR / f"{PREFIX}_up_scale_chunks4096.hex",
-        "gate_expected_q26": SIM_VECTOR_DIR / f"{PREFIX}_gate_expected_q26.hex",
-        "gate_expected_q12_12": SIM_VECTOR_DIR / f"{PREFIX}_gate_expected_q12_12.hex",
-        "up_expected_q26": SIM_VECTOR_DIR / f"{PREFIX}_up_expected_q26.hex",
-        "up_expected_q12_12": SIM_VECTOR_DIR / f"{PREFIX}_up_expected_q12_12.hex",
-        "meta": SIM_VECTOR_DIR / f"{PREFIX}_meta.json",
+        "activation": SIM_VECTOR_DIR / f"{prefix}_activation.hex",
+        "gate_weight_words32": SIM_VECTOR_DIR / f"{prefix}_gate_weight_words32.hex",
+        "gate_scale_words32": SIM_VECTOR_DIR / f"{prefix}_gate_scale_words32.hex",
+        "gate_weight_chunks4096": SIM_VECTOR_DIR / f"{prefix}_gate_weight_chunks4096.hex",
+        "gate_scale_chunks4096": SIM_VECTOR_DIR / f"{prefix}_gate_scale_chunks4096.hex",
+        "up_weight_words32": SIM_VECTOR_DIR / f"{prefix}_up_weight_words32.hex",
+        "up_scale_words32": SIM_VECTOR_DIR / f"{prefix}_up_scale_words32.hex",
+        "up_weight_chunks4096": SIM_VECTOR_DIR / f"{prefix}_up_weight_chunks4096.hex",
+        "up_scale_chunks4096": SIM_VECTOR_DIR / f"{prefix}_up_scale_chunks4096.hex",
+        "gate_expected_q26": SIM_VECTOR_DIR / f"{prefix}_gate_expected_q26.hex",
+        "gate_expected_q12_12": SIM_VECTOR_DIR / f"{prefix}_gate_expected_q12_12.hex",
+        "up_expected_q26": SIM_VECTOR_DIR / f"{prefix}_up_expected_q26.hex",
+        "up_expected_q12_12": SIM_VECTOR_DIR / f"{prefix}_up_expected_q12_12.hex",
+        "meta": SIM_VECTOR_DIR / f"{prefix}_meta.json",
     }
 
     write_hex_lines(files["activation"], activation_q12_12, ACT_WIDTH)
@@ -225,14 +243,15 @@ def main() -> None:
 
     meta: dict[str, Any] = {
         "format_version": 1,
-        "name": PREFIX,
-        "module": MODULE_NAME,
+        "name": prefix,
+        "module": module_name,
+        "layer_id": layer_id,
         "prompt": PROMPT,
         "token_ids": [int(value) for value in input_ids.flatten().tolist()],
         "selected_position": int(selected_position),
         "selected_token_id": int(selected_token_id),
         "selected_token_text": tokenizer.decode([selected_token_id]),
-        "source_post_norm_prefix": POST_NORM_PREFIX,
+        "source_post_norm_prefix": post_norm_prefix,
         "shape": {
             "input_size": INPUT_SIZE,
             "out_features": OUT_FEATURES,
@@ -271,7 +290,7 @@ def main() -> None:
 
     print("Exported fixed-point MLP gate/up Q4 projection RTL test vectors")
     print("=" * 80)
-    print(f"Module: {MODULE_NAME}")
+    print(f"Module: {module_name}")
     print(f"Prompt: {PROMPT!r}")
     print(f"Selected position: {selected_position}")
     print(f"Selected token id: {selected_token_id} / {tokenizer.decode([selected_token_id])!r}")

@@ -1,0 +1,49 @@
+{
+  "format_version": 1,
+  "name": "layer1_mlp_residual_add_stage_real",
+  "module": "layer1.mlp.residual_add_stage",
+  "layer_id": 1,
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "source_post_attention_prefix": "layer1_post_attention_residual_norm_stage_real",
+  "source_down_prefix": "layer1_mlp_down_proj_stage_real",
+  "shape": {
+    "input_size": 1024
+  },
+  "formats": {
+    "post_attn_hidden": "signed 24-bit Q14.10",
+    "down_out": "signed 24-bit Q12.12",
+    "expected_layer_out": "signed 24-bit Q14.10"
+  },
+  "saturation": {
+    "residual_count": 0
+  },
+  "debug": {
+    "post_attn_hidden_q14_10_min": -1687,
+    "post_attn_hidden_q14_10_max": 3755,
+    "post_attn_hidden_q14_10_max_abs": 3755,
+    "down_q12_12_min": -2550,
+    "down_q12_12_max": 15159,
+    "down_q12_12_max_abs": 15159,
+    "layer_out_q14_10_min": -1754,
+    "layer_out_q14_10_max": 7544,
+    "layer_out_q14_10_max_abs": 7544,
+    "fixed_layer_out_vs_hf_max_abs_diff": 0.164215087890625,
+    "fixed_layer_out_vs_hf_mean_abs_diff": 0.03136938848092541
+  },
+  "files": {
+    "post_attn_hidden": "layer1_mlp_residual_add_stage_real_post_attn_hidden.hex",
+    "down_out": "layer1_mlp_residual_add_stage_real_down_out.hex",
+    "expected_layer_out": "layer1_mlp_residual_add_stage_real_expected_layer_out.hex",
+    "residual_saturation": "layer1_mlp_residual_add_stage_real_residual_saturation.hex"
+  }
+}

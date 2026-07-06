@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 from pathlib import Path
@@ -82,12 +83,51 @@ def kv_addr(
     )
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Export fixed-point KV cache append RTL test vectors."
+    )
+    parser.add_argument("--layer-id", type=int, default=LAYER_ID, help="Decoder layer index")
+    parser.add_argument("--input", type=Path, default=None, help="Input per-layer Q4 QKV NPZ")
+    parser.add_argument("--prefix", type=str, default=None, help="Output filename prefix")
+    parser.add_argument(
+        "--qkv-expected-hex",
+        type=Path,
+        default=None,
+        help="Optional Q/K/V I32_Q12_12 expected hex to use instead of recomputing K/V projections",
+    )
+    parser.add_argument(
+        "--source-label",
+        type=str,
+        default=None,
+        help="Optional human-readable source label for generated metadata",
+    )
+    parser.add_argument(
+        "--kv-cache-base",
+        type=lambda text: int(text.replace("_", ""), 0),
+        default=KV_CACHE_BASE_ADDR,
+        help="Base address for the full model KV cache region",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+    if args.layer_id < 0:
+        raise ValueError(f"layer-id must be non-negative, got {args.layer_id}")
+
     qk = load_qk_exporter()
 
-    q4_path = Q4_VECTOR_DIR / "qkv_layer0_last_token_q4.npz"
+    prefix = args.prefix if args.prefix is not None else (
+        PREFIX if args.layer_id == 0 else f"layer{args.layer_id}_kv_cache_append_real"
+    )
+    module_name = f"layer{args.layer_id}.self_attn.kv_cache_append"
+    q4_path = args.input if args.input is not None else (
+        Q4_VECTOR_DIR / f"qkv_layer{args.layer_id}_last_token_q4.npz"
+    )
+    q4_path = q4_path.resolve()
     if not q4_path.is_file():
-        raise FileNotFoundError(f"Missing {q4_path}. Run 13_export_q4_gemv_vectors.py first.")
+        raise FileNotFoundError(f"Missing {q4_path}. Export the requested layer Q4 vectors first.")
 
     tokenizer, model, backbone = load_model()
     input_ids = encode_prompt(tokenizer)
@@ -107,26 +147,60 @@ def main() -> None:
     if selected_position >= MAX_CONTEXT:
         raise RuntimeError(f"Selected position {selected_position} exceeds MAX_CONTEXT={MAX_CONTEXT}")
 
-    attn0 = backbone.layers[0].self_attn
-    activation_q12_12 = data["input_norm_q4_12"].astype(np.int64)
+    if args.layer_id >= len(backbone.layers):
+        raise ValueError(f"layer-id {args.layer_id} is outside model layer range")
 
-    k_input_flat, k_row_sum_q26 = qk.compute_projection_q12_12(
-        activation_q12_12=activation_q12_12,
-        packed_weight=data["k_weight_q4_packed"],
-        scale_q2_14=data["k_scale_q2_14"],
-        row_count=KV_ROWS,
-    )
-    v_input_flat, v_row_sum_q26 = qk.compute_projection_q12_12(
-        activation_q12_12=activation_q12_12,
-        packed_weight=data["v_weight_q4_packed"],
-        scale_q2_14=data["v_scale_q2_14"],
-        row_count=KV_ROWS,
-    )
+    attn = backbone.layers[args.layer_id].self_attn
+    if args.qkv_expected_hex is None:
+        activation_q12_12 = data["input_norm_q4_12"].astype(np.int64)
+        k_input_flat, k_row_sum_q26 = qk.compute_projection_q12_12(
+            activation_q12_12=activation_q12_12,
+            packed_weight=data["k_weight_q4_packed"],
+            scale_q2_14=data["k_scale_q2_14"],
+            row_count=KV_ROWS,
+        )
+        v_input_flat, v_row_sum_q26 = qk.compute_projection_q12_12(
+            activation_q12_12=activation_q12_12,
+            packed_weight=data["v_weight_q4_packed"],
+            scale_q2_14=data["v_scale_q2_14"],
+            row_count=KV_ROWS,
+        )
+        k_recompute_float = (
+            k_row_sum_q26.astype(np.float64) / float(1 << (qk.ACT_FRAC + qk.SCALE_FRAC))
+        ).astype(np.float32)
+        v_recompute_float = (
+            v_row_sum_q26.astype(np.float64) / float(1 << (qk.ACT_FRAC + qk.SCALE_FRAC))
+        ).astype(np.float32)
+        k_projection_diff = float(
+            np.max(np.abs(k_recompute_float - data["actual_k_q4"].astype(np.float32)))
+        )
+        v_projection_diff = float(
+            np.max(np.abs(v_recompute_float - data["actual_v_q4"].astype(np.float32)))
+        )
+        k_input_source = "integer QMAP/Q4 k_proj recompute, then arithmetic >> 14 to I32_Q12_12"
+        v_input_source = "integer QMAP/Q4 v_proj recompute, then arithmetic >> 14 to I32_Q12_12"
+    else:
+        qkv_words = qk.read_hex_lines(args.qkv_expected_hex, 32, signed=True)
+        q_rows = qk.Q_ROWS
+        expected_words = q_rows + KV_ROWS + KV_ROWS
+        if qkv_words.shape != (expected_words,):
+            raise RuntimeError(
+                f"qkv expected shape mismatch: {qkv_words.shape}, expected {(expected_words,)}"
+            )
+        q_low, q_high = qk.signed_limits(IN_WIDTH)
+        if np.any((qkv_words < q_low) | (qkv_words > q_high)):
+            raise RuntimeError(f"qkv expected values exceed signed {IN_WIDTH}-bit range")
+        k_input_flat = qkv_words[q_rows : q_rows + KV_ROWS]
+        v_input_flat = qkv_words[q_rows + KV_ROWS :]
+        k_projection_diff = None
+        v_projection_diff = None
+        k_input_source = f"K output slice from {args.qkv_expected_hex}"
+        v_input_source = f"V output slice from {args.qkv_expected_hex}"
 
     k_input_heads = k_input_flat.reshape(NUM_KV_HEADS, HEAD_DIM)
     v_input_heads = v_input_flat.reshape(NUM_KV_HEADS, HEAD_DIM)
 
-    k_gamma_float = qk.as_float_array(attn0.k_norm.weight)
+    k_gamma_float = qk.as_float_array(attn.k_norm.weight)
     k_gamma_q8_7, k_gamma_saturation_count = qk.quantize_signed(
         k_gamma_float,
         qk.GAMMA_WIDTH,
@@ -162,8 +236,8 @@ def main() -> None:
                 value = int(source[head, dim])
                 expected_addr.append(
                     kv_addr(
-                        base_addr=KV_CACHE_BASE_ADDR,
-                        layer_id=LAYER_ID,
+                        base_addr=args.kv_cache_base,
+                        layer_id=args.layer_id,
                         kv_kind=kv_kind,
                         head=head,
                         position=selected_position,
@@ -182,14 +256,14 @@ def main() -> None:
     expected_dim_array = np.array(expected_dim, dtype=np.uint8)
 
     files = {
-        "k_input": SIM_VECTOR_DIR / f"{PREFIX}_k_input.hex",
-        "v_input": SIM_VECTOR_DIR / f"{PREFIX}_v_input.hex",
-        "expected_addr": SIM_VECTOR_DIR / f"{PREFIX}_expected_addr.hex",
-        "expected_data": SIM_VECTOR_DIR / f"{PREFIX}_expected_data.hex",
-        "expected_kind": SIM_VECTOR_DIR / f"{PREFIX}_expected_kind.hex",
-        "expected_head": SIM_VECTOR_DIR / f"{PREFIX}_expected_head.hex",
-        "expected_dim": SIM_VECTOR_DIR / f"{PREFIX}_expected_dim.hex",
-        "meta": SIM_VECTOR_DIR / f"{PREFIX}_meta.json",
+        "k_input": SIM_VECTOR_DIR / f"{prefix}_k_input.hex",
+        "v_input": SIM_VECTOR_DIR / f"{prefix}_v_input.hex",
+        "expected_addr": SIM_VECTOR_DIR / f"{prefix}_expected_addr.hex",
+        "expected_data": SIM_VECTOR_DIR / f"{prefix}_expected_data.hex",
+        "expected_kind": SIM_VECTOR_DIR / f"{prefix}_expected_kind.hex",
+        "expected_head": SIM_VECTOR_DIR / f"{prefix}_expected_head.hex",
+        "expected_dim": SIM_VECTOR_DIR / f"{prefix}_expected_dim.hex",
+        "meta": SIM_VECTOR_DIR / f"{prefix}_meta.json",
     }
 
     write_hex_lines(files["k_input"], k_rope_q12_12, IN_WIDTH)
@@ -200,25 +274,28 @@ def main() -> None:
     write_hex_lines(files["expected_head"], expected_head_array, 8)
     write_hex_lines(files["expected_dim"], expected_dim_array, 8)
 
-    k_recompute_float = (
-        k_row_sum_q26.astype(np.float64) / float(1 << (qk.ACT_FRAC + qk.SCALE_FRAC))
-    ).astype(np.float32)
-    v_recompute_float = (
-        v_row_sum_q26.astype(np.float64) / float(1 << (qk.ACT_FRAC + qk.SCALE_FRAC))
-    ).astype(np.float32)
-
     meta: dict[str, Any] = {
         "format_version": 1,
-        "name": PREFIX,
-        "module": MODULE_NAME,
+        "name": prefix,
+        "module": module_name,
+        "layer_id": args.layer_id,
         "prompt": PROMPT,
         "token_ids": [int(value) for value in input_ids.flatten().tolist()],
         "selected_position": selected_position,
         "selected_token_id": selected_token_id,
         "selected_token_text": tokenizer.decode([selected_token_id]),
+        "source": {
+            "q4_npz": q4_path.relative_to(REPO_ROOT).as_posix(),
+            "qkv_expected_hex": None
+            if args.qkv_expected_hex is None
+            else args.qkv_expected_hex.resolve().relative_to(REPO_ROOT).as_posix(),
+            "source_label": args.source_label,
+            "k_input_source": k_input_source,
+            "v_input_source": v_input_source,
+        },
         "cache": {
-            "base_addr": f"0x{KV_CACHE_BASE_ADDR:016X}",
-            "layer_id": LAYER_ID,
+            "base_addr": f"0x{args.kv_cache_base:016X}",
+            "layer_id": args.layer_id,
             "max_context": MAX_CONTEXT,
             "element_bytes": ELEMENT_BYTES,
             "write_order": "all K heads/dims first, then all V heads/dims",
@@ -242,12 +319,8 @@ def main() -> None:
             "k_rope_output": bool(k_rope_saturation),
         },
         "debug": {
-            "k_projection_recompute_vs_artifact_max_abs_diff": float(
-                np.max(np.abs(k_recompute_float - data["actual_k_q4"].astype(np.float32)))
-            ),
-            "v_projection_recompute_vs_artifact_max_abs_diff": float(
-                np.max(np.abs(v_recompute_float - data["actual_v_q4"].astype(np.float32)))
-            ),
+            "k_projection_recompute_vs_artifact_max_abs_diff": k_projection_diff,
+            "v_projection_recompute_vs_artifact_max_abs_diff": v_projection_diff,
             "k_rope_q12_12_max_abs": int(np.max(np.abs(k_rope_q12_12))),
             "v_input_q12_12_max_abs": int(np.max(np.abs(v_input_heads))),
             "k_norm_head0": {
@@ -263,7 +336,7 @@ def main() -> None:
 
     print("Exported fixed-point KV cache append RTL test vectors")
     print("=" * 80)
-    print(f"Module: {MODULE_NAME}")
+    print(f"Module: {module_name}")
     print(f"Prompt: {PROMPT!r}")
     print(f"Selected position: {selected_position}")
     print(f"Selected token id: {selected_token_id} / {tokenizer.decode([selected_token_id])!r}")

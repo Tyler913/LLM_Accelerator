@@ -15,6 +15,8 @@ SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
 QMAP_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_qmap_v1"
 
 PREFIX = "mlp_residual_add_stage_real"
+DEFAULT_POST_ATTN_QMAP_PREFIX = "qmap_post_attention_residual_norm"
+DEFAULT_DOWN_QMAP_PREFIX = "qmap_mlp_down"
 DEFAULT_OUTPUT = QMAP_VECTOR_DIR / "mlp_residual_add_runtime.qmap.bin"
 DEFAULT_MANIFEST = QMAP_VECTOR_DIR / "mlp_residual_add_runtime_manifest.json"
 DEFAULT_SIM_HEX = SIM_VECTOR_DIR / "qmap_mlp_residual_add_image_words32.hex"
@@ -82,6 +84,10 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: file.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def parse_int_auto(value: str) -> int:
+    return int(value.replace("_", ""), 0)
 
 
 def read_hex_lines(path: Path, width_bits: int, *, signed: bool) -> np.ndarray:
@@ -192,9 +198,13 @@ def add_payload(payloads: list[dict[str, Any]], *, name: str, cursor: int, paylo
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Export a QMAP runtime packet for Layer 0 final MLP residual-add simulation."
+        description="Export a QMAP runtime packet for final MLP residual-add simulation."
     )
     parser.add_argument("--prefix", default=PREFIX)
+    parser.add_argument("--layer-id", type=int, default=LAYER_ID)
+    parser.add_argument("--qmap-base", type=parse_int_auto, default=QMAP_BASE)
+    parser.add_argument("--post-attn-qmap-prefix", default=DEFAULT_POST_ATTN_QMAP_PREFIX)
+    parser.add_argument("--down-qmap-prefix", default=DEFAULT_DOWN_QMAP_PREFIX)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
@@ -205,6 +215,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     prefix = str(args.prefix)
+    layer_id = int(args.layer_id)
+    qmap_base = int(args.qmap_base)
+    post_attn_qmap_prefix = str(args.post_attn_qmap_prefix)
+    down_qmap_prefix = str(args.down_qmap_prefix)
 
     post_attn_hidden = read_hex_lines(
         SIM_VECTOR_DIR / f"{prefix}_post_attn_hidden.hex",
@@ -225,7 +239,7 @@ def main() -> None:
     if saturation.shape != (1,):
         raise RuntimeError(f"saturation shape mismatch: expected {(1,)}, got {saturation.shape}")
 
-    chained_post_path = SIM_VECTOR_DIR / "qmap_post_attention_residual_norm_expected_hidden_words32.hex"
+    chained_post_path = SIM_VECTOR_DIR / f"{post_attn_qmap_prefix}_expected_hidden_words32.hex"
     if chained_post_path.is_file():
         chained_post = read_hex_lines(chained_post_path, 32, signed=True)
         if chained_post.shape != (INPUT_SIZE,):
@@ -234,7 +248,7 @@ def main() -> None:
             mismatch = int(np.nonzero(chained_post.astype(np.int64) != post_attn_hidden.astype(np.int64))[0][0])
             raise RuntimeError(f"post_attn_hidden does not match QMAP post-attention hidden at index {mismatch}")
 
-    chained_down_path = SIM_VECTOR_DIR / "qmap_mlp_down_expected_words32.hex"
+    chained_down_path = SIM_VECTOR_DIR / f"{down_qmap_prefix}_expected_words32.hex"
     if chained_down_path.is_file():
         chained_down = read_hex_lines(chained_down_path, 32, signed=True)
         if chained_down.shape != (INPUT_SIZE,):
@@ -249,7 +263,7 @@ def main() -> None:
     vector_bytes = INPUT_SIZE * 4
     metadata_words = np.array(
         [
-            LAYER_ID,
+            layer_id,
             INPUT_SIZE,
             POST_ATTENTION_WIDTH,
             POST_ATTENTION_FRAC,
@@ -276,7 +290,7 @@ def main() -> None:
     payload_by_name = {item["name"]: item for item in payloads}
 
     def addr(name: str) -> int:
-        return QMAP_BASE + int(payload_by_name[name]["offset"])
+        return qmap_base + int(payload_by_name[name]["offset"])
 
     def size(name: str) -> int:
         return len(payload_by_name[name]["payload"])
@@ -284,9 +298,9 @@ def main() -> None:
     ro = TENSOR_F_ROW_MAJOR | TENSOR_F_READ_ONLY
     wo = TENSOR_F_ROW_MAJOR | TENSOR_F_WRITE_ONLY
     expected_flags = TENSOR_F_ROW_MAJOR | TENSOR_F_READ_ONLY | TENSOR_F_DEBUG_ONLY
-    stage_aux = (STAGE_ID_MLP_RESIDUAL_ADD, LAYER_ID, INPUT_SIZE, 0)
-    post_aux = (STAGE_ID_POST_ATTN_RESIDUAL_NORM, LAYER_ID, INPUT_SIZE, 0)
-    down_aux = (MATRIX_ID_DOWN_PROJ, LAYER_ID, INPUT_SIZE, 0)
+    stage_aux = (STAGE_ID_MLP_RESIDUAL_ADD, layer_id, INPUT_SIZE, 0)
+    post_aux = (STAGE_ID_POST_ATTN_RESIDUAL_NORM, layer_id, INPUT_SIZE, 0)
+    down_aux = (MATRIX_ID_DOWN_PROJ, layer_id, INPUT_SIZE, 0)
 
     descriptors = [
         pack_descriptor(
@@ -367,7 +381,7 @@ def main() -> None:
     ]
 
     image = bytearray(image_bytes)
-    image[0:HEADER_BYTES] = pack_header(QMAP_BASE, image_bytes)
+    image[0:HEADER_BYTES] = pack_header(qmap_base, image_bytes)
     for slot, descriptor in enumerate(descriptors):
         offset = DESCRIPTOR_TABLE_OFFSET + slot * DESCRIPTOR_BYTES
         image[offset : offset + DESCRIPTOR_BYTES] = descriptor
@@ -388,9 +402,12 @@ def main() -> None:
 
     manifest = {
         "format_version": 1,
-        "name": "qmap_mlp_residual_add_runtime",
+        "name": f"qmap_layer{layer_id}_mlp_residual_add_runtime",
         "prefix": prefix,
-        "qmap_base": QMAP_BASE,
+        "layer_id": layer_id,
+        "qmap_base": qmap_base,
+        "source_post_attn_qmap_prefix": post_attn_qmap_prefix,
+        "source_down_qmap_prefix": down_qmap_prefix,
         "image_bytes": image_bytes,
         "sha256": sha256_file(args.output),
         "descriptor_count": DESCRIPTOR_COUNT,
@@ -432,7 +449,8 @@ def main() -> None:
 
     print("Exported QMAP MLP residual-add runtime packet")
     print("=" * 80)
-    print(f"QMAP base:       0x{QMAP_BASE:016X}")
+    print(f"Layer:           {layer_id}")
+    print(f"QMAP base:       0x{qmap_base:016X}")
     print(f"Image bytes:     0x{image_bytes:X}")
     print(f"Input words:     {INPUT_SIZE}")
     print(f"Expected words:  {expected_i32.size}")

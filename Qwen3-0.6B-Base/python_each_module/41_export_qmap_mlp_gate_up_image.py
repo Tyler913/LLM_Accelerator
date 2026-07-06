@@ -128,6 +128,10 @@ def write_scalar(path: Path, value: int, width_bits: int) -> None:
     write_hex_lines(path, np.array([value], dtype=np.uint64), width_bits)
 
 
+def parse_int_auto(value: str) -> int:
+    return int(value.replace("_", ""), 0)
+
+
 def image_to_words32(image: bytes) -> np.ndarray:
     padded = image + bytes((-len(image)) % 4)
     return np.array(struct.unpack("<" + "I" * (len(padded) // 4), padded), dtype=np.uint32)
@@ -210,8 +214,14 @@ def add_payload(payloads: list[dict[str, Any]], *, name: str, cursor: int, paylo
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Export a QMAP runtime packet for Layer 0 MLP gate/up simulation.")
+    parser = argparse.ArgumentParser(description="Export a QMAP runtime packet for MLP gate/up simulation.")
     parser.add_argument("--prefix", default=PREFIX)
+    parser.add_argument("--layer-id", type=int, default=LAYER_ID)
+    parser.add_argument("--qmap-base", type=parse_int_auto, default=QMAP_BASE)
+    parser.add_argument("--gate-weight-base", type=parse_int_auto, default=MLP_GATE_WEIGHT_BASE_ADDR)
+    parser.add_argument("--gate-scale-base", type=parse_int_auto, default=MLP_GATE_SCALE_BASE_ADDR)
+    parser.add_argument("--up-weight-base", type=parse_int_auto, default=MLP_UP_WEIGHT_BASE_ADDR)
+    parser.add_argument("--up-scale-base", type=parse_int_auto, default=MLP_UP_SCALE_BASE_ADDR)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
@@ -223,6 +233,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     prefix = str(args.prefix)
+    layer_id = int(args.layer_id)
+    qmap_base = int(args.qmap_base)
+    gate_weight_base_addr = int(args.gate_weight_base)
+    gate_scale_base_addr = int(args.gate_scale_base)
+    up_weight_base_addr = int(args.up_weight_base)
+    up_scale_base_addr = int(args.up_scale_base)
 
     activation = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_activation.hex", ACT_WIDTH, signed=True)
     gate_expected = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_gate_expected_q12_12.hex", OUT_WIDTH, signed=True)
@@ -260,15 +276,15 @@ def main() -> None:
     up_expected_i32 = up_expected.astype(np.int32)
     metadata_words = np.array(
         [
-            LAYER_ID,
+            layer_id,
             OUT_FEATURES,
             INPUT_SIZE,
             GROUP_SIZE,
             GROUP_COUNT,
-            MLP_GATE_WEIGHT_BASE_ADDR & 0xFFFF_FFFF,
-            MLP_GATE_SCALE_BASE_ADDR & 0xFFFF_FFFF,
-            MLP_UP_WEIGHT_BASE_ADDR & 0xFFFF_FFFF,
-            MLP_UP_SCALE_BASE_ADDR & 0xFFFF_FFFF,
+            gate_weight_base_addr & 0xFFFF_FFFF,
+            gate_scale_base_addr & 0xFFFF_FFFF,
+            up_weight_base_addr & 0xFFFF_FFFF,
+            up_scale_base_addr & 0xFFFF_FFFF,
             MATRIX_ID_GATE_PROJ,
             MATRIX_ID_UP_PROJ,
             STAGE_ID_MLP_GATE_UP,
@@ -289,7 +305,7 @@ def main() -> None:
     payload_by_name = {item["name"]: item for item in payloads}
 
     def addr(name: str) -> int:
-        return QMAP_BASE + int(payload_by_name[name]["offset"])
+        return qmap_base + int(payload_by_name[name]["offset"])
 
     def size(name: str) -> int:
         return len(payload_by_name[name]["payload"])
@@ -298,7 +314,7 @@ def main() -> None:
     wo = TENSOR_F_ROW_MAJOR | TENSOR_F_WRITE_ONLY
     packed_ro = ro | TENSOR_F_PACKED_Q4_LOW_EVEN
     expected_flags = TENSOR_F_ROW_MAJOR | TENSOR_F_READ_ONLY | TENSOR_F_DEBUG_ONLY
-    stage_aux = (STAGE_ID_MLP_GATE_UP, LAYER_ID, OUT_FEATURES, INPUT_SIZE)
+    stage_aux = (STAGE_ID_MLP_GATE_UP, layer_id, OUT_FEATURES, INPUT_SIZE)
 
     descriptors = [
         pack_descriptor(
@@ -340,11 +356,11 @@ def main() -> None:
             element_bits=WEIGHT_WIDTH,
             group_size=GROUP_SIZE,
             scale_tensor_id=TENSOR_ID_GATE_SCALE,
-            base_addr=MLP_GATE_WEIGHT_BASE_ADDR,
+            base_addr=gate_weight_base_addr,
             nbytes=weight_bytes,
             dims=(OUT_FEATURES, INPUT_SIZE, 0, 0),
             strides=(weight_row_bytes, 0, 0, 0),
-            aux=(MATRIX_ID_GATE_PROJ, LAYER_ID, 0, OUT_FEATURES),
+            aux=(MATRIX_ID_GATE_PROJ, layer_id, 0, OUT_FEATURES),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_GATE_SCALE,
@@ -355,11 +371,11 @@ def main() -> None:
             element_bits=SCALE_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=MLP_GATE_SCALE_BASE_ADDR,
+            base_addr=gate_scale_base_addr,
             nbytes=scale_bytes,
             dims=(OUT_FEATURES, GROUP_COUNT, 0, 0),
             strides=(scale_row_bytes, 2, 0, 0),
-            aux=(MATRIX_ID_GATE_PROJ, LAYER_ID, 0, OUT_FEATURES),
+            aux=(MATRIX_ID_GATE_PROJ, layer_id, 0, OUT_FEATURES),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_UP_WEIGHT,
@@ -370,11 +386,11 @@ def main() -> None:
             element_bits=WEIGHT_WIDTH,
             group_size=GROUP_SIZE,
             scale_tensor_id=TENSOR_ID_UP_SCALE,
-            base_addr=MLP_UP_WEIGHT_BASE_ADDR,
+            base_addr=up_weight_base_addr,
             nbytes=weight_bytes,
             dims=(OUT_FEATURES, INPUT_SIZE, 0, 0),
             strides=(weight_row_bytes, 0, 0, 0),
-            aux=(MATRIX_ID_UP_PROJ, LAYER_ID, 0, OUT_FEATURES),
+            aux=(MATRIX_ID_UP_PROJ, layer_id, 0, OUT_FEATURES),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_UP_SCALE,
@@ -385,11 +401,11 @@ def main() -> None:
             element_bits=SCALE_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=MLP_UP_SCALE_BASE_ADDR,
+            base_addr=up_scale_base_addr,
             nbytes=scale_bytes,
             dims=(OUT_FEATURES, GROUP_COUNT, 0, 0),
             strides=(scale_row_bytes, 2, 0, 0),
-            aux=(MATRIX_ID_UP_PROJ, LAYER_ID, 0, OUT_FEATURES),
+            aux=(MATRIX_ID_UP_PROJ, layer_id, 0, OUT_FEATURES),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_GATE_OUTPUT,
@@ -404,7 +420,7 @@ def main() -> None:
             nbytes=output_bytes,
             dims=(OUT_FEATURES, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_GATE_PROJ, LAYER_ID, 0, OUT_FEATURES),
+            aux=(MATRIX_ID_GATE_PROJ, layer_id, 0, OUT_FEATURES),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_UP_OUTPUT,
@@ -419,7 +435,7 @@ def main() -> None:
             nbytes=output_bytes,
             dims=(OUT_FEATURES, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_UP_PROJ, LAYER_ID, 0, OUT_FEATURES),
+            aux=(MATRIX_ID_UP_PROJ, layer_id, 0, OUT_FEATURES),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_GATE_EXPECTED,
@@ -434,7 +450,7 @@ def main() -> None:
             nbytes=output_bytes,
             dims=(OUT_FEATURES, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_GATE_PROJ, LAYER_ID, 0, OUT_FEATURES),
+            aux=(MATRIX_ID_GATE_PROJ, layer_id, 0, OUT_FEATURES),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_UP_EXPECTED,
@@ -449,12 +465,12 @@ def main() -> None:
             nbytes=output_bytes,
             dims=(OUT_FEATURES, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_UP_PROJ, LAYER_ID, 0, OUT_FEATURES),
+            aux=(MATRIX_ID_UP_PROJ, layer_id, 0, OUT_FEATURES),
         ),
     ]
 
     image = bytearray(image_bytes)
-    image[0:HEADER_BYTES] = pack_header(QMAP_BASE, image_bytes)
+    image[0:HEADER_BYTES] = pack_header(qmap_base, image_bytes)
     for slot, descriptor in enumerate(descriptors):
         offset = DESCRIPTOR_TABLE_OFFSET + slot * DESCRIPTOR_BYTES
         image[offset : offset + DESCRIPTOR_BYTES] = descriptor
@@ -468,21 +484,24 @@ def main() -> None:
     write_hex_lines(args.sim_hex, image_to_words32(bytes(image)), 32)
     write_hex_lines(args.expected_gate_hex, gate_expected_i32, 32)
     write_hex_lines(args.expected_up_hex, up_expected_i32, 32)
-    write_scalar(SIM_VECTOR_DIR / f"{prefix}_gate_weight_base_addr.hex", MLP_GATE_WEIGHT_BASE_ADDR, 64)
-    write_scalar(SIM_VECTOR_DIR / f"{prefix}_gate_scale_base_addr.hex", MLP_GATE_SCALE_BASE_ADDR, 64)
-    write_scalar(SIM_VECTOR_DIR / f"{prefix}_up_weight_base_addr.hex", MLP_UP_WEIGHT_BASE_ADDR, 64)
-    write_scalar(SIM_VECTOR_DIR / f"{prefix}_up_scale_base_addr.hex", MLP_UP_SCALE_BASE_ADDR, 64)
+    write_scalar(SIM_VECTOR_DIR / f"{prefix}_gate_weight_base_addr.hex", gate_weight_base_addr, 64)
+    write_scalar(SIM_VECTOR_DIR / f"{prefix}_gate_scale_base_addr.hex", gate_scale_base_addr, 64)
+    write_scalar(SIM_VECTOR_DIR / f"{prefix}_up_weight_base_addr.hex", up_weight_base_addr, 64)
+    write_scalar(SIM_VECTOR_DIR / f"{prefix}_up_scale_base_addr.hex", up_scale_base_addr, 64)
 
     focused_meta_path = SIM_VECTOR_DIR / f"{prefix}_meta.json"
     focused_meta: dict[str, Any] = {}
     if focused_meta_path.is_file():
         focused_meta = json.loads(focused_meta_path.read_text(encoding="utf-8"))
+        if int(focused_meta.get("layer_id", layer_id)) != layer_id:
+            raise RuntimeError("MLP gate/up vector layer_id does not match requested layer")
 
     manifest = {
         "format_version": 1,
-        "name": "qmap_mlp_gate_up_runtime",
+        "name": f"qmap_layer{layer_id}_mlp_gate_up_runtime",
         "prefix": prefix,
-        "qmap_base": QMAP_BASE,
+        "layer_id": layer_id,
+        "qmap_base": qmap_base,
         "image_bytes": image_bytes,
         "sha256": sha256_file(args.output),
         "descriptor_count": DESCRIPTOR_COUNT,
@@ -494,10 +513,10 @@ def main() -> None:
             "group_count": GROUP_COUNT,
         },
         "memory_layout": {
-            "gate_weight_base_addr": MLP_GATE_WEIGHT_BASE_ADDR,
-            "gate_scale_base_addr": MLP_GATE_SCALE_BASE_ADDR,
-            "up_weight_base_addr": MLP_UP_WEIGHT_BASE_ADDR,
-            "up_scale_base_addr": MLP_UP_SCALE_BASE_ADDR,
+            "gate_weight_base_addr": gate_weight_base_addr,
+            "gate_scale_base_addr": gate_scale_base_addr,
+            "up_weight_base_addr": up_weight_base_addr,
+            "up_scale_base_addr": up_scale_base_addr,
             "weight_row_bytes": weight_row_bytes,
             "scale_row_bytes": scale_row_bytes,
             "weight_bytes_per_matrix": weight_bytes,
@@ -518,7 +537,7 @@ def main() -> None:
         },
         "focused_meta": {
             key: focused_meta.get(key)
-            for key in ("selected_position", "selected_token_id", "selected_token_text", "source_post_norm_prefix")
+            for key in ("layer_id", "selected_position", "selected_token_id", "selected_token_text", "source_post_norm_prefix")
             if key in focused_meta
         },
         "files": {
@@ -537,13 +556,14 @@ def main() -> None:
 
     print("Exported QMAP MLP gate/up runtime packet")
     print("=" * 80)
-    print(f"QMAP base:       0x{QMAP_BASE:016X}")
+    print(f"Layer:           {layer_id}")
+    print(f"QMAP base:       0x{qmap_base:016X}")
     print(f"Image bytes:     0x{image_bytes:X}")
     print(f"Activation words:{activation_i32.size}")
-    print(f"Gate weight:     0x{weight_bytes:X} @ 0x{MLP_GATE_WEIGHT_BASE_ADDR:016X}")
-    print(f"Gate scale:      0x{scale_bytes:X} @ 0x{MLP_GATE_SCALE_BASE_ADDR:016X}")
-    print(f"Up weight:       0x{weight_bytes:X} @ 0x{MLP_UP_WEIGHT_BASE_ADDR:016X}")
-    print(f"Up scale:        0x{scale_bytes:X} @ 0x{MLP_UP_SCALE_BASE_ADDR:016X}")
+    print(f"Gate weight:     0x{weight_bytes:X} @ 0x{gate_weight_base_addr:016X}")
+    print(f"Gate scale:      0x{scale_bytes:X} @ 0x{gate_scale_base_addr:016X}")
+    print(f"Up weight:       0x{weight_bytes:X} @ 0x{up_weight_base_addr:016X}")
+    print(f"Up scale:        0x{scale_bytes:X} @ 0x{up_scale_base_addr:016X}")
     print(f"Expected words:  gate={gate_expected_i32.size} up={up_expected_i32.size}")
     print(f"Binary:          {args.output}")
     print(f"Simulation hex:  {args.sim_hex}")

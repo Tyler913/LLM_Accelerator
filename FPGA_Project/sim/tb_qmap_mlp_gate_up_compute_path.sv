@@ -32,6 +32,7 @@ module tb_qmap_mlp_gate_up_compute_path;
     localparam int OUTPUT_WORDS     = OUT_FEATURES;
     localparam int OUTPUT_BYTES     = OUTPUT_WORDS * MEM_DATA_BYTES;
     localparam int QMAP_IMAGE_BYTES = 32'h0000_E000;
+    localparam logic [ADDR_WIDTH-1 : 0] DEFAULT_QMAP_BASE_ADDR = `QMAP_MLP_GATE_UP_BASE_ADDR;
     localparam int QMAP_WORDS       = QMAP_IMAGE_BYTES / MEM_DATA_BYTES;
     localparam int DESCRIPTOR_WORDS = 32;
     localparam int DESCRIPTOR_TABLE_WORD_OFFSET = 32'h0100 / 4;
@@ -340,7 +341,6 @@ module tb_qmap_mlp_gate_up_compute_path;
             $readmemh({vector_dir, "/", prefix, "_up_weight_words32.hex"}, up_weight_words_mem);
             $readmemh({vector_dir, "/", prefix, "_up_scale_words32.hex"}, up_scale_words_mem);
 
-            qmap_base_addr = `QMAP_MLP_GATE_UP_BASE_ADDR;
             activation_base_addr = descriptor_base_addr(SLOT_ACTIVATION);
             gate_weight_base_addr = descriptor_base_addr(SLOT_GATE_WEIGHT);
             gate_scale_base_addr = descriptor_base_addr(SLOT_GATE_SCALE);
@@ -903,6 +903,7 @@ module tb_qmap_mlp_gate_up_compute_path;
         expected_gate_file = "FPGA_Project/sim/vectors/qmap_mlp_gate_up_expected_gate_words32.hex";
         expected_up_file = "FPGA_Project/sim/vectors/qmap_mlp_gate_up_expected_up_words32.hex";
         tracefile = "FPGA_Project/sim/qmap_mlp_gate_up_compute_path_trace.csv";
+        qmap_base_addr = DEFAULT_QMAP_BASE_ADDR;
         if ($value$plusargs("vectordir=%s", vector_dir)) begin
         end
         if ($value$plusargs("prefix=%s", prefix)) begin
@@ -914,6 +915,8 @@ module tb_qmap_mlp_gate_up_compute_path;
         if ($value$plusargs("expected_up=%s", expected_up_file)) begin
         end
         if ($value$plusargs("tracefile=%s", tracefile)) begin
+        end
+        if ($value$plusargs("qmap_base=%h", qmap_base_addr)) begin
         end
 
         trace_fd = $fopen(tracefile, "w");
@@ -970,7 +973,8 @@ module tb_qmap_mlp_gate_up_compute_path;
         $fclose(trace_fd);
         trace_fd = 0;
 
-        $display("qmap_mlp_gate_up_compute_path descriptor-backed Layer 0 MLP gate/up test");
+        $display("qmap_mlp_gate_up_compute_path descriptor-backed MLP gate/up test");
+        $display("  qmap base                  = 0x%016h", qmap_base_addr);
         $display("  rows done normal           = %0d", normal_rows_done);
         $display("  gate/up words written      = %0d / %0d", normal_gate_write_count, normal_up_write_count);
         $display("  read req/rsp fires         = %0d / %0d", mem_req_fire_count, mem_rsp_fire_count);

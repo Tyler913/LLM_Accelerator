@@ -2,7 +2,7 @@
 
 `include "qmap_defs.svh"
 
-// QMAP-backed Layer 0 MLP down projection wrapper:
+// QMAP-backed per-layer MLP down projection wrapper:
 //
 //   mlp_hidden[3072] + persistent down_proj Q4 weight/scale
 //       -> q4_gemv_row_1024 instantiated with INPUT_SIZE=3072
@@ -498,8 +498,8 @@ module qmap_mlp_down_compute_path #(
             (desc_nbytes[SLOT_SCALE] != SCALE_BYTES) ||
             (desc_nbytes[SLOT_OUTPUT] != OUTPUT_BYTES) ||
             (desc_nbytes[SLOT_EXPECTED] != OUTPUT_BYTES) ||
-            (desc_base_addr[SLOT_WEIGHT] != `QMAP_MLP_DOWN_WEIGHT_BASE_ADDR) ||
-            (desc_base_addr[SLOT_SCALE] != `QMAP_MLP_DOWN_SCALE_BASE_ADDR) ||
+            (desc_base_addr[SLOT_WEIGHT][1 : 0] != 2'b00) ||
+            (desc_base_addr[SLOT_SCALE][1 : 0] != 2'b00) ||
             ((desc_flags[SLOT_METADATA] & `QMAP_TENSOR_F_READ_ONLY) == 32'd0) ||
             ((desc_flags[SLOT_ACTIVATION] & `QMAP_TENSOR_F_READ_ONLY) == 32'd0) ||
             ((desc_flags[SLOT_WEIGHT] & `QMAP_TENSOR_F_READ_ONLY) == 32'd0) ||

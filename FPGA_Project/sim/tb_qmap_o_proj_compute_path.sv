@@ -6,6 +6,7 @@
 module tb_qmap_o_proj_compute_path;
 
     localparam int ADDR_WIDTH       = 64;
+    localparam logic [ADDR_WIDTH-1 : 0] DEFAULT_QMAP_BASE_ADDR = `QMAP_O_PROJ_BASE_ADDR;
     localparam int DESCRIPTOR_SLOTS = 6;
     localparam int INPUT_SIZE       = 2048;
     localparam int OUT_FEATURES     = 1024;
@@ -136,6 +137,7 @@ module tb_qmap_o_proj_compute_path;
 
     logic read_active;
     logic write_active;
+    logic [ADDR_WIDTH-1 : 0] qmap_base_addr;
     logic [ADDR_WIDTH-1 : 0] activation_base_addr;
     logic [ADDR_WIDTH-1 : 0] weight_base_addr;
     logic [ADDR_WIDTH-1 : 0] scale_base_addr;
@@ -168,7 +170,7 @@ module tb_qmap_o_proj_compute_path;
         .i_clk                    (clk),
         .i_rst_n                  (rst_n),
         .i_start                  (start),
-        .i_qmap_base_addr         (`QMAP_O_PROJ_BASE_ADDR),
+        .i_qmap_base_addr         (qmap_base_addr),
         .o_busy                   (busy),
         .o_done                   (done),
         .o_error                  (error),
@@ -387,7 +389,7 @@ module tb_qmap_o_proj_compute_path;
             if ((mem_rd_req_addr >= activation_base_addr) &&
                 (mem_rd_req_addr < (activation_base_addr + ACTIVATION_BYTES))) begin
                 active_region = REGION_ACTIVATION;
-                active_read_index = (mem_rd_req_addr - `QMAP_O_PROJ_BASE_ADDR) >> 2;
+                active_read_index = (mem_rd_req_addr - qmap_base_addr) >> 2;
                 expected_addr = activation_base_addr + (mem_activation_req_count * MAX_READ_BYTES);
                 if ((mem_rd_req_addr !== expected_addr) ||
                     (mem_rd_req_len_bytes != MAX_READ_BYTES)) begin
@@ -438,10 +440,10 @@ module tb_qmap_o_proj_compute_path;
                 end
                 mem_scale_req_count = mem_scale_req_count + 1;
             end
-            else if ((mem_rd_req_addr >= `QMAP_O_PROJ_BASE_ADDR) &&
-                     (mem_rd_req_addr < (`QMAP_O_PROJ_BASE_ADDR + QMAP_IMAGE_BYTES))) begin
+            else if ((mem_rd_req_addr >= qmap_base_addr) &&
+                     (mem_rd_req_addr < (qmap_base_addr + QMAP_IMAGE_BYTES))) begin
                 active_region = REGION_QMAP;
-                active_read_index = (mem_rd_req_addr - `QMAP_O_PROJ_BASE_ADDR) >> 2;
+                active_read_index = (mem_rd_req_addr - qmap_base_addr) >> 2;
                 mem_qmap_req_count = mem_qmap_req_count + 1;
             end
             else begin
@@ -461,7 +463,7 @@ module tb_qmap_o_proj_compute_path;
         integer idx;
         integer base_index;
         begin
-            base_index = (output_base_addr - `QMAP_O_PROJ_BASE_ADDR) >> 2;
+            base_index = (output_base_addr - qmap_base_addr) >> 2;
             for (idx = 0; idx < OUT_FEATURES; idx = idx + 1) begin
                 qmap_mem[base_index + idx] = 32'hFFFF_FFFF;
             end
@@ -817,6 +819,7 @@ module tb_qmap_o_proj_compute_path;
         qmap_image_file = "FPGA_Project/sim/vectors/qmap_o_proj_image_words32.hex";
         qmap_expected_file = "FPGA_Project/sim/vectors/qmap_o_proj_expected_words32.hex";
         tracefile = "FPGA_Project/sim/qmap_o_proj_compute_path_trace.csv";
+        qmap_base_addr = DEFAULT_QMAP_BASE_ADDR;
         if ($value$plusargs("vectordir=%s", vector_dir)) begin
         end
         if ($value$plusargs("prefix=%s", prefix)) begin
@@ -826,6 +829,8 @@ module tb_qmap_o_proj_compute_path;
         if ($value$plusargs("qmap_expected=%s", qmap_expected_file)) begin
         end
         if ($value$plusargs("tracefile=%s", tracefile)) begin
+        end
+        if ($value$plusargs("qmap_base=%h", qmap_base_addr)) begin
         end
 
         trace_fd = $fopen(tracefile, "w");
@@ -872,7 +877,10 @@ module tb_qmap_o_proj_compute_path;
         $fclose(trace_fd);
         trace_fd = 0;
 
-        $display("qmap_o_proj_compute_path descriptor-backed Layer 0 o_proj test");
+        $display("qmap_o_proj_compute_path descriptor-backed o_proj test");
+        $display("  qmap base              = 0x%016h", qmap_base_addr);
+        $display("  prefix                 = %s", prefix);
+        $display("  qmap image             = %s", qmap_image_file);
         $display("  rows done normal       = %0d", normal_rows_done);
         $display("  output words written   = %0d", normal_output_write_word_count);
         $display("  read req/rsp fires     = %0d / %0d", mem_req_fire_count, mem_rsp_fire_count);

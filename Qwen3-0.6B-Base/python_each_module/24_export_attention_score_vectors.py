@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import math
@@ -30,8 +31,7 @@ Q4_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_q4_v0"
 SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
 QK_EXPORTER_PATH = Path(__file__).with_name("22_export_qk_norm_rope_fixed_vectors.py")
 
-PREFIX = "attention_score_stage_real"
-MODULE_NAME = "layer0.self_attn.attention_score_stage"
+DEFAULT_PREFIX = "attention_score_stage_real"
 
 HIDDEN_SIZE = 1024
 NUM_Q_HEADS = 16
@@ -86,12 +86,28 @@ def arithmetic_shift_right(value: int, shift: int) -> int:
     return int(value) >> shift
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Export fixed-point attention-score RTL test vectors.")
+    parser.add_argument("--layer-id", type=int, default=0, help="Decoder layer index to export")
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=None,
+        help="Q4 QKV artifact npz. Defaults to qkv_layer{layer_id}_last_token_q4.npz.",
+    )
+    parser.add_argument("--prefix", type=str, default=DEFAULT_PREFIX, help="Output vector file prefix")
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
     qk = load_qk_exporter()
 
-    q4_path = Q4_VECTOR_DIR / "qkv_layer0_last_token_q4.npz"
+    q4_path = args.input
+    if q4_path is None:
+        q4_path = Q4_VECTOR_DIR / f"qkv_layer{args.layer_id}_last_token_q4.npz"
     if not q4_path.is_file():
-        raise FileNotFoundError(f"Missing {q4_path}. Run 13_export_q4_gemv_vectors.py first.")
+        raise FileNotFoundError(f"Missing {q4_path}. Run the matching QKV Q4 vector exporter first.")
 
     tokenizer, model, backbone = load_model()
     input_ids = encode_prompt(tokenizer)
@@ -111,12 +127,14 @@ def main() -> None:
     if NUM_Q_HEADS % NUM_KV_HEADS != 0:
         raise RuntimeError("NUM_Q_HEADS must be an integer multiple of NUM_KV_HEADS")
 
-    layer0 = backbone.layers[0]
-    attn0 = layer0.self_attn
+    if args.layer_id < 0 or args.layer_id >= len(backbone.layers):
+        raise ValueError(f"layer_id out of range: {args.layer_id}")
+    layer = backbone.layers[args.layer_id]
+    attn = layer.self_attn
     rms_eps = float(getattr(model.config, "rms_norm_eps", 1e-6))
 
     records: dict[str, dict[str, torch.Tensor]] = {}
-    hook = layer0.input_layernorm.register_forward_hook(capture_module_io(records, "input_norm"))
+    hook = layer.input_layernorm.register_forward_hook(capture_module_io(records, "input_norm"))
     try:
         with torch.no_grad():
             model(input_ids=input_ids, use_cache=False)
@@ -131,8 +149,8 @@ def main() -> None:
     if not np.array_equal(input_norm_q12_12[selected_position], data["input_norm_q4_12"]):
         raise RuntimeError("Selected-position input_norm quantization drifted from Q4 artifact")
 
-    q_gamma_float = qk.as_float_array(attn0.q_norm.weight)
-    k_gamma_float = qk.as_float_array(attn0.k_norm.weight)
+    q_gamma_float = qk.as_float_array(attn.q_norm.weight)
+    k_gamma_float = qk.as_float_array(attn.k_norm.weight)
     q_gamma_q8_7, q_gamma_saturation_count = qk.quantize_signed(
         q_gamma_float,
         qk.GAMMA_WIDTH,
@@ -214,7 +232,7 @@ def main() -> None:
     k_cache = k_rope_by_pos[: selected_position + 1]
     cache_length = k_cache.shape[0]
 
-    score_scale_q0_31 = int(round(float(attn0.scaling) * float(1 << SCALE_FRAC)))
+    score_scale_q0_31 = int(round(float(attn.scaling) * float(1 << SCALE_FRAC)))
     if score_scale_q0_31 <= 0 or score_scale_q0_31 >= (1 << (SCALE_WIDTH - 1)):
         raise RuntimeError(f"Unexpected attention scale quantization: {score_scale_q0_31}")
 
@@ -243,12 +261,12 @@ def main() -> None:
 
     with torch.no_grad():
         input_norm_t = torch.from_numpy(input_norm_fp32).unsqueeze(0)
-        q_flat_fp32 = manual_linear_from_weight(input_norm_t, tensor_to_float32(attn0.q_proj.weight))
-        k_flat_fp32 = manual_linear_from_weight(input_norm_t, tensor_to_float32(attn0.k_proj.weight))
+        q_flat_fp32 = manual_linear_from_weight(input_norm_t, tensor_to_float32(attn.q_proj.weight))
+        k_flat_fp32 = manual_linear_from_weight(input_norm_t, tensor_to_float32(attn.k_proj.weight))
         q_view = q_flat_fp32.view(batch_size, prompt_len, NUM_Q_HEADS, HEAD_DIM)
         k_view = k_flat_fp32.view(batch_size, prompt_len, NUM_KV_HEADS, HEAD_DIM)
-        q_norm = manual_rms_norm(q_view, tensor_to_float32(attn0.q_norm.weight), rms_eps)
-        k_norm = manual_rms_norm(k_view, tensor_to_float32(attn0.k_norm.weight), rms_eps)
+        q_norm = manual_rms_norm(q_view, tensor_to_float32(attn.q_norm.weight), rms_eps)
+        k_norm = manual_rms_norm(k_view, tensor_to_float32(attn.k_norm.weight), rms_eps)
         q_states = q_norm.transpose(1, 2)
         k_states = k_norm.transpose(1, 2)
         cos_ref, sin_ref = manual_rope_cos_sin(backbone.rotary_emb, input_norm_t, position_ids)
@@ -259,7 +277,7 @@ def main() -> None:
                 q_rope_fp32[:, :, selected_position : selected_position + 1, :],
                 k_repeated_fp32[:, :, :cache_length, :].transpose(2, 3),
             )
-            * float(attn0.scaling)
+            * float(attn.scaling)
         )
         fp32_scores_np = np.ascontiguousarray(fp32_scores[0, :, 0, :].numpy(), dtype=np.float32)
 
@@ -267,16 +285,16 @@ def main() -> None:
     score_diff = fixed_scaled_float.astype(np.float64) - fp32_scores_np.astype(np.float64)
 
     files = {
-        "q_input": SIM_VECTOR_DIR / f"{PREFIX}_q_input.hex",
-        "k_cache": SIM_VECTOR_DIR / f"{PREFIX}_k_cache.hex",
-        "score_scale": SIM_VECTOR_DIR / f"{PREFIX}_score_scale_q0_31.hex",
-        "cache_length": SIM_VECTOR_DIR / f"{PREFIX}_cache_length.hex",
-        "expected_raw": SIM_VECTOR_DIR / f"{PREFIX}_expected_raw.hex",
-        "expected_scaled": SIM_VECTOR_DIR / f"{PREFIX}_expected_scaled.hex",
-        "expected_q_head": SIM_VECTOR_DIR / f"{PREFIX}_expected_q_head.hex",
-        "expected_kv_head": SIM_VECTOR_DIR / f"{PREFIX}_expected_kv_head.hex",
-        "expected_position": SIM_VECTOR_DIR / f"{PREFIX}_expected_position.hex",
-        "meta": SIM_VECTOR_DIR / f"{PREFIX}_meta.json",
+        "q_input": SIM_VECTOR_DIR / f"{args.prefix}_q_input.hex",
+        "k_cache": SIM_VECTOR_DIR / f"{args.prefix}_k_cache.hex",
+        "score_scale": SIM_VECTOR_DIR / f"{args.prefix}_score_scale_q0_31.hex",
+        "cache_length": SIM_VECTOR_DIR / f"{args.prefix}_cache_length.hex",
+        "expected_raw": SIM_VECTOR_DIR / f"{args.prefix}_expected_raw.hex",
+        "expected_scaled": SIM_VECTOR_DIR / f"{args.prefix}_expected_scaled.hex",
+        "expected_q_head": SIM_VECTOR_DIR / f"{args.prefix}_expected_q_head.hex",
+        "expected_kv_head": SIM_VECTOR_DIR / f"{args.prefix}_expected_kv_head.hex",
+        "expected_position": SIM_VECTOR_DIR / f"{args.prefix}_expected_position.hex",
+        "meta": SIM_VECTOR_DIR / f"{args.prefix}_meta.json",
     }
 
     write_hex_lines(files["q_input"], q_current, IN_WIDTH)
@@ -291,8 +309,9 @@ def main() -> None:
 
     meta: dict[str, Any] = {
         "format_version": 1,
-        "name": PREFIX,
-        "module": MODULE_NAME,
+        "name": args.prefix,
+        "module": f"layer{args.layer_id}.self_attn.attention_score_stage",
+        "layer_id": args.layer_id,
         "prompt": PROMPT,
         "token_ids": [int(value) for value in input_ids.flatten().tolist()],
         "selected_position": selected_position,
@@ -317,7 +336,7 @@ def main() -> None:
             ),
         },
         "fixed_point": {
-            "attention_scale_float": float(attn0.scaling),
+            "attention_scale_float": float(attn.scaling),
             "attention_scale_q0_31": score_scale_q0_31,
             "score_frac": SCORE_FRAC,
             "scale_frac": SCALE_FRAC,
@@ -348,14 +367,14 @@ def main() -> None:
 
     print("Exported fixed-point attention-score RTL test vectors")
     print("=" * 80)
-    print(f"Module: {MODULE_NAME}")
+    print(f"Module: layer{args.layer_id}.self_attn.attention_score_stage")
     print(f"Prompt: {PROMPT!r}")
     print(f"Selected position: {selected_position}")
     print(f"Selected token id: {selected_token_id} / {tokenizer.decode([selected_token_id])!r}")
     print(f"Cache length: {cache_length}")
     print(f"Score count: {expected_raw.size}")
     print(f"K requests: {expected_raw.size * HEAD_DIM}")
-    print(f"Attention scale: float={float(attn0.scaling):.10f} q0.31={score_scale_q0_31}")
+    print(f"Attention scale: float={float(attn.scaling):.10f} q0.31={score_scale_q0_31}")
     print(f"Q input:          {files['q_input']}")
     print(f"K cache:          {files['k_cache']}")
     print(f"Expected raw:     {files['expected_raw']}")

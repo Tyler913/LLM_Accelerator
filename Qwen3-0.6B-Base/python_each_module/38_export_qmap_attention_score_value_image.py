@@ -208,19 +208,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
     parser.add_argument("--attn-out-expected-hex", type=Path, default=DEFAULT_ATTN_OUT_EXPECTED_HEX)
+    parser.add_argument("--score-prefix", type=str, default=SCORE_PREFIX, help="Attention-score vector prefix")
+    parser.add_argument("--value-prefix", type=str, default=VALUE_PREFIX, help="Softmax/value vector prefix")
+    parser.add_argument(
+        "--qmap-base",
+        type=lambda text: int(text.replace("_", ""), 0),
+        default=QMAP_BASE,
+        help="Physical QMAP base address",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
 
-    score_meta = json.loads((SIM_VECTOR_DIR / f"{SCORE_PREFIX}_meta.json").read_text(encoding="utf-8"))
-    value_meta = json.loads((SIM_VECTOR_DIR / f"{VALUE_PREFIX}_meta.json").read_text(encoding="utf-8"))
+    score_meta = json.loads((SIM_VECTOR_DIR / f"{args.score_prefix}_meta.json").read_text(encoding="utf-8"))
+    value_meta = json.loads((SIM_VECTOR_DIR / f"{args.value_prefix}_meta.json").read_text(encoding="utf-8"))
 
+    layer_id = int(score_meta.get("layer_id", 0))
+    value_layer_id = int(value_meta.get("layer_id", layer_id))
+    if value_layer_id != layer_id:
+        raise RuntimeError(f"layer_id mismatch: score={layer_id} value={value_layer_id}")
     selected_position = int(score_meta["selected_position"])
     cache_length = int(score_meta["shape"]["cache_length"])
     score_scale_q0_31 = read_scalar(
-        SIM_VECTOR_DIR / f"{SCORE_PREFIX}_score_scale_q0_31.hex",
+        SIM_VECTOR_DIR / f"{args.score_prefix}_score_scale_q0_31.hex",
         SCORE_SCALE_WIDTH,
         signed=True,
     )
@@ -230,12 +242,12 @@ def main() -> None:
     if int(value_meta["fixed_point"]["attention_scale_q0_31"]) != score_scale_q0_31:
         raise RuntimeError("attention score scale drifted between score and value exporters")
 
-    q_rope = read_hex_lines(SIM_VECTOR_DIR / f"{SCORE_PREFIX}_q_input.hex", IN_WIDTH, signed=True)
-    k_cache = read_hex_lines(SIM_VECTOR_DIR / f"{SCORE_PREFIX}_k_cache.hex", IN_WIDTH, signed=True)
-    v_cache = read_hex_lines(SIM_VECTOR_DIR / f"{VALUE_PREFIX}_v_cache.hex", IN_WIDTH, signed=True)
-    exp_lut = read_hex_lines(SIM_VECTOR_DIR / f"{VALUE_PREFIX}_exp_lut.hex", EXP_WIDTH, signed=False)
+    q_rope = read_hex_lines(SIM_VECTOR_DIR / f"{args.score_prefix}_q_input.hex", IN_WIDTH, signed=True)
+    k_cache = read_hex_lines(SIM_VECTOR_DIR / f"{args.score_prefix}_k_cache.hex", IN_WIDTH, signed=True)
+    v_cache = read_hex_lines(SIM_VECTOR_DIR / f"{args.value_prefix}_v_cache.hex", IN_WIDTH, signed=True)
+    exp_lut = read_hex_lines(SIM_VECTOR_DIR / f"{args.value_prefix}_exp_lut.hex", EXP_WIDTH, signed=False)
     attn_out_expected = read_hex_lines(
-        SIM_VECTOR_DIR / f"{VALUE_PREFIX}_expected_out.hex",
+        SIM_VECTOR_DIR / f"{args.value_prefix}_expected_out.hex",
         OUT_WIDTH,
         signed=True,
     )
@@ -253,7 +265,7 @@ def main() -> None:
 
     metadata_words = np.array(
         [
-            0,  # layer_id
+            layer_id,
             selected_position,
             cache_length,
             score_scale_q0_31 & 0xFFFF_FFFF,
@@ -284,7 +296,7 @@ def main() -> None:
     payload_by_name = {item["name"]: item for item in payloads}
 
     def addr(name: str) -> int:
-        return QMAP_BASE + int(payload_by_name[name]["offset"])
+        return args.qmap_base + int(payload_by_name[name]["offset"])
 
     def size(name: str) -> int:
         return len(payload_by_name[name]["payload"])
@@ -309,7 +321,7 @@ def main() -> None:
             nbytes=size("metadata"),
             dims=(int(metadata_words.size), 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(score_scale_q0_31 & 0xFFFF_FFFF, 0, cache_length, selected_position),
+            aux=(score_scale_q0_31 & 0xFFFF_FFFF, layer_id, cache_length, selected_position),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_Q_ROPE,
@@ -324,7 +336,7 @@ def main() -> None:
             nbytes=size("q_rope_q12_12"),
             dims=(Q_COUNT, 0, 0, 0),
             strides=(word_stride, 0, 0, 0),
-            aux=(0, 0, 0, selected_position),
+            aux=(0, layer_id, 0, selected_position),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_KV_CACHE,
@@ -344,7 +356,7 @@ def main() -> None:
                 HEAD_DIM * word_stride,
                 word_stride,
             ),
-            aux=(0, 0, cache_length, selected_position),
+            aux=(0, layer_id, cache_length, selected_position),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_EXP_LUT,
@@ -359,7 +371,7 @@ def main() -> None:
             nbytes=size("exp_lut_uq0_20"),
             dims=(EXP_LUT_SIZE, 0, 0, 0),
             strides=(word_stride, 0, 0, 0),
-            aux=(0, 0, 0, 0),
+            aux=(0, layer_id, 0, 0),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_ATTN_OUT,
@@ -374,12 +386,12 @@ def main() -> None:
             nbytes=size("attn_out_q12_12"),
             dims=(Q_COUNT, 0, 0, 0),
             strides=(word_stride, 0, 0, 0),
-            aux=(0, 0, 0, selected_position),
+            aux=(0, layer_id, 0, selected_position),
         ),
     ]
 
     image = bytearray(image_bytes)
-    image[0:HEADER_BYTES] = pack_header(QMAP_BASE, image_bytes)
+    image[0:HEADER_BYTES] = pack_header(args.qmap_base, image_bytes)
     for slot, descriptor in enumerate(descriptors):
         offset = DESCRIPTOR_TABLE_OFFSET + slot * DESCRIPTOR_BYTES
         image[offset : offset + DESCRIPTOR_BYTES] = descriptor
@@ -395,13 +407,14 @@ def main() -> None:
 
     manifest = {
         "format_version": 1,
-        "name": "qmap_attention_score_value_runtime",
-        "qmap_base": QMAP_BASE,
+        "name": f"qmap_layer{layer_id}_attention_score_value_runtime",
+        "qmap_base": args.qmap_base,
         "image_bytes": image_bytes,
         "sha256": sha256_file(args.output),
         "descriptor_count": DESCRIPTOR_COUNT,
         "descriptor_capacity": DESCRIPTOR_CAPACITY,
         "shape": {
+            "layer_id": layer_id,
             "num_q_heads": NUM_Q_HEADS,
             "num_kv_heads": NUM_KV_HEADS,
             "head_dim": HEAD_DIM,
@@ -435,8 +448,10 @@ def main() -> None:
             "binary": relpath(args.output),
             "sim_hex": relpath(args.sim_hex),
             "attn_out_expected_hex": relpath(args.attn_out_expected_hex),
-            "k_cache_source_hex": relpath(SIM_VECTOR_DIR / f"{SCORE_PREFIX}_k_cache.hex"),
-            "v_cache_source_hex": relpath(SIM_VECTOR_DIR / f"{VALUE_PREFIX}_v_cache.hex"),
+            "score_prefix": args.score_prefix,
+            "value_prefix": args.value_prefix,
+            "k_cache_source_hex": relpath(SIM_VECTOR_DIR / f"{args.score_prefix}_k_cache.hex"),
+            "v_cache_source_hex": relpath(SIM_VECTOR_DIR / f"{args.value_prefix}_v_cache.hex"),
         },
     }
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
@@ -444,7 +459,8 @@ def main() -> None:
 
     print("Exported QMAP attention score/value runtime packet")
     print("=" * 80)
-    print(f"QMAP base:       0x{QMAP_BASE:016X}")
+    print(f"QMAP base:       0x{args.qmap_base:016X}")
+    print(f"Layer:           {layer_id}")
     print(f"Image bytes:     0x{image_bytes:X}")
     print(f"Position/cache:  position={selected_position}, cache_length={cache_length}")
     print(f"Q RoPE words:    {Q_COUNT}")

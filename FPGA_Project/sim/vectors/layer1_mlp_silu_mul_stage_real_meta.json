@@ -1,0 +1,62 @@
+{
+  "format_version": 1,
+  "name": "layer1_mlp_silu_mul_stage_real",
+  "module": "layer1.mlp.silu_mul_stage",
+  "layer_id": 1,
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "source_gate_up_prefix": "layer1_mlp_gate_up_proj_stage_real",
+  "shape": {
+    "features": 3072
+  },
+  "formats": {
+    "gate_input": "signed 24-bit Q12.12",
+    "up_input": "signed 24-bit Q12.12",
+    "sigmoid_lut": "unsigned 16-bit UQ0.16",
+    "sigmoid_lut_range": "[-8.0, 8.0]",
+    "sigmoid_lut_step": "1/64",
+    "sigmoid_lut_size": 1025,
+    "silu_gate": "signed 24-bit Q12.12",
+    "hidden": "signed 24-bit Q12.12"
+  },
+  "saturation": {
+    "silu_gate_count": 0,
+    "hidden_count": 0
+  },
+  "debug": {
+    "gate_q12_12_min": -41630,
+    "gate_q12_12_max": 10109,
+    "up_q12_12_min": -15640,
+    "up_q12_12_max": 18217,
+    "lut_index_min": 0,
+    "lut_index_max": 670,
+    "sigmoid_q0_16_min": 22,
+    "sigmoid_q0_16_max": 60419,
+    "silu_gate_q12_12_min": -1147,
+    "silu_gate_q12_12_max": 9319,
+    "hidden_q12_12_min": -5564,
+    "hidden_q12_12_max": 3118,
+    "fixed_hidden_vs_hf_max_abs_diff": 0.41259264945983887,
+    "fixed_hidden_vs_hf_mean_abs_diff": 0.016458629485376353,
+    "fixed_hidden_vs_ideal_fixed_silu_max_abs_diff": 0.005926590732519239,
+    "fixed_hidden_vs_ideal_fixed_silu_mean_abs_diff": 0.00024485353431926777
+  },
+  "files": {
+    "gate_input": "layer1_mlp_silu_mul_stage_real_gate_input.hex",
+    "up_input": "layer1_mlp_silu_mul_stage_real_up_input.hex",
+    "sigmoid_lut": "layer1_mlp_silu_mul_stage_real_sigmoid_lut.hex",
+    "expected_lut_index": "layer1_mlp_silu_mul_stage_real_expected_lut_index.hex",
+    "expected_sigmoid_q0_16": "layer1_mlp_silu_mul_stage_real_expected_sigmoid_q0_16.hex",
+    "expected_silu_gate_q12_12": "layer1_mlp_silu_mul_stage_real_expected_silu_gate_q12_12.hex",
+    "expected_hidden_q12_12": "layer1_mlp_silu_mul_stage_real_expected_hidden_q12_12.hex"
+  }
+}

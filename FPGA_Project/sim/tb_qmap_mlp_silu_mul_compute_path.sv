@@ -21,9 +21,11 @@ module tb_qmap_mlp_silu_mul_compute_path;
     localparam int LUT_BURSTS       = (LUT_BYTES + MAX_READ_BYTES - 1) / MAX_READ_BYTES;
     localparam int LUT_LAST_BYTES   = LUT_BYTES - ((LUT_BURSTS - 1) * MAX_READ_BYTES);
     localparam int QMAP_IMAGE_BYTES = 32'h0000_E000;
+    localparam logic [ADDR_WIDTH-1 : 0] DEFAULT_QMAP_BASE_ADDR = `QMAP_MLP_SILU_MUL_BASE_ADDR;
     localparam int QMAP_WORDS       = QMAP_IMAGE_BYTES / MEM_DATA_BYTES;
     localparam int DESCRIPTOR_WORDS = 32;
     localparam int DESCRIPTOR_TABLE_WORD_OFFSET = 32'h0100 / 4;
+    localparam int DESCRIPTOR_TABLE_OFFSET_BYTES = 32'h0100;
     localparam int DESC_DTYPE_WORD  = 2;
     localparam int DESC_BASE_LO_WORD = 8;
     localparam int DESC_BASE_HI_WORD = 9;
@@ -275,7 +277,6 @@ module tb_qmap_mlp_silu_mul_compute_path;
             $readmemh(qmap_image_file, qmap_mem);
             $readmemh(expected_hidden_file, expected_hidden_mem);
 
-            qmap_base_addr = `QMAP_MLP_SILU_MUL_BASE_ADDR;
             gate_base_addr = descriptor_base_addr(SLOT_GATE);
             up_base_addr = descriptor_base_addr(SLOT_UP);
             lut_base_addr = descriptor_base_addr(SLOT_LUT);
@@ -410,7 +411,7 @@ module tb_qmap_mlp_silu_mul_compute_path;
                     end
                 end
                 else begin
-                    expected_addr = `QMAP_MLP_SILU_MUL_DESCRIPTOR_TABLE_ADDR +
+                    expected_addr = qmap_base_addr + DESCRIPTOR_TABLE_OFFSET_BYTES +
                                     ((reader_req_index - 1) * `QMAP_DESCRIPTOR_BYTES);
                     if ((mem_rd_req_addr !== expected_addr) ||
                         (mem_rd_req_len_bytes != `QMAP_DESCRIPTOR_BYTES)) begin
@@ -786,11 +787,14 @@ module tb_qmap_mlp_silu_mul_compute_path;
         qmap_image_file = "FPGA_Project/sim/vectors/qmap_mlp_silu_mul_image_words32.hex";
         expected_hidden_file = "FPGA_Project/sim/vectors/qmap_mlp_silu_mul_expected_hidden_words32.hex";
         tracefile = "FPGA_Project/sim/qmap_mlp_silu_mul_compute_path_trace.csv";
+        qmap_base_addr = DEFAULT_QMAP_BASE_ADDR;
         if ($value$plusargs("qmap_image=%s", qmap_image_file)) begin
         end
         if ($value$plusargs("expected_hidden=%s", expected_hidden_file)) begin
         end
         if ($value$plusargs("tracefile=%s", tracefile)) begin
+        end
+        if ($value$plusargs("qmap_base=%h", qmap_base_addr)) begin
         end
 
         trace_fd = $fopen(tracefile, "w");
@@ -845,7 +849,8 @@ module tb_qmap_mlp_silu_mul_compute_path;
         $fclose(trace_fd);
         trace_fd = 0;
 
-        $display("qmap_mlp_silu_mul_compute_path descriptor-backed Layer 0 MLP SiLU/multiply test");
+        $display("qmap_mlp_silu_mul_compute_path descriptor-backed MLP SiLU/multiply test");
+        $display("  qmap base                 = 0x%016h", qmap_base_addr);
         $display("  stage in/out normal       = %0d / %0d", normal_stage_input_count, normal_stage_output_count);
         $display("  stage cycles              = %0d", normal_stage_cycle_count);
         $display("  hidden words written      = %0d", normal_output_write_count);

@@ -120,6 +120,10 @@ def write_scalar(path: Path, value: int, width_bits: int) -> None:
     write_hex_lines(path, np.array([value], dtype=np.uint64), width_bits)
 
 
+def parse_int_auto(value: str) -> int:
+    return int(value.replace("_", ""), 0)
+
+
 def image_to_words32(image: bytes) -> np.ndarray:
     padded = image + bytes((-len(image)) % 4)
     return np.array(struct.unpack("<" + "I" * (len(padded) // 4), padded), dtype=np.uint32)
@@ -202,8 +206,12 @@ def add_payload(payloads: list[dict[str, Any]], *, name: str, cursor: int, paylo
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Export a QMAP runtime packet for Layer 0 o_proj simulation.")
+    parser = argparse.ArgumentParser(description="Export a QMAP runtime packet for o_proj simulation.")
     parser.add_argument("--prefix", default=O_PROJ_PREFIX)
+    parser.add_argument("--layer-id", type=int, default=LAYER_ID)
+    parser.add_argument("--qmap-base", type=parse_int_auto, default=QMAP_BASE)
+    parser.add_argument("--weight-base", type=parse_int_auto, default=O_PROJ_WEIGHT_BASE_ADDR)
+    parser.add_argument("--scale-base", type=parse_int_auto, default=O_PROJ_SCALE_BASE_ADDR)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
@@ -214,6 +222,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     prefix = str(args.prefix)
+    layer_id = int(args.layer_id)
+    qmap_base = int(args.qmap_base)
+    weight_base_addr = int(args.weight_base)
+    scale_base_addr = int(args.scale_base)
 
     activation = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_activation.hex", ACT_WIDTH, signed=True)
     expected = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_expected_q12_12.hex", OUT_WIDTH, signed=True)
@@ -239,13 +251,13 @@ def main() -> None:
     expected_i32 = expected.astype(np.int32)
     metadata_words = np.array(
         [
-            LAYER_ID,
+            layer_id,
             OUT_FEATURES,
             INPUT_SIZE,
             GROUP_SIZE,
             GROUP_COUNT,
-            O_PROJ_WEIGHT_BASE_ADDR & 0xFFFF_FFFF,
-            O_PROJ_SCALE_BASE_ADDR & 0xFFFF_FFFF,
+            weight_base_addr & 0xFFFF_FFFF,
+            scale_base_addr & 0xFFFF_FFFF,
             MATRIX_ID_O_PROJ,
         ],
         dtype=np.uint32,
@@ -262,7 +274,7 @@ def main() -> None:
     payload_by_name = {item["name"]: item for item in payloads}
 
     def addr(name: str) -> int:
-        return QMAP_BASE + int(payload_by_name[name]["offset"])
+        return qmap_base + int(payload_by_name[name]["offset"])
 
     def size(name: str) -> int:
         return len(payload_by_name[name]["payload"])
@@ -286,7 +298,7 @@ def main() -> None:
             nbytes=size("metadata"),
             dims=(int(metadata_words.size), 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_O_PROJ, LAYER_ID, OUT_FEATURES, INPUT_SIZE),
+            aux=(MATRIX_ID_O_PROJ, layer_id, OUT_FEATURES, INPUT_SIZE),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_ACTIVATION,
@@ -301,7 +313,7 @@ def main() -> None:
             nbytes=INPUT_SIZE * 4,
             dims=(INPUT_SIZE, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_O_PROJ, LAYER_ID, 0, 0),
+            aux=(MATRIX_ID_O_PROJ, layer_id, 0, 0),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_WEIGHT,
@@ -312,11 +324,11 @@ def main() -> None:
             element_bits=WEIGHT_WIDTH,
             group_size=GROUP_SIZE,
             scale_tensor_id=TENSOR_ID_SCALE,
-            base_addr=O_PROJ_WEIGHT_BASE_ADDR,
+            base_addr=weight_base_addr,
             nbytes=weight_bytes,
             dims=(OUT_FEATURES, INPUT_SIZE, 0, 0),
             strides=(weight_row_bytes, 0, 0, 0),
-            aux=(MATRIX_ID_O_PROJ, LAYER_ID, 0, OUT_FEATURES),
+            aux=(MATRIX_ID_O_PROJ, layer_id, 0, OUT_FEATURES),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_SCALE,
@@ -327,11 +339,11 @@ def main() -> None:
             element_bits=SCALE_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=O_PROJ_SCALE_BASE_ADDR,
+            base_addr=scale_base_addr,
             nbytes=scale_bytes,
             dims=(OUT_FEATURES, GROUP_COUNT, 0, 0),
             strides=(scale_row_bytes, 2, 0, 0),
-            aux=(MATRIX_ID_O_PROJ, LAYER_ID, 0, OUT_FEATURES),
+            aux=(MATRIX_ID_O_PROJ, layer_id, 0, OUT_FEATURES),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_OUTPUT,
@@ -346,7 +358,7 @@ def main() -> None:
             nbytes=OUT_FEATURES * 4,
             dims=(OUT_FEATURES, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_O_PROJ, LAYER_ID, 0, OUT_FEATURES),
+            aux=(MATRIX_ID_O_PROJ, layer_id, 0, OUT_FEATURES),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_EXPECTED,
@@ -361,12 +373,12 @@ def main() -> None:
             nbytes=OUT_FEATURES * 4,
             dims=(OUT_FEATURES, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_O_PROJ, LAYER_ID, 0, OUT_FEATURES),
+            aux=(MATRIX_ID_O_PROJ, layer_id, 0, OUT_FEATURES),
         ),
     ]
 
     image = bytearray(image_bytes)
-    image[0:HEADER_BYTES] = pack_header(QMAP_BASE, image_bytes)
+    image[0:HEADER_BYTES] = pack_header(qmap_base, image_bytes)
     for slot, descriptor in enumerate(descriptors):
         offset = DESCRIPTOR_TABLE_OFFSET + slot * DESCRIPTOR_BYTES
         image[offset : offset + DESCRIPTOR_BYTES] = descriptor
@@ -379,27 +391,28 @@ def main() -> None:
     args.output.write_bytes(bytes(image))
     write_hex_lines(args.sim_hex, image_to_words32(bytes(image)), 32)
     write_hex_lines(args.expected_hex, expected_i32, 32)
-    write_scalar(SIM_VECTOR_DIR / f"{prefix}_weight_base_addr.hex", O_PROJ_WEIGHT_BASE_ADDR, 64)
-    write_scalar(SIM_VECTOR_DIR / f"{prefix}_scale_base_addr.hex", O_PROJ_SCALE_BASE_ADDR, 64)
+    write_scalar(SIM_VECTOR_DIR / f"{prefix}_weight_base_addr.hex", weight_base_addr, 64)
+    write_scalar(SIM_VECTOR_DIR / f"{prefix}_scale_base_addr.hex", scale_base_addr, 64)
 
     manifest = {
         "format_version": 1,
-        "name": "qmap_o_proj_runtime",
+        "name": f"qmap_layer{layer_id}_o_proj_runtime",
         "prefix": prefix,
-        "qmap_base": QMAP_BASE,
+        "qmap_base": qmap_base,
         "image_bytes": image_bytes,
         "sha256": sha256_file(args.output),
         "descriptor_count": DESCRIPTOR_COUNT,
         "descriptor_capacity": DESCRIPTOR_CAPACITY,
         "shape": {
+            "layer_id": layer_id,
             "input_size": INPUT_SIZE,
             "out_features": OUT_FEATURES,
             "group_size": GROUP_SIZE,
             "group_count": GROUP_COUNT,
         },
         "memory_layout": {
-            "weight_base_addr": O_PROJ_WEIGHT_BASE_ADDR,
-            "scale_base_addr": O_PROJ_SCALE_BASE_ADDR,
+            "weight_base_addr": weight_base_addr,
+            "scale_base_addr": scale_base_addr,
             "weight_row_bytes": weight_row_bytes,
             "scale_row_bytes": scale_row_bytes,
             "weight_bytes": weight_bytes,
@@ -426,11 +439,12 @@ def main() -> None:
 
     print("Exported QMAP o_proj runtime packet")
     print("=" * 80)
-    print(f"QMAP base:       0x{QMAP_BASE:016X}")
+    print(f"QMAP base:       0x{qmap_base:016X}")
+    print(f"Layer:           {layer_id}")
     print(f"Image bytes:     0x{image_bytes:X}")
     print(f"Activation words:{activation_i32.size}")
-    print(f"Weight bytes:    0x{weight_bytes:X} @ 0x{O_PROJ_WEIGHT_BASE_ADDR:016X}")
-    print(f"Scale bytes:     0x{scale_bytes:X} @ 0x{O_PROJ_SCALE_BASE_ADDR:016X}")
+    print(f"Weight bytes:    0x{weight_bytes:X} @ 0x{weight_base_addr:016X}")
+    print(f"Scale bytes:     0x{scale_bytes:X} @ 0x{scale_base_addr:016X}")
     print(f"Expected words:  {expected_i32.size}")
     print(f"Binary:          {args.output}")
     print(f"Simulation hex:  {args.sim_hex}")

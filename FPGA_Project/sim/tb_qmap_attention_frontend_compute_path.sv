@@ -16,6 +16,8 @@ module tb_qmap_attention_frontend_compute_path;
     localparam int TOTAL_CACHE_WRITES = 2 * KV_COUNT;
     localparam int QMAP_IMAGE_BYTES = 32'h8000;
     localparam int QMAP_WORDS       = QMAP_IMAGE_BYTES / 4;
+    localparam int DESCRIPTOR_TABLE_OFFSET = 32'h0100;
+    localparam int DESCRIPTOR_BYTES = 128;
     localparam int EXPECTED_READ_REQS = 31;
     localparam int EXPECTED_READ_WORDS = 4944;
     localparam int EXPECTED_WRITE_REQS = TOTAL_CACHE_WRITES + 1;
@@ -70,8 +72,14 @@ module tb_qmap_attention_frontend_compute_path;
 
     string qmap_image_file;
     string q_rope_expected_file;
+    string expected_cache_addr_file;
+    string expected_cache_data_file;
+    string expected_cache_kind_file;
+    string expected_cache_head_file;
+    string expected_cache_dim_file;
     string tracefile;
     string wavefile;
+    logic [ADDR_WIDTH-1 : 0] qmap_base_addr;
 
     integer cycle_count;
     integer mismatch_count;
@@ -137,7 +145,7 @@ module tb_qmap_attention_frontend_compute_path;
         .i_clk(clk),
         .i_rst_n(rst_n),
         .i_start(start),
-        .i_qmap_base_addr(`QMAP_ATTN_FRONTEND_BASE_ADDR),
+        .i_qmap_base_addr(qmap_base_addr),
         .o_busy(busy),
         .o_done(done),
         .o_error(error),
@@ -255,11 +263,11 @@ module tb_qmap_attention_frontend_compute_path;
         begin
             $readmemh(qmap_image_file, qmap_mem);
             $readmemh(q_rope_expected_file, q_rope_expected_mem);
-            $readmemh("FPGA_Project/sim/vectors/kv_cache_append_real_expected_addr.hex", expected_cache_addr_mem);
-            $readmemh("FPGA_Project/sim/vectors/kv_cache_append_real_expected_data.hex", expected_cache_data_mem);
-            $readmemh("FPGA_Project/sim/vectors/kv_cache_append_real_expected_kind.hex", expected_cache_kind_mem);
-            $readmemh("FPGA_Project/sim/vectors/kv_cache_append_real_expected_head.hex", expected_cache_head_mem);
-            $readmemh("FPGA_Project/sim/vectors/kv_cache_append_real_expected_dim.hex", expected_cache_dim_mem);
+            $readmemh(expected_cache_addr_file, expected_cache_addr_mem);
+            $readmemh(expected_cache_data_file, expected_cache_data_mem);
+            $readmemh(expected_cache_kind_file, expected_cache_kind_mem);
+            $readmemh(expected_cache_head_file, expected_cache_head_mem);
+            $readmemh(expected_cache_dim_file, expected_cache_dim_mem);
         end
     endtask
 
@@ -390,8 +398,8 @@ module tb_qmap_attention_frontend_compute_path;
                     cache_write_accept_count = cache_write_accept_count + 1;
                 end
             end
-            else if ((word_addr >= `QMAP_ATTN_FRONTEND_BASE_ADDR) &&
-                     (word_addr < (`QMAP_ATTN_FRONTEND_BASE_ADDR + QMAP_IMAGE_BYTES))) begin
+            else if ((word_addr >= qmap_base_addr) &&
+                     (word_addr < (qmap_base_addr + QMAP_IMAGE_BYTES))) begin
                 if (q_rope_write_accept_count >= Q_COUNT) begin
                     $display("FAIL: extra Q RoPE write at cycle %0d addr=0x%016h", cycle_count, word_addr);
                     mismatch_count = mismatch_count + 1;
@@ -409,7 +417,7 @@ module tb_qmap_attention_frontend_compute_path;
                         end
                         mismatch_count = mismatch_count + 1;
                     end
-                    qmap_mem[(word_addr - `QMAP_ATTN_FRONTEND_BASE_ADDR) >> 2] = mem_wr_data;
+                    qmap_mem[(word_addr - qmap_base_addr) >> 2] = mem_wr_data;
                     q_rope_write_accept_count = q_rope_write_accept_count + 1;
                 end
             end
@@ -471,8 +479,8 @@ module tb_qmap_attention_frontend_compute_path;
             end
 
             if (mem_rd_req_valid && mem_rd_req_ready) begin
-                if ((mem_rd_req_addr < `QMAP_ATTN_FRONTEND_BASE_ADDR) ||
-                    ((mem_rd_req_addr + mem_rd_req_len_bytes) > (`QMAP_ATTN_FRONTEND_BASE_ADDR + QMAP_IMAGE_BYTES)) ||
+                if ((mem_rd_req_addr < qmap_base_addr) ||
+                    ((mem_rd_req_addr + mem_rd_req_len_bytes) > (qmap_base_addr + QMAP_IMAGE_BYTES)) ||
                     ((mem_rd_req_addr & 64'h3) != 0) ||
                     ((mem_rd_req_len_bytes & 16'h3) != 0)) begin
                     $display("FAIL: bad read request addr=0x%016h len=%0d", mem_rd_req_addr, mem_rd_req_len_bytes);
@@ -485,7 +493,7 @@ module tb_qmap_attention_frontend_compute_path;
                 end
                 rd_word_index <= 0;
                 rd_word_count <= mem_rd_req_len_bytes >> 2;
-                rd_base_index <= (mem_rd_req_addr - `QMAP_ATTN_FRONTEND_BASE_ADDR) >> 2;
+                rd_base_index <= (mem_rd_req_addr - qmap_base_addr) >> 2;
                 rd_req_accept_count <= rd_req_accept_count + 1;
             end
 
@@ -682,8 +690,7 @@ module tb_qmap_attention_frontend_compute_path;
         integer writes_before;
         begin
             load_vectors();
-            cos_dtype_word_index = (`QMAP_ATTN_FRONTEND_DESCRIPTOR_TABLE_ADDR - `QMAP_ATTN_FRONTEND_BASE_ADDR +
-                                    SLOT_COS * `QMAP_DESCRIPTOR_BYTES + 8) >> 2;
+            cos_dtype_word_index = (DESCRIPTOR_TABLE_OFFSET + SLOT_COS * DESCRIPTOR_BYTES + 8) >> 2;
             qmap_mem[cos_dtype_word_index] = `QMAP_DTYPE_U32;
             writes_before = wr_req_accept_count;
             @(negedge clk);
@@ -721,12 +728,30 @@ module tb_qmap_attention_frontend_compute_path;
 
         qmap_image_file = "FPGA_Project/sim/vectors/qmap_attention_frontend_image_words32.hex";
         q_rope_expected_file = "FPGA_Project/sim/vectors/qmap_attention_frontend_q_rope_expected_words32.hex";
+        expected_cache_addr_file = "FPGA_Project/sim/vectors/kv_cache_append_real_expected_addr.hex";
+        expected_cache_data_file = "FPGA_Project/sim/vectors/kv_cache_append_real_expected_data.hex";
+        expected_cache_kind_file = "FPGA_Project/sim/vectors/kv_cache_append_real_expected_kind.hex";
+        expected_cache_head_file = "FPGA_Project/sim/vectors/kv_cache_append_real_expected_head.hex";
+        expected_cache_dim_file = "FPGA_Project/sim/vectors/kv_cache_append_real_expected_dim.hex";
         tracefile = "FPGA_Project/sim/qmap_attention_frontend_compute_path_trace.csv";
+        qmap_base_addr = `QMAP_ATTN_FRONTEND_BASE_ADDR;
         if ($value$plusargs("qmap_image=%s", qmap_image_file)) begin
         end
         if ($value$plusargs("q_rope_expected=%s", q_rope_expected_file)) begin
         end
+        if ($value$plusargs("expected_cache_addr=%s", expected_cache_addr_file)) begin
+        end
+        if ($value$plusargs("expected_cache_data=%s", expected_cache_data_file)) begin
+        end
+        if ($value$plusargs("expected_cache_kind=%s", expected_cache_kind_file)) begin
+        end
+        if ($value$plusargs("expected_cache_head=%s", expected_cache_head_file)) begin
+        end
+        if ($value$plusargs("expected_cache_dim=%s", expected_cache_dim_file)) begin
+        end
         if ($value$plusargs("tracefile=%s", tracefile)) begin
+        end
+        if ($value$plusargs("qmap_base=%h", qmap_base_addr)) begin
         end
 
         reset_model_state();
@@ -748,7 +773,11 @@ module tb_qmap_attention_frontend_compute_path;
         @(negedge clk);
         $fclose(trace_fd);
 
-        $display("qmap_attention_frontend_compute_path real Layer 0 current-token test");
+        $display("qmap_attention_frontend_compute_path current-token test");
+        $display("  qmap base             = 0x%016h", qmap_base_addr);
+        $display("  qmap image            = %s", qmap_image_file);
+        $display("  q rope expected       = %s", q_rope_expected_file);
+        $display("  expected cache addr   = %s", expected_cache_addr_file);
         $display("  cache writes accepted = %0d", success_cache_write_accept_count);
         $display("  Q RoPE writes accepted= %0d", success_q_rope_write_accept_count);
         $display("  read req/rsp accepted = %0d / %0d", success_rd_req_accept_count, success_rd_rsp_accept_count);

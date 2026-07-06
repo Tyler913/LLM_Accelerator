@@ -1,0 +1,60 @@
+{
+  "format_version": 1,
+  "name": "layer1_o_proj_stage_real",
+  "module": "layer1.self_attn.o_proj_stage",
+  "layer_id": 1,
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "shape": {
+    "input_size": 2048,
+    "out_features": 1024,
+    "group_size": 64,
+    "group_count": 32
+  },
+  "formats": {
+    "activation": "signed 24-bit Q12.12 fixed attention output",
+    "weight": "signed int4 unpacked one weight per hex line",
+    "weight_words32": "signed int4 packed into 32-bit words, 8 weights per word, lowest index in low nibble",
+    "scale": "unsigned 16-bit Q2.14",
+    "scale_words32": "unsigned Q2.14 packed into 32-bit words, 2 scales per word, lowest index in low halfword",
+    "row_sum": "signed 64-bit Q26",
+    "output": "signed 24-bit Q12.12"
+  },
+  "saturation": {
+    "q_gamma_quantize_count": 0,
+    "k_gamma_quantize_count": 0,
+    "norm_output": false,
+    "rope_output": false,
+    "value_output": false,
+    "o_proj_output_count": 0
+  },
+  "debug": {
+    "attn_input_q12_12_max_abs": 2259,
+    "row_sum_q26_min": -46351673,
+    "row_sum_q26_max": 30945347,
+    "expected_q12_12_max_abs": 2830,
+    "fixed_attn_input_vs_fp32_o_proj_input_max_abs_diff": 0.04959836229681969,
+    "fixed_o_proj_vs_fp32_from_fp32_attn_max_abs_diff": 0.08198389410972595,
+    "fixed_o_proj_vs_fp32_from_fp32_attn_mean_abs_diff": 0.012546604644285253,
+    "fixed_o_proj_vs_hf_o_proj_output_max_abs_diff": 0.08198386430740356,
+    "fixed_o_proj_vs_hf_o_proj_output_mean_abs_diff": 0.012546607300691903
+  },
+  "files": {
+    "activation": "layer1_o_proj_stage_real_activation.hex",
+    "weight": "layer1_o_proj_stage_real_weight.hex",
+    "weight_words32": "layer1_o_proj_stage_real_weight_words32.hex",
+    "scale": "layer1_o_proj_stage_real_scale.hex",
+    "scale_words32": "layer1_o_proj_stage_real_scale_words32.hex",
+    "expected_q26": "layer1_o_proj_stage_real_expected_q26.hex",
+    "expected_q12_12": "layer1_o_proj_stage_real_expected_q12_12.hex"
+  }
+}

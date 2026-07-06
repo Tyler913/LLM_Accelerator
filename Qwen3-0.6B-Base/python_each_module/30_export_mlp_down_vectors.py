@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 from typing import Any
@@ -19,10 +20,9 @@ from common import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
-MLP_HIDDEN_PREFIX = "mlp_silu_mul_stage_real"
 
-PREFIX = "mlp_down_proj_stage_real"
-MODULE_NAME = "layer0.mlp.down_proj_stage"
+DEFAULT_MLP_HIDDEN_PREFIX = "mlp_silu_mul_stage_real"
+DEFAULT_PREFIX = "mlp_down_proj_stage_real"
 
 INPUT_SIZE = 3072
 OUT_FEATURES = 1024
@@ -137,28 +137,44 @@ def q26_to_q12_12(row_sum_q26: np.ndarray) -> tuple[np.ndarray, int]:
     return saturate_signed_array(shifted, OUT_WIDTH)
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Export fixed-point MLP down projection RTL vectors.")
+    parser.add_argument("--layer-id", type=int, default=0)
+    parser.add_argument("--hidden-prefix", default=DEFAULT_MLP_HIDDEN_PREFIX)
+    parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+    layer_id = int(args.layer_id)
+    hidden_prefix = str(args.hidden_prefix)
+    prefix = str(args.prefix)
+    module_name = f"layer{layer_id}.mlp.down_proj_stage"
+
     tokenizer, model, backbone = load_model()
     input_ids = encode_prompt(tokenizer)
     batch_size, prompt_len = input_ids.shape
     if batch_size != 1:
         raise RuntimeError(f"Expected batch size 1, got {batch_size}")
+    if layer_id < 0 or layer_id >= len(backbone.layers):
+        raise ValueError(f"layer_id {layer_id} is outside model layer range 0..{len(backbone.layers) - 1}")
 
     selected_position = prompt_len - 1
     selected_token_id = int(input_ids[0, selected_position].item())
-    layer0 = backbone.layers[0]
-    mlp0 = layer0.mlp
+    layer = backbone.layers[layer_id]
+    mlp = layer.mlp
 
     records: dict[str, dict[str, torch.Tensor]] = {}
-    hook = mlp0.down_proj.register_forward_hook(capture_module_io(records, "down_proj"))
+    hook = mlp.down_proj.register_forward_hook(capture_module_io(records, "down_proj"))
     try:
         with torch.no_grad():
             model(input_ids=input_ids, use_cache=False)
     finally:
         hook.remove()
 
-    hidden_path = SIM_VECTOR_DIR / f"{MLP_HIDDEN_PREFIX}_expected_hidden_q12_12.hex"
-    hidden_meta_path = SIM_VECTOR_DIR / f"{MLP_HIDDEN_PREFIX}_meta.json"
+    hidden_path = SIM_VECTOR_DIR / f"{hidden_prefix}_expected_hidden_q12_12.hex"
+    hidden_meta_path = SIM_VECTOR_DIR / f"{hidden_prefix}_meta.json"
     activation_q12_12 = read_signed_hex_lines(hidden_path, ACT_WIDTH)
     if activation_q12_12.shape != (INPUT_SIZE,):
         raise RuntimeError(f"Expected mlp_hidden vector shape {(INPUT_SIZE,)}, got {activation_q12_12.shape}")
@@ -168,8 +184,10 @@ def main() -> None:
             raise RuntimeError("mlp_hidden vector selected position does not match prompt")
         if int(hidden_meta["selected_token_id"]) != selected_token_id:
             raise RuntimeError("mlp_hidden vector selected token does not match prompt")
+        if int(hidden_meta.get("layer_id", layer_id)) != layer_id:
+            raise RuntimeError("mlp_hidden vector layer_id does not match requested layer")
 
-    down_weight_fp32 = np.ascontiguousarray(tensor_to_float32(mlp0.down_proj.weight).numpy(), dtype=np.float32)
+    down_weight_fp32 = np.ascontiguousarray(tensor_to_float32(mlp.down_proj.weight).numpy(), dtype=np.float32)
     down_weight_q4, down_scale_q2_14 = quantize_weight_q4(down_weight_fp32)
     down_q26 = compute_q4_gemv_q26(activation_q12_12, down_weight_q4, down_scale_q2_14)
     down_q12_12, down_sat_count = q26_to_q12_12(down_q26)
@@ -179,14 +197,14 @@ def main() -> None:
     down_diff = fixed_down_float - hf_down
 
     files = {
-        "activation": SIM_VECTOR_DIR / f"{PREFIX}_activation.hex",
-        "weight_words32": SIM_VECTOR_DIR / f"{PREFIX}_weight_words32.hex",
-        "scale_words32": SIM_VECTOR_DIR / f"{PREFIX}_scale_words32.hex",
-        "weight_chunks4096": SIM_VECTOR_DIR / f"{PREFIX}_weight_chunks4096.hex",
-        "scale_chunks4096": SIM_VECTOR_DIR / f"{PREFIX}_scale_chunks4096.hex",
-        "expected_q26": SIM_VECTOR_DIR / f"{PREFIX}_expected_q26.hex",
-        "expected_q12_12": SIM_VECTOR_DIR / f"{PREFIX}_expected_q12_12.hex",
-        "meta": SIM_VECTOR_DIR / f"{PREFIX}_meta.json",
+        "activation": SIM_VECTOR_DIR / f"{prefix}_activation.hex",
+        "weight_words32": SIM_VECTOR_DIR / f"{prefix}_weight_words32.hex",
+        "scale_words32": SIM_VECTOR_DIR / f"{prefix}_scale_words32.hex",
+        "weight_chunks4096": SIM_VECTOR_DIR / f"{prefix}_weight_chunks4096.hex",
+        "scale_chunks4096": SIM_VECTOR_DIR / f"{prefix}_scale_chunks4096.hex",
+        "expected_q26": SIM_VECTOR_DIR / f"{prefix}_expected_q26.hex",
+        "expected_q12_12": SIM_VECTOR_DIR / f"{prefix}_expected_q12_12.hex",
+        "meta": SIM_VECTOR_DIR / f"{prefix}_meta.json",
     }
 
     write_hex_lines(files["activation"], activation_q12_12, ACT_WIDTH)
@@ -199,14 +217,15 @@ def main() -> None:
 
     meta: dict[str, Any] = {
         "format_version": 1,
-        "name": PREFIX,
-        "module": MODULE_NAME,
+        "name": prefix,
+        "module": module_name,
+        "layer_id": layer_id,
         "prompt": PROMPT,
         "token_ids": [int(value) for value in input_ids.flatten().tolist()],
         "selected_position": int(selected_position),
         "selected_token_id": int(selected_token_id),
         "selected_token_text": tokenizer.decode([selected_token_id]),
-        "source_mlp_hidden_prefix": MLP_HIDDEN_PREFIX,
+        "source_mlp_hidden_prefix": hidden_prefix,
         "shape": {
             "input_size": INPUT_SIZE,
             "out_features": OUT_FEATURES,
@@ -242,7 +261,8 @@ def main() -> None:
 
     print("Exported fixed-point MLP down projection RTL test vectors")
     print("=" * 80)
-    print(f"Module: {MODULE_NAME}")
+    print(f"Module: {module_name}")
+    print(f"Layer: {layer_id}")
     print(f"Prompt: {PROMPT!r}")
     print(f"Selected position: {selected_position}")
     print(f"Selected token id: {selected_token_id} / {tokenizer.decode([selected_token_id])!r}")

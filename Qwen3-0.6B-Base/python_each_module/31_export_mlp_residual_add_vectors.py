@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 from typing import Any
@@ -18,11 +19,9 @@ from common import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
-POST_ATTENTION_PREFIX = "post_attention_residual_norm_stage_real"
-DOWN_PREFIX = "mlp_down_proj_stage_real"
-
-PREFIX = "mlp_residual_add_stage_real"
-MODULE_NAME = "layer0.mlp.residual_add_stage"
+DEFAULT_POST_ATTENTION_PREFIX = "post_attention_residual_norm_stage_real"
+DEFAULT_DOWN_PREFIX = "mlp_down_proj_stage_real"
+DEFAULT_PREFIX = "mlp_residual_add_stage_real"
 
 INPUT_SIZE = 1024
 POST_ATTENTION_WIDTH = 24
@@ -75,7 +74,7 @@ def fixed_to_float(values: np.ndarray, frac_bits: int) -> np.ndarray:
     return values.astype(np.float64) / float(1 << frac_bits)
 
 
-def load_and_check_meta(path: Path, selected_position: int, selected_token_id: int) -> dict[str, Any]:
+def load_and_check_meta(path: Path, selected_position: int, selected_token_id: int, layer_id: int) -> dict[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(path)
     meta = json.loads(path.read_text(encoding="utf-8"))
@@ -83,32 +82,53 @@ def load_and_check_meta(path: Path, selected_position: int, selected_token_id: i
         raise RuntimeError(f"{path.name} selected position does not match prompt")
     if int(meta["selected_token_id"]) != selected_token_id:
         raise RuntimeError(f"{path.name} selected token does not match prompt")
+    if int(meta.get("layer_id", layer_id)) != layer_id:
+        raise RuntimeError(f"{path.name} layer_id does not match requested layer")
     return meta
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Export fixed-point MLP residual-add RTL vectors.")
+    parser.add_argument("--layer-id", type=int, default=0)
+    parser.add_argument("--post-attention-prefix", default=DEFAULT_POST_ATTENTION_PREFIX)
+    parser.add_argument("--down-prefix", default=DEFAULT_DOWN_PREFIX)
+    parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+    layer_id = int(args.layer_id)
+    post_attention_prefix = str(args.post_attention_prefix)
+    down_prefix = str(args.down_prefix)
+    prefix = str(args.prefix)
+    module_name = f"layer{layer_id}.mlp.residual_add_stage"
+
     tokenizer, model, backbone = load_model()
     input_ids = encode_prompt(tokenizer)
     batch_size, prompt_len = input_ids.shape
     if batch_size != 1:
         raise RuntimeError(f"Expected batch size 1, got {batch_size}")
+    if layer_id < 0 or layer_id >= len(backbone.layers):
+        raise ValueError(f"layer_id {layer_id} is outside model layer range 0..{len(backbone.layers) - 1}")
 
     selected_position = prompt_len - 1
     selected_token_id = int(input_ids[0, selected_position].item())
-    layer0 = backbone.layers[0]
+    layer = backbone.layers[layer_id]
+    hook_name = f"layer{layer_id}"
 
     records: dict[str, dict[str, torch.Tensor]] = {}
-    hook = layer0.register_forward_hook(capture_module_io(records, "layer0"))
+    hook = layer.register_forward_hook(capture_module_io(records, hook_name))
     try:
         with torch.no_grad():
             model(input_ids=input_ids, use_cache=False)
     finally:
         hook.remove()
 
-    post_attn_path = SIM_VECTOR_DIR / f"{POST_ATTENTION_PREFIX}_expected_residual.hex"
-    post_attn_meta_path = SIM_VECTOR_DIR / f"{POST_ATTENTION_PREFIX}_meta.json"
-    down_path = SIM_VECTOR_DIR / f"{DOWN_PREFIX}_expected_q12_12.hex"
-    down_meta_path = SIM_VECTOR_DIR / f"{DOWN_PREFIX}_meta.json"
+    post_attn_path = SIM_VECTOR_DIR / f"{post_attention_prefix}_expected_residual.hex"
+    post_attn_meta_path = SIM_VECTOR_DIR / f"{post_attention_prefix}_meta.json"
+    down_path = SIM_VECTOR_DIR / f"{down_prefix}_expected_q12_12.hex"
+    down_meta_path = SIM_VECTOR_DIR / f"{down_prefix}_meta.json"
 
     post_attn_q14_10 = read_signed_hex_lines(post_attn_path, POST_ATTENTION_WIDTH)
     down_q12_12 = read_signed_hex_lines(down_path, DOWN_WIDTH)
@@ -117,8 +137,8 @@ def main() -> None:
     if down_q12_12.shape != (INPUT_SIZE,):
         raise RuntimeError(f"Expected down projection shape {(INPUT_SIZE,)}, got {down_q12_12.shape}")
 
-    load_and_check_meta(post_attn_meta_path, selected_position, selected_token_id)
-    load_and_check_meta(down_meta_path, selected_position, selected_token_id)
+    load_and_check_meta(post_attn_meta_path, selected_position, selected_token_id, layer_id)
+    load_and_check_meta(down_meta_path, selected_position, selected_token_id, layer_id)
 
     down_q14_10 = down_q12_12 >> DOWN_TO_OUT_SHIFT
     layer_out_q14_10, saturation_count = saturate_signed_array(
@@ -126,16 +146,16 @@ def main() -> None:
         OUT_WIDTH,
     )
 
-    hf_layer_out = require_output(records, "layer0")[0, selected_position, :].numpy().astype(np.float64)
+    hf_layer_out = require_output(records, hook_name)[0, selected_position, :].numpy().astype(np.float64)
     layer_out_float = fixed_to_float(layer_out_q14_10, OUT_FRAC)
     diff = layer_out_float - hf_layer_out
 
     files = {
-        "post_attn_hidden": SIM_VECTOR_DIR / f"{PREFIX}_post_attn_hidden.hex",
-        "down_out": SIM_VECTOR_DIR / f"{PREFIX}_down_out.hex",
-        "expected_layer_out": SIM_VECTOR_DIR / f"{PREFIX}_expected_layer_out.hex",
-        "residual_saturation": SIM_VECTOR_DIR / f"{PREFIX}_residual_saturation.hex",
-        "meta": SIM_VECTOR_DIR / f"{PREFIX}_meta.json",
+        "post_attn_hidden": SIM_VECTOR_DIR / f"{prefix}_post_attn_hidden.hex",
+        "down_out": SIM_VECTOR_DIR / f"{prefix}_down_out.hex",
+        "expected_layer_out": SIM_VECTOR_DIR / f"{prefix}_expected_layer_out.hex",
+        "residual_saturation": SIM_VECTOR_DIR / f"{prefix}_residual_saturation.hex",
+        "meta": SIM_VECTOR_DIR / f"{prefix}_meta.json",
     }
 
     write_hex_lines(files["post_attn_hidden"], post_attn_q14_10, POST_ATTENTION_WIDTH)
@@ -145,15 +165,16 @@ def main() -> None:
 
     meta: dict[str, Any] = {
         "format_version": 1,
-        "name": PREFIX,
-        "module": MODULE_NAME,
+        "name": prefix,
+        "module": module_name,
+        "layer_id": layer_id,
         "prompt": PROMPT,
         "token_ids": [int(value) for value in input_ids.flatten().tolist()],
         "selected_position": int(selected_position),
         "selected_token_id": int(selected_token_id),
         "selected_token_text": tokenizer.decode([selected_token_id]),
-        "source_post_attention_prefix": POST_ATTENTION_PREFIX,
-        "source_down_prefix": DOWN_PREFIX,
+        "source_post_attention_prefix": post_attention_prefix,
+        "source_down_prefix": down_prefix,
         "shape": {
             "input_size": INPUT_SIZE,
         },
@@ -184,7 +205,8 @@ def main() -> None:
 
     print("Exported fixed-point MLP residual-add RTL test vectors")
     print("=" * 80)
-    print(f"Module: {MODULE_NAME}")
+    print(f"Module: {module_name}")
+    print(f"Layer: {layer_id}")
     print(f"Prompt: {PROMPT!r}")
     print(f"Selected position: {selected_position}")
     print(f"Selected token id: {selected_token_id} / {tokenizer.decode([selected_token_id])!r}")
@@ -193,7 +215,7 @@ def main() -> None:
     print(f"Expected layer:   {files['expected_layer_out']}")
     print(f"Debug meta:       {files['meta']}")
     print(
-        "Fixed Layer 0 output vs HF: "
+        f"Fixed Layer {layer_id} output vs HF: "
         f"max={meta['debug']['fixed_layer_out_vs_hf_max_abs_diff']:.8g} "
         f"mean={meta['debug']['fixed_layer_out_vs_hf_mean_abs_diff']:.8g}"
     )

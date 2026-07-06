@@ -209,27 +209,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
     parser.add_argument("--q-rope-expected-hex", type=Path, default=DEFAULT_Q_ROPE_EXPECTED_HEX)
+    parser.add_argument("--qk-prefix", type=str, default=QK_PREFIX, help="q/k norm + RoPE vector prefix")
+    parser.add_argument("--kv-prefix", type=str, default=KV_PREFIX, help="KV cache append vector prefix")
+    parser.add_argument(
+        "--qmap-base",
+        type=lambda text: int(text.replace("_", ""), 0),
+        default=QMAP_BASE,
+        help="Physical QMAP base address",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    qmap_base = args.qmap_base
 
-    q_meta = json.loads((SIM_VECTOR_DIR / f"{QK_PREFIX}_meta.json").read_text(encoding="utf-8"))
-    kv_meta = json.loads((SIM_VECTOR_DIR / f"{KV_PREFIX}_meta.json").read_text(encoding="utf-8"))
+    q_meta = json.loads((SIM_VECTOR_DIR / f"{args.qk_prefix}_meta.json").read_text(encoding="utf-8"))
+    kv_meta = json.loads((SIM_VECTOR_DIR / f"{args.kv_prefix}_meta.json").read_text(encoding="utf-8"))
     selected_position = int(q_meta["selected_position"])
     layer_id = int(kv_meta["cache"]["layer_id"])
     cache_base = int(str(kv_meta["cache"]["base_addr"]), 16)
     cache_write_count = int(kv_meta["cache"]["write_count"])
 
-    q_input = read_hex_lines(SIM_VECTOR_DIR / f"{QK_PREFIX}_q_input.hex", IN_WIDTH, signed=True)
-    k_input = read_hex_lines(SIM_VECTOR_DIR / f"{QK_PREFIX}_k_input.hex", IN_WIDTH, signed=True)
-    v_input = read_hex_lines(SIM_VECTOR_DIR / f"{KV_PREFIX}_v_input.hex", IN_WIDTH, signed=True)
-    q_gamma = read_hex_lines(SIM_VECTOR_DIR / f"{QK_PREFIX}_q_gamma.hex", GAMMA_WIDTH, signed=True)
-    k_gamma = read_hex_lines(SIM_VECTOR_DIR / f"{QK_PREFIX}_k_gamma.hex", GAMMA_WIDTH, signed=True)
-    cos = read_hex_lines(SIM_VECTOR_DIR / f"{QK_PREFIX}_cos.hex", TRIG_WIDTH, signed=True)
-    sin = read_hex_lines(SIM_VECTOR_DIR / f"{QK_PREFIX}_sin.hex", TRIG_WIDTH, signed=True)
-    q_rope_expected = read_hex_lines(SIM_VECTOR_DIR / f"{QK_PREFIX}_q_rope_expected.hex", OUT_WIDTH, signed=True)
+    q_input = read_hex_lines(SIM_VECTOR_DIR / f"{args.qk_prefix}_q_input.hex", IN_WIDTH, signed=True)
+    k_input = read_hex_lines(SIM_VECTOR_DIR / f"{args.qk_prefix}_k_input.hex", IN_WIDTH, signed=True)
+    v_input = read_hex_lines(SIM_VECTOR_DIR / f"{args.kv_prefix}_v_input.hex", IN_WIDTH, signed=True)
+    q_gamma = read_hex_lines(SIM_VECTOR_DIR / f"{args.qk_prefix}_q_gamma.hex", GAMMA_WIDTH, signed=True)
+    k_gamma = read_hex_lines(SIM_VECTOR_DIR / f"{args.qk_prefix}_k_gamma.hex", GAMMA_WIDTH, signed=True)
+    cos = read_hex_lines(SIM_VECTOR_DIR / f"{args.qk_prefix}_cos.hex", TRIG_WIDTH, signed=True)
+    sin = read_hex_lines(SIM_VECTOR_DIR / f"{args.qk_prefix}_sin.hex", TRIG_WIDTH, signed=True)
+    q_rope_expected = read_hex_lines(SIM_VECTOR_DIR / f"{args.qk_prefix}_q_rope_expected.hex", OUT_WIDTH, signed=True)
 
     expected_shapes = {
         "q_input": (q_input, Q_COUNT),
@@ -283,7 +292,7 @@ def main() -> None:
     payload_by_name = {item["name"]: item for item in payloads}
 
     def addr(name: str) -> int:
-        return QMAP_BASE + int(payload_by_name[name]["offset"])
+        return qmap_base + int(payload_by_name[name]["offset"])
 
     def size(name: str) -> int:
         return len(payload_by_name[name]["payload"])
@@ -453,7 +462,7 @@ def main() -> None:
     ]
 
     image = bytearray(image_bytes)
-    image[0:HEADER_BYTES] = pack_header(QMAP_BASE, image_bytes)
+    image[0:HEADER_BYTES] = pack_header(qmap_base, image_bytes)
     for slot, descriptor in enumerate(descriptors):
         offset = DESCRIPTOR_TABLE_OFFSET + slot * DESCRIPTOR_BYTES
         image[offset : offset + DESCRIPTOR_BYTES] = descriptor
@@ -469,12 +478,16 @@ def main() -> None:
 
     manifest = {
         "format_version": 1,
-        "name": "qmap_attention_frontend_runtime",
-        "qmap_base": QMAP_BASE,
+        "name": f"qmap_layer{layer_id}_attention_frontend_runtime",
+        "qmap_base": qmap_base,
         "image_bytes": image_bytes,
         "sha256": sha256_file(args.output),
         "descriptor_count": DESCRIPTOR_COUNT,
         "descriptor_capacity": DESCRIPTOR_CAPACITY,
+        "source_prefixes": {
+            "qk_prefix": args.qk_prefix,
+            "kv_prefix": args.kv_prefix,
+        },
         "shape": {
             "num_q_heads": NUM_Q_HEADS,
             "num_kv_heads": NUM_KV_HEADS,
@@ -515,7 +528,7 @@ def main() -> None:
 
     print("Exported QMAP attention front-end runtime packet")
     print("=" * 80)
-    print(f"QMAP base:       0x{QMAP_BASE:016X}")
+    print(f"QMAP base:       0x{qmap_base:016X}")
     print(f"Image bytes:     0x{image_bytes:X}")
     print(f"Layer/position:  layer={layer_id}, position={selected_position}")
     print(f"Q/K/V words:     {Q_COUNT} / {KV_COUNT} / {KV_COUNT}")

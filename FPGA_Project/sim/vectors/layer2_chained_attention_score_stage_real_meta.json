@@ -1,0 +1,59 @@
+{
+  "format_version": 1,
+  "layer_id": 2,
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "source": {
+    "q_rope_hex": "FPGA_Project/sim/vectors/qmap_layer2_chained_attention_frontend_q_rope_expected_words32.hex",
+    "base_k_cache_hex": "FPGA_Project/sim/vectors/layer2_attention_score_stage_real_k_cache.hex",
+    "base_v_cache_hex": "FPGA_Project/sim/vectors/layer2_attention_softmax_value_stage_real_v_cache.hex",
+    "current_k_hex": "FPGA_Project/sim/vectors/layer2_chained_kv_cache_append_real_k_input.hex",
+    "current_v_hex": "FPGA_Project/sim/vectors/layer2_chained_kv_cache_append_real_v_input.hex",
+    "score_scale_hex": "FPGA_Project/sim/vectors/layer2_attention_score_stage_real_score_scale_q0_31.hex"
+  },
+  "shape": {
+    "num_q_heads": 16,
+    "num_kv_heads": 8,
+    "head_dim": 128,
+    "kv_repeat": 2,
+    "cache_length": 5,
+    "score_count": 80,
+    "output_count": 2048
+  },
+  "fixed_point": {
+    "attention_scale_q0_31": 189812531,
+    "score_frac": 24,
+    "prob_frac": 16,
+    "out_frac": 12
+  },
+  "name": "layer2_chained_attention_score_stage_real",
+  "module": "layer2.self_attn.attention_score_stage",
+  "files": {
+    "q_input": "FPGA_Project/sim/vectors/layer2_chained_attention_score_stage_real_q_input.hex",
+    "k_cache": "FPGA_Project/sim/vectors/layer2_chained_attention_score_stage_real_k_cache.hex",
+    "score_scale": "FPGA_Project/sim/vectors/layer2_chained_attention_score_stage_real_score_scale_q0_31.hex",
+    "cache_length": "FPGA_Project/sim/vectors/layer2_chained_attention_score_stage_real_cache_length.hex",
+    "expected_raw": "FPGA_Project/sim/vectors/layer2_chained_attention_score_stage_real_expected_raw.hex",
+    "expected_scaled": "FPGA_Project/sim/vectors/layer2_chained_attention_score_stage_real_expected_scaled.hex",
+    "expected_q_head": "FPGA_Project/sim/vectors/layer2_chained_attention_score_stage_real_expected_q_head.hex",
+    "expected_kv_head": "FPGA_Project/sim/vectors/layer2_chained_attention_score_stage_real_expected_kv_head.hex",
+    "expected_position": "FPGA_Project/sim/vectors/layer2_chained_attention_score_stage_real_expected_position.hex"
+  },
+  "debug": {
+    "q_current_q12_12_max_abs": 38261,
+    "k_cache_q12_12_max_abs": 683336,
+    "raw_score_min": 43161492,
+    "raw_score_max": 4331529005,
+    "scaled_score_min": 3814972,
+    "scaled_score_max": 382856691
+  }
+}

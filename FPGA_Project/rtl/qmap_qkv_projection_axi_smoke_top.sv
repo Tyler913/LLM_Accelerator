@@ -2,7 +2,7 @@
 
 `include "qmap_defs.svh"
 
-// Vivado-facing top for the QMAP Layer 0 Q/K/V projection path.
+// Vivado-facing top for the QMAP Q/K/V projection path.
 //
 // This module connects the descriptor-driven QKV compute path to the reusable
 // AXI4 read and write masters. It is the first hardware-facing top that both
@@ -39,6 +39,7 @@ module qmap_qkv_projection_axi_smoke_top #(
 
     input  wire logic                    i_start,
     input  wire logic                    i_clear,
+    input  wire logic [ADDR_WIDTH-1 : 0] i_qmap_base_addr,
 
     output logic                    o_busy,
     output logic                    o_done_sticky,
@@ -195,7 +196,7 @@ module qmap_qkv_projection_axi_smoke_top #(
         .i_clk(aclk),
         .i_rst_n(aresetn),
         .i_start(start_pulse),
-        .i_qmap_base_addr(`QMAP_QKV_BASE_ADDR),
+        .i_qmap_base_addr(i_qmap_base_addr),
         .o_busy(compute_busy),
         .o_done(compute_done),
         .o_error(compute_error),

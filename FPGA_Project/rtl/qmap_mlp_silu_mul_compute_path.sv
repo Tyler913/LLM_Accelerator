@@ -2,7 +2,7 @@
 
 `include "qmap_defs.svh"
 
-// QMAP-backed Layer 0 MLP SiLU/multiply wrapper:
+// QMAP-backed per-layer MLP SiLU/multiply wrapper:
 //
 //   gate[3072] + up[3072] + sigmoid LUT -> silu(gate) * up -> hidden[3072]
 //

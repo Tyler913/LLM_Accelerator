@@ -115,6 +115,10 @@ def write_hex_lines(path: Path, values: np.ndarray, width_bits: int) -> None:
     path.write_text("\n".join(f"{int(value) & mask:0{digits}x}" for value in flat) + "\n", encoding="utf-8")
 
 
+def parse_int_auto(value: str) -> int:
+    return int(value.replace("_", ""), 0)
+
+
 def image_to_words32(image: bytes) -> np.ndarray:
     padded = image + bytes((-len(image)) % 4)
     return np.array(struct.unpack("<" + "I" * (len(padded) // 4), padded), dtype=np.uint32)
@@ -197,8 +201,11 @@ def add_payload(payloads: list[dict[str, Any]], *, name: str, cursor: int, paylo
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Export a QMAP runtime packet for Layer 0 MLP SiLU/multiply simulation.")
+    parser = argparse.ArgumentParser(description="Export a QMAP runtime packet for MLP SiLU/multiply simulation.")
     parser.add_argument("--prefix", default=PREFIX)
+    parser.add_argument("--layer-id", type=int, default=LAYER_ID)
+    parser.add_argument("--qmap-base", type=parse_int_auto, default=QMAP_BASE)
+    parser.add_argument("--gate-up-qmap-prefix", default=GATE_UP_QMAP_PREFIX)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
@@ -209,6 +216,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     prefix = str(args.prefix)
+    layer_id = int(args.layer_id)
+    qmap_base = int(args.qmap_base)
+    gate_up_qmap_prefix = str(args.gate_up_qmap_prefix)
 
     gate_input = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_gate_input.hex", IN_WIDTH, signed=True)
     up_input = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_up_input.hex", IN_WIDTH, signed=True)
@@ -224,8 +234,8 @@ def main() -> None:
     if expected_hidden.shape != (FEATURES,):
         raise RuntimeError(f"hidden expected shape mismatch: expected {(FEATURES,)}, got {expected_hidden.shape}")
 
-    qmap_gate_path = SIM_VECTOR_DIR / f"{GATE_UP_QMAP_PREFIX}_expected_gate_words32.hex"
-    qmap_up_path = SIM_VECTOR_DIR / f"{GATE_UP_QMAP_PREFIX}_expected_up_words32.hex"
+    qmap_gate_path = SIM_VECTOR_DIR / f"{gate_up_qmap_prefix}_expected_gate_words32.hex"
+    qmap_up_path = SIM_VECTOR_DIR / f"{gate_up_qmap_prefix}_expected_up_words32.hex"
     if qmap_gate_path.is_file() and qmap_up_path.is_file():
         qmap_gate = read_hex_lines(qmap_gate_path, 32, signed=True)
         qmap_up = read_hex_lines(qmap_up_path, 32, signed=True)
@@ -243,7 +253,7 @@ def main() -> None:
     lut_u32 = sigmoid_lut.astype(np.uint32)
     metadata_words = np.array(
         [
-            LAYER_ID,
+            layer_id,
             FEATURES,
             SIGMOID_LUT_SIZE,
             IN_WIDTH,
@@ -273,7 +283,7 @@ def main() -> None:
     payload_by_name = {item["name"]: item for item in payloads}
 
     def addr(name: str) -> int:
-        return QMAP_BASE + int(payload_by_name[name]["offset"])
+        return qmap_base + int(payload_by_name[name]["offset"])
 
     def size(name: str) -> int:
         return len(payload_by_name[name]["payload"])
@@ -281,7 +291,7 @@ def main() -> None:
     ro = TENSOR_F_ROW_MAJOR | TENSOR_F_READ_ONLY
     wo = TENSOR_F_ROW_MAJOR | TENSOR_F_WRITE_ONLY
     expected_flags = TENSOR_F_ROW_MAJOR | TENSOR_F_READ_ONLY | TENSOR_F_DEBUG_ONLY
-    stage_aux = (STAGE_ID_MLP_SILU_MUL, LAYER_ID, FEATURES, SIGMOID_LUT_SIZE)
+    stage_aux = (STAGE_ID_MLP_SILU_MUL, layer_id, FEATURES, SIGMOID_LUT_SIZE)
 
     descriptors = [
         pack_descriptor(
@@ -312,7 +322,7 @@ def main() -> None:
             nbytes=vector_bytes,
             dims=(FEATURES, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_GATE_PROJ, LAYER_ID, 0, FEATURES),
+            aux=(MATRIX_ID_GATE_PROJ, layer_id, 0, FEATURES),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_UP,
@@ -327,7 +337,7 @@ def main() -> None:
             nbytes=vector_bytes,
             dims=(FEATURES, 0, 0, 0),
             strides=(4, 0, 0, 0),
-            aux=(MATRIX_ID_UP_PROJ, LAYER_ID, 0, FEATURES),
+            aux=(MATRIX_ID_UP_PROJ, layer_id, 0, FEATURES),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_LUT,
@@ -377,7 +387,7 @@ def main() -> None:
     ]
 
     image = bytearray(image_bytes)
-    image[0:HEADER_BYTES] = pack_header(QMAP_BASE, image_bytes)
+    image[0:HEADER_BYTES] = pack_header(qmap_base, image_bytes)
     for slot, descriptor in enumerate(descriptors):
         offset = DESCRIPTOR_TABLE_OFFSET + slot * DESCRIPTOR_BYTES
         image[offset : offset + DESCRIPTOR_BYTES] = descriptor
@@ -395,12 +405,15 @@ def main() -> None:
     focused_meta: dict[str, Any] = {}
     if focused_meta_path.is_file():
         focused_meta = json.loads(focused_meta_path.read_text(encoding="utf-8"))
+        if int(focused_meta.get("layer_id", layer_id)) != layer_id:
+            raise RuntimeError("MLP SiLU/multiply vector layer_id does not match requested layer")
 
     manifest = {
         "format_version": 1,
-        "name": "qmap_mlp_silu_mul_runtime",
+        "name": f"qmap_layer{layer_id}_mlp_silu_mul_runtime",
         "prefix": prefix,
-        "qmap_base": QMAP_BASE,
+        "layer_id": layer_id,
+        "qmap_base": qmap_base,
         "image_bytes": image_bytes,
         "sha256": sha256_file(args.output),
         "descriptor_count": DESCRIPTOR_COUNT,
@@ -425,7 +438,7 @@ def main() -> None:
         },
         "focused_meta": {
             key: focused_meta.get(key)
-            for key in ("selected_position", "selected_token_id", "selected_token_text", "source_gate_up_prefix")
+            for key in ("layer_id", "selected_position", "selected_token_id", "selected_token_text", "source_gate_up_prefix")
             if key in focused_meta
         },
         "files": {
@@ -442,7 +455,8 @@ def main() -> None:
 
     print("Exported QMAP MLP SiLU/multiply runtime packet")
     print("=" * 80)
-    print(f"QMAP base:       0x{QMAP_BASE:016X}")
+    print(f"Layer:           {layer_id}")
+    print(f"QMAP base:       0x{qmap_base:016X}")
     print(f"Image bytes:     0x{image_bytes:X}")
     print(f"Gate/up words:   {gate_i32.size} / {up_i32.size}")
     print(f"Sigmoid LUT:     {lut_u32.size} words ({lut_bytes} bytes)")
