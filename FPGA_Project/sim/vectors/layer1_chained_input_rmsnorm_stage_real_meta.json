@@ -1,0 +1,46 @@
+{
+  "format_version": 1,
+  "name": "layer1_chained_input_rmsnorm_stage_real",
+  "module": "layer1.input_layernorm",
+  "prompt": "The future of FPGA is",
+  "token_ids": [
+    785,
+    3853,
+    315,
+    89462,
+    374
+  ],
+  "selected_position": 4,
+  "selected_token_id": 374,
+  "selected_token_text": " is",
+  "input_source": "layer0_qmap_mlp_residual_add",
+  "eps_float": 1e-06,
+  "eps_q20": 1,
+  "formats": {
+    "input": "signed 24-bit Q14.10",
+    "gamma": "signed 16-bit Q8.7",
+    "expected_output": "signed 24-bit Q12.12",
+    "inv_rms": "unsigned 24-bit UQ8.16"
+  },
+  "debug": {
+    "sum_squares": 71692090,
+    "mean_square": 70011,
+    "sqrt_radicand": 70012,
+    "rms_q14_10": 264,
+    "inv_rms_uq8_16": 254200,
+    "div_remainder": 64,
+    "saturation": false,
+    "fixed_vs_fp32_output_max_abs_diff": null
+  },
+  "files": {
+    "input": "layer1_chained_input_rmsnorm_stage_real_input.hex",
+    "gamma": "layer1_chained_input_rmsnorm_stage_real_gamma.hex",
+    "expected": "layer1_chained_input_rmsnorm_stage_real_expected.hex",
+    "sum_squares": "layer1_chained_input_rmsnorm_stage_real_sum_squares.hex",
+    "mean_square": "layer1_chained_input_rmsnorm_stage_real_mean_square.hex",
+    "sqrt_radicand": "layer1_chained_input_rmsnorm_stage_real_sqrt_radicand.hex",
+    "rms": "layer1_chained_input_rmsnorm_stage_real_rms.hex",
+    "inv_rms": "layer1_chained_input_rmsnorm_stage_real_inv_rms.hex",
+    "saturation": "layer1_chained_input_rmsnorm_stage_real_saturation.hex"
+  }
+}

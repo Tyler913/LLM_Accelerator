@@ -92,7 +92,8 @@ module qk_norm_128 #(
     logic [INV_RMS_WIDTH-1 : 0]           norm_inv_rms;
     logic                                 saturation_reg;
 
-    integer dim_index;
+    integer comb_dim_index;
+    integer seq_dim_index;
     integer source_element_index;
     integer output_element_index;
 
@@ -179,17 +180,17 @@ module qk_norm_128 #(
 
         if (head_index < NUM_Q_HEADS) begin
             norm_gamma_flat = i_q_gamma_flat;
-            for (dim_index = 0; dim_index < HEAD_DIM; dim_index = dim_index + 1) begin
-                source_element_index = (head_index * HEAD_DIM) + dim_index;
-                norm_input_flat[dim_index*IN_WIDTH +: IN_WIDTH] =
+            for (comb_dim_index = 0; comb_dim_index < HEAD_DIM; comb_dim_index = comb_dim_index + 1) begin
+                source_element_index = (head_index * HEAD_DIM) + comb_dim_index;
+                norm_input_flat[comb_dim_index*IN_WIDTH +: IN_WIDTH] =
                     i_q_flat[source_element_index*IN_WIDTH +: IN_WIDTH];
             end
         end
         else begin
             norm_gamma_flat = i_k_gamma_flat;
-            for (dim_index = 0; dim_index < HEAD_DIM; dim_index = dim_index + 1) begin
-                source_element_index = ((head_index - NUM_Q_HEADS) * HEAD_DIM) + dim_index;
-                norm_input_flat[dim_index*IN_WIDTH +: IN_WIDTH] =
+            for (comb_dim_index = 0; comb_dim_index < HEAD_DIM; comb_dim_index = comb_dim_index + 1) begin
+                source_element_index = ((head_index - NUM_Q_HEADS) * HEAD_DIM) + comb_dim_index;
+                norm_input_flat[comb_dim_index*IN_WIDTH +: IN_WIDTH] =
                     i_k_flat[source_element_index*IN_WIDTH +: IN_WIDTH];
             end
         end
@@ -222,18 +223,18 @@ module qk_norm_128 #(
                 WAIT_HEAD: begin
                     if (norm_done == 1'b1) begin
                         if (head_index < NUM_Q_HEADS) begin
-                            for (dim_index = 0; dim_index < HEAD_DIM; dim_index = dim_index + 1) begin
-                                output_element_index = (head_index * HEAD_DIM) + dim_index;
+                            for (seq_dim_index = 0; seq_dim_index < HEAD_DIM; seq_dim_index = seq_dim_index + 1) begin
+                                output_element_index = (head_index * HEAD_DIM) + seq_dim_index;
                                 o_q_norm_flat[output_element_index*OUT_WIDTH +: OUT_WIDTH] <=
-                                    norm_output_flat[dim_index*OUT_WIDTH +: OUT_WIDTH];
+                                    norm_output_flat[seq_dim_index*OUT_WIDTH +: OUT_WIDTH];
                             end
                         end
                         else begin
-                            for (dim_index = 0; dim_index < HEAD_DIM; dim_index = dim_index + 1) begin
+                            for (seq_dim_index = 0; seq_dim_index < HEAD_DIM; seq_dim_index = seq_dim_index + 1) begin
                                 output_element_index =
-                                    ((head_index - NUM_Q_HEADS) * HEAD_DIM) + dim_index;
+                                    ((head_index - NUM_Q_HEADS) * HEAD_DIM) + seq_dim_index;
                                 o_k_norm_flat[output_element_index*OUT_WIDTH +: OUT_WIDTH] <=
-                                    norm_output_flat[dim_index*OUT_WIDTH +: OUT_WIDTH];
+                                    norm_output_flat[seq_dim_index*OUT_WIDTH +: OUT_WIDTH];
                             end
                         end
 

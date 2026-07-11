@@ -207,6 +207,7 @@ def add_payload(payloads: list[dict[str, Any]], *, name: str, cursor: int, paylo
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export a QMAP final-token tail packet for RTL simulation.")
     parser.add_argument("--lm-prefix", default=LM_HEAD_PREFIX)
+    parser.add_argument("--final-norm-prefix", default=FINAL_NORM_PREFIX)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
@@ -217,10 +218,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     lm_prefix = str(args.lm_prefix)
+    final_norm_prefix = str(args.final_norm_prefix)
 
-    final_hidden = read_hex_lines(SIM_VECTOR_DIR / f"{FINAL_NORM_PREFIX}_input.hex", HIDDEN_WIDTH, signed=True)
-    final_gamma = read_hex_lines(SIM_VECTOR_DIR / f"{FINAL_NORM_PREFIX}_gamma.hex", GAMMA_WIDTH, signed=True)
-    final_norm_expected = read_hex_lines(SIM_VECTOR_DIR / f"{FINAL_NORM_PREFIX}_expected.hex", NORM_WIDTH, signed=True)
+    final_hidden = read_hex_lines(SIM_VECTOR_DIR / f"{final_norm_prefix}_input.hex", HIDDEN_WIDTH, signed=True)
+    final_gamma = read_hex_lines(SIM_VECTOR_DIR / f"{final_norm_prefix}_gamma.hex", GAMMA_WIDTH, signed=True)
+    final_norm_expected = read_hex_lines(SIM_VECTOR_DIR / f"{final_norm_prefix}_expected.hex", NORM_WIDTH, signed=True)
 
     scan_base = int(read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_scan_base_token.hex", 32, signed=False)[0])
     weight_base = int(read_hex_lines(SIM_VECTOR_DIR / f"{lm_prefix}_weight_base_addr.hex", 64, signed=False)[0])
@@ -442,6 +444,7 @@ def main() -> None:
         "format_version": 1,
         "name": "qmap_final_token_tail_runtime",
         "lm_prefix": lm_prefix,
+        "final_norm_prefix": final_norm_prefix,
         "qmap_base": QMAP_BASE,
         "image_bytes": image_bytes,
         "sha256": sha256_file(args.output),
@@ -483,6 +486,8 @@ def main() -> None:
 
     print("Exported QMAP final-token tail runtime packet")
     print("=" * 80)
+    print(f"Final norm:    {final_norm_prefix}")
+    print(f"LM prefix:     {lm_prefix}")
     print(f"QMAP base:     0x{QMAP_BASE:016X}")
     print(f"Image bytes:   0x{image_bytes:X}")
     print(f"Scan window:   [{scan_base}, {scan_base + scan_rows}) rows={scan_rows}, tiles={tile_count}")

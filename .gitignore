@@ -106,3 +106,10 @@ Vitis_Workspace/
 
 # Temporary local document extraction inputs
 tmp_pdf_inputs/
+
+# One-token scheduler/top local traces and large generated full-vocab vectors
+FPGA_Project/sim/qmap_one_token*_trace.csv
+FPGA_Project/sim/qmap_input_rmsnorm*_trace.csv
+FPGA_Project/sim/vectors/lm_head_argmax_layer*_chained_full_vocab_real_meta.json
+FPGA_Project/sim/vectors/lm_head_argmax_layer*_chained_full_vocab_real_*.hex
+FPGA_Project/sim/vectors/qmap_final_token_tail_layer*_chained_full_vocab_*.hex

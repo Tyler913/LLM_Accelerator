@@ -49,11 +49,11 @@
     "expected_position": "FPGA_Project/sim/vectors/layer1_chained_attention_score_stage_real_expected_position.hex"
   },
   "debug": {
-    "q_current_q12_12_max_abs": 35950,
-    "k_cache_q12_12_max_abs": 748584,
-    "raw_score_min": -1105167553,
-    "raw_score_max": 4567016849,
-    "scaled_score_min": -97683934,
-    "scaled_score_max": 403671072
+    "q_current_q12_12_max_abs": 56923,
+    "k_cache_q12_12_max_abs": 754185,
+    "raw_score_min": -694780580,
+    "raw_score_max": 4609194163,
+    "scaled_score_min": -61410508,
+    "scaled_score_max": 407399055
   }
 }

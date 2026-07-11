@@ -61,7 +61,17 @@ gate/up and MLP SiLU/multiply packets pass exact gate/up and
 `mlp_hidden[3072]` write-back locally, and the true Layer 1 MLP down packet
 passes exact persistent row reads plus `down_out[1024]` write-back locally.
 The true Layer 1 final MLP residual packet also passes exact
-`layer_out[1024]` write-back locally.
+`layer_out[1024]` write-back locally. The reusable one-token top/control
+boundary now also passes both the focused Layer 2 scheduler -> final-token tail
+xsim run and a stronger Layer 1 -> Layer 2 -> final-token tail xsim run with
+one shared memory port, returning token `537` and score `850086863` from the
+input-RMSNorm-enabled scheduler-written Layer 2 output. The standalone
+per-layer input RMSNorm QMAP wrapper now also passes descriptor-backed local
+RTL, reading `hidden[1024]` plus signed `I16_Q8_7` input-layernorm gamma and
+writing exact `input_norm[1024]`; the Layer 0 compute scheduler and top have
+focused local prechecks showing QKV consuming that wrapper-written activation
+buffer. Layer 1 and Layer 2 chained artifacts now include their own input
+RMSNorm packets and QKV descriptors that point at those runtime output buffers.
 
 For Q4 quantization semantics, read `Source/Q4_FORMAT.md`. For physical PL
 DDR4 placement, read `Source/FPGA_MEMORY_MAP.md`.
@@ -220,8 +230,8 @@ descriptor_addr = descriptor_table_addr + tensor_slot * 128
 | `18` | `QMAP_DTYPE_I16_Q4_12` | Signed 16-bit fixed-point `Q4.12` |
 | `19` | `QMAP_DTYPE_I32_Q12_12` | Signed `Q12.12` value padded to 32 bits |
 | `20` | `QMAP_DTYPE_I32_Q14_10` | Signed `Q14.10` value padded to 32 bits |
-| `21` | `QMAP_DTYPE_U16_Q8_8` | Unsigned `UQ8.8` value for RMSNorm gamma |
-| `22` | `QMAP_DTYPE_I16_Q8_7` | Signed `Q8.7` value for q_norm/k_norm gamma |
+| `21` | `QMAP_DTYPE_U16_Q8_8` | Legacy unsigned `UQ8.8` gamma value |
+| `22` | `QMAP_DTYPE_I16_Q8_7` | Signed `Q8.7` gamma value for RMSNorm and q_norm/k_norm |
 | `23` | `QMAP_DTYPE_I16_Q1_15` | Signed `Q1.15` value for RoPE cos/sin |
 | `24` | `QMAP_DTYPE_U32_Q0_20` | Unsigned `UQ0.20` value padded to 32 bits |
 | `25` | `QMAP_DTYPE_U16_Q0_16` | Unsigned `UQ0.16` value padded to 32 bits |
@@ -469,10 +479,10 @@ DDR4 and reused across prompt prefill and decode:
 - Q4 packed weights and Q2.14 scales for embedding/LM-head, attention
   projections, and MLP matrices
 - RMSNorm gamma vectors and q/k norm gamma vectors. Current local RTL keeps
-  signed-capable gamma handling where needed: q_norm/k_norm, post-attention
-  RMSNorm, and final RMSNorm use signed `I16_Q8_7` in the current fixed
-  vectors; the older Layer 0 input RMSNorm bring-up vector still uses
-  unsigned `U16_Q8_8`.
+  signed-capable gamma handling for input RMSNorm, post-attention RMSNorm,
+  final RMSNorm, and q_norm/k_norm. Layer 1 input RMSNorm gamma includes
+  negative values, so unsigned `U16_Q8_8` is not a deployable full-layer
+  default.
 - optional RoPE cos/sin tables
 - fixed base addresses for KV cache, activation buffers, logits/argmax
   scratch, and debug regions
@@ -493,17 +503,19 @@ It should not duplicate large model weights. It should point at already-loaded
 weight, scale, activation, KV-cache, and output-buffer regions using absolute
 PL DDR4 addresses in each descriptor.
 
-The first formal work packet is the Layer 0 QKV projection packet. It is the
-bridge from the proven Q4 row1024 GEMV path into the real model datapath:
+The current pre-QKV packet is the input RMSNorm runtime packet. The first large
+Q4 GEMV runtime packet is the Layer 0 QKV projection packet. Together they are
+the bridge from the proven Q4 row1024 GEMV path into the real model datapath:
 
 ```text
-input_norm[1024]
+hidden[1024]
+  -> input RMSNorm -> input_norm[1024]
   -> q_proj Q4 GEMV -> q_out[2048]
   -> k_proj Q4 GEMV -> k_out[1024]
   -> v_proj Q4 GEMV -> v_out[1024]
 ```
 
-The packet should use 32 descriptor slots initially:
+The QKV packet should use 32 descriptor slots initially:
 
 ```text
 descriptor_capacity    = 32
@@ -515,9 +527,84 @@ Only small metadata or optional debug payloads need to live inside the packet
 image. Large tensors should live in the normal PL DDR4 weight, activation, or
 KV-cache regions and be referenced by descriptor `base_addr`.
 
+### Input RMSNorm Runtime Packet
+
+The input RMSNorm packet produces the normalized activation consumed by QKV.
+It closes the pre-QKV layer-stage gap as a descriptor-backed wrapper and is now
+integrated as an optional pre-stage in the Layer 0 compute scheduler.
+
+Dataflow:
+
+```text
+hidden[1024] + input_layernorm.gamma[1024]
+  -> rmsnorm_1024
+  -> write input_norm[1024]
+```
+
+The current Layer 0 packet base is `0x4_050A_0000`. Layer 1 and Layer 2 chained
+artifact packets use `0x4_150A_0000` and `0x4_250A_0000`. Each packet reserves
+eight descriptor slots, uses five active descriptors, and uses a compact
+self-contained image for local simulation:
+
+```text
+descriptor_count       = 5
+descriptor_capacity    = 8
+descriptor_table_addr  = 0x4_050A_0100
+payload_base_addr      = 0x4_050A_0500
+image_bytes            = 0x0000_5000
+```
+
+Descriptor table:
+
+| Slot | Tensor | Role | Key fields |
+| ---: | --- | --- | --- |
+| `0` | metadata | `QMAP_ROLE_METADATA` | `U32`, layer/position/debug metadata |
+| `1` | hidden input | `QMAP_ROLE_ACTIVATION` | `I32_Q14_10`, `[1024]`, read-only, at `0x4_050A_0540` |
+| `2` | input RMSNorm gamma | `QMAP_ROLE_PARAMETER` | `I16_Q8_7`, `[1024]`, read-only, stored as sign-extended 32-bit words at `0x4_050A_1540` |
+| `3` | input norm output | `QMAP_ROLE_OUTPUT` | `I32_Q12_12`, `[1024]`, write-only, at `0x4_050A_2540` |
+| `4` | expected input norm | `QMAP_ROLE_EXPECTED` | `I32_Q12_12`, `[1024]`, debug-only, at `0x4_050A_3540` |
+
+Local validation:
+
+- Exporter:
+  `Qwen3-0.6B-Base/python_each_module/48_export_qmap_input_rmsnorm_image.py`.
+- Binary packet:
+  `artifacts/test_vectors/qwen3_0p6b_qmap_v1/input_rmsnorm_runtime.qmap.bin`.
+- Simulation hex:
+  `FPGA_Project/sim/vectors/qmap_input_rmsnorm_image_words32.hex`.
+- Expected output hex:
+  `FPGA_Project/sim/vectors/qmap_input_rmsnorm_expected_words32.hex`.
+- Packet SHA256:
+  `59c3243b6cc10856918c307934b9ced8651442c70492ae2fd422cb299b54f64c`.
+- RTL wrapper:
+  `FPGA_Project/rtl/qmap_input_rmsnorm_compute_path.sv`.
+- Testbench:
+  `FPGA_Project/sim/tb_qmap_input_rmsnorm_compute_path.sv`.
+- Current signed-gamma Icarus result: exact `1024` input-norm write words, `14` read
+  requests, `2224` read-response words, one `4096`-byte output write,
+  `sum_squares=589959`, `mean_square=576`, `inv_rms=2796202`, no saturation,
+  request/write backpressure coverage, busy-period spurious start coverage,
+  and a bad-gamma-dtype no-write error path.
+- Trace audit confirms descriptor reads complete before hidden/gamma reads,
+  hidden reads complete before gamma reads, gamma reads complete before
+  RMSNorm/write-back, all write data completes before done, and the invalid
+  descriptor path performs no writes.
+- Layer 1 chained artifact generation proved why this packet uses signed gamma:
+  `layer1.input_layernorm.weight` contains negative values, so the older
+  unsigned `U16_Q8_8` assumption is not valid beyond the Layer 0 bring-up case.
+
+Scheduler integration rule: the QKV activation descriptor must be patched or
+generated to read the slot-3 `input_norm[1024]` write-back buffer, not an
+exporter-precomputed normalized activation copy. When the activation source is
+the RTL RMSNorm output, regenerate QKV golden words with
+`21_export_qmap_qkv_projection_image.py --activation-hex` and pass
+`--activation-base-addr` so the QKV descriptor itself points to the RMSNorm
+output buffer. The old QKV golden was based on the exporter-precomputed
+activation and is not the right comparison target for the chained RTL path.
+
 ### Layer 0 QKV Projection Packet
 
-The first formal packet should describe these tensors:
+The QKV projection packet should describe these tensors:
 
 | Tensor Id | Role | Dtype | Shape | Flags | Notes |
 | ---: | --- | --- | --- | --- | --- |
@@ -600,6 +687,16 @@ Local validation:
   `0x0022_B000`, covers `q_rows=2048`, `k_rows=1024`, `v_rows=1024`, and the
   AXI smoke top completes `8209` read bursts plus `4096` write bursts with
   status `0xA` and exact Python expected I32_Q12.12 output-word match.
+- Chained input-RMSNorm QKV packets:
+  `21_export_qmap_qkv_projection_image.py --activation-hex --activation-base-addr`
+  now emits packets whose activation descriptor points at the producer
+  RMSNorm output buffer while retaining a debug activation payload copy. The
+  regenerated Layer 0 packet reads `0x4_050A_2540` and has SHA256
+  `9af7ace008d2004318c895fdbc363f6efd39b78f6d7842955d8c6848ab872bb1`; Layer 1
+  reads `0x4_150A_2540` with SHA256
+  `0b05c61d80108266ce0af74e721f947a597c58caccd6c5e74964d40210409de3`; Layer 2
+  reads `0x4_250A_2540` with SHA256
+  `4580c10509ba4bed9edab9c72fc2f4150c5812b83aac71a25c7ee76cdad080a1`.
 
 The current exporter can emit self-contained images for simulation and local
 bring-up. In the later persistent-manifest flow, the same descriptors should
@@ -1237,12 +1334,16 @@ Local validation:
 composition boundary that includes the full Layer 0 QKV projection stage. It
 does not introduce a new QMAP packet format. It sequentially starts the full
 QKV projection packet and the already passing Layer 0 full scheduler, then
-muxes both children onto one local memory request/write interface.
+muxes both children onto one local memory request/write interface. It now has
+an optional `qmap_input_rmsnorm_compute_path.sv` pre-stage ahead of QKV; when
+the input RMSNorm QMAP base is nonzero, QKV activation is patched/generated to
+consume the wrapper-written `input_norm[1024]` buffer.
 
 Composition order:
 
 ```text
-qkv_projection
+optional input_rmsnorm
+  -> qkv_projection
   -> qmap_layer0_full_scheduler
 ```
 
@@ -1349,8 +1450,9 @@ passes with true Layer 1 post-attention hidden, true Layer 1
 `down_out[1024]`, and exact `layer_out[1024]` write-back at `0x4_1509_0000`.
 Out-of-range loop requests and missing selected or ranged base-table entries
 exit before any memory request or write data is issued. This keeps the
-interface honest while scaling beyond two local layers and composing the
-multi-layer result into the final-token tail remain future work.
+interface honest while scaling beyond two local layers. The first
+multi-layer-output-to-final-tail composition is now proven locally by a
+shared-memory scheduler-to-tail xsim run.
 
 The chained-layer artifact flow is now reusable through
 `Qwen3-0.6B-Base/python_each_module/47_export_chained_layer_qmap_artifacts.py`.
@@ -1360,8 +1462,33 @@ for QKV and `0x4_2502_0000` through `0x4_2509_0000` for the attention/body
 stages; persistent Layer 2 body weight windows use `0x4_0800_0000` through
 `0x4_0878_0000`. The current TB has a focused `+l2_only` run that preloads the
 Layer 1 output, starts the scheduler at `active_layer=2`, and proves exact
-Layer 2 write-back. A compiled `+true3_only` entry exists for a full Layer 0 ->
-Layer 1 -> Layer 2 long regression when that wall time is justified.
+Layer 2 write-back. The AXI-Lite-controlled bounded true three-layer top-to-tail
+xsim now also passes with Layer 0 kept on the existing QKV-first golden chain and
+Layers 1/2 using input-RMSNorm-enabled QKV artifacts.
+
+The final-token tail packet can now consume chained layer output artifacts as
+well. `32_export_final_rmsnorm_vectors.py` accepts a fixed-point Q14.10
+`--input-hex`, `35_export_lm_head_full_vocab_vectors.py` accepts a Q12.12
+`--activation-hex`, and `36_export_qmap_final_token_tail_image.py` accepts
+`--final-norm-prefix`. With the Layer 2 chained `layer_out[1024]` vector as
+the final RMSNorm input, the regenerated final-token tail packet uses
+`final_rmsnorm_layer2_chained_stage_real` and
+`lm_head_argmax_layer2_chained_full_vocab_real`, then passes Vivado xsim with
+expected token `537`, expected score `850086863`, all `9496` LM-head tiles, all
+`151936` logits, and `max_abs_logit_diff=0`.
+
+The same chained Layer 2 output has now also been consumed directly by the
+final-token tail inside one shared-memory scheduler simulation. The focused
+`+l2_tail_only` xsim run starts the Layer 2 scheduler, keeps its
+`layer_out[1024]` write-back in the memory model, redirects the final-tail
+final-hidden descriptor to that buffer, and then runs final RMSNorm plus
+full-vocabulary LM-head. The reusable `qmap_one_token_top.sv` boundary now
+performs the same sequence inside RTL control using the scheduler-reported last
+layer output as the default tail hidden source, with a final-hidden override
+left only for debug. The input-RMSNorm-enabled `+l2_top_tail_only` run returns
+token `537` and score `850086863`; the newer `+l1_l2_top_tail_only` run starts
+Layer 1 and Layer 2 before the tail and returns the same token/score while
+proving the final tail selects Layer 2, not the previous layer.
 
 Local validation:
 
@@ -1379,14 +1506,85 @@ Local validation:
   `layer_error_mask=0x0`) with exact Layer 1 write-back and aggregate totals
   `92528` read requests, `4276260` read-response words, `12308` write
   requests, and `49152` write-data words.
-- Focused Layer 2 result: `+l2_only +fastmem +notrace +progress` completes at
-  cycle `6692967` with active layer 2, `layer_done_mask=0x4`,
+- Focused Layer 2 result: `+l2_only +fastmem +notrace +progress` now enables
+  Layer 2 input RMSNorm and completes at cycle `6700589` with active layer 2,
+  `layer_done_mask=0x4`, `46278/2140354` reads, `6155/25600` writes,
   `mismatch_count=0`, `write_mismatches=0`, and `max_abs=0`.
-- Exact write-back coverage now spans Layer 0 plus the chained Layer 1 path:
-  Q/K/V projection, K/V cache, Q RoPE, attention output, `o_proj`,
-  post-attention hidden/norm, MLP gate/up, SiLU hidden, down output, and final
-  `layer_out[1024]` all match the Python golden words. The same scheduler
-  memory/scoreboard model now also covers Layer 2 packet/cache/weight windows.
+- Layer2-chained final-token tail result: Vivado xsim completes the
+  final-RMSNorm plus full-vocabulary LM-head tail with token `537`, score
+  `850086863`, `write reqs/words = 2 / 1027`, `norm/output write words =
+  1024 / 3`, `tile updates = 9496`, `checked logits = 151936`,
+  `max_abs_logit_diff = 0`, and `norm write mismatches = 0`.
+- Reusable top/control result: Vivado xsim `+l2_top_tail_only +fastmem
+  +progress` completes the Layer 2 input-RMSNorm-enabled scheduler at cycle
+  `6700589`, completes the final-token tail at cycle `50800994`, observes
+  token `537` and score `850086863`, pulses `scheduler_done=1`,
+  `tail_start=1`, `tail_done=1`, and `top_done=1`, reports top counters
+  `131772/22807266` reads and `6157/26627` writes, tail read counts
+  `4/4/4/75968/9496`, tail writes `1024/3`, and `0` final write mismatches.
+- Reusable top/control multi-layer result: Vivado xsim
+  `+l1_l2_top_tail_only +fastmem +progress` starts Layer 1 and Layer 2 before
+  final-tail launch, completes the scheduler at cycle `13401169`, completes
+  the final-token tail at cycle `57501574`, observes token `537` and score
+  `850086863`, pulses `scheduler_done=1`, `tail_start=1`, `tail_done=1`, and
+  `top_done=1`, reports layer done mask `0x6`, top counters
+  `178050/24947620` reads and `12312/52227` writes, tail read counts
+  `4/4/4/75968/9496`, tail writes `1024/3`, and `0` final write mismatches.
+- MMIO-style control result: `qmap_one_token_control_regs.sv` now defines the
+  local software-visible register contract for start/clear, scalar config,
+  packet-base table commit, sticky status, output token/score, layer masks,
+  last output/tail hidden base, and counters. Vivado xsim
+  `+l1_l2_mmio_top_tail_only +fastmem +notrace +progress` launches the same
+  Layer 1 -> Layer 2 -> final-tail path through register writes and completes
+  with scheduler done cycle `13401430`, tail done cycle `57501835`, token
+  `537`, score `850086863`, layer done mask `0x6`, tail hidden and last-layer
+  output both `0x4_2509_2540`, top counters `178050/24947620` reads and
+  `12312/52227` writes, tail writes `1024/3`, and `0` final write mismatches.
+  This xsim proof still uses the tiny valid/ready MMIO-style contract directly;
+  the AXI4-Lite wrapper now sits above the same register contract rather than
+  changing any QMAP packet semantics.
+- Productized wrapper smoke result: `qmap_one_token_mmio_top.sv` instantiates
+  `qmap_one_token_control_regs.sv` and `qmap_one_token_top.sv` together. The
+  focused Icarus testbench `tb_qmap_one_token_mmio_top.sv` drives the register
+  port, starts an intentionally invalid `layer_count=0` request, observes a
+  quick scheduler validation exit, reads sticky status/layer-error/counters
+  back through the same register port, and proves no memory traffic is issued.
+- AXI-Lite wrapper smoke result: `axi4lite_to_mmio_regs.sv` now serializes
+  32-bit AXI4-Lite reads/writes into that tiny register port with focused
+  AW/W ordering, stall, local reject, and downstream error coverage in
+  `tb_axi4lite_to_mmio_regs.sv`. `qmap_one_token_axil_top.sv` wraps the adapter
+  around `qmap_one_token_mmio_top.sv`, and `tb_qmap_one_token_axil_top.sv`
+  passes the same invalid `layer_count=0` no-memory validation path through
+  AXI-Lite writes/reads while preserving sticky status, layer-error, counter,
+  and clear behavior. The AXI-Lite wrapper now also passes the positive
+  Layer1 -> Layer2 -> final-tail xsim memory-model path through register
+  writes/reads: scheduler done cycle `13402176`, tail done cycle `57502581`,
+  token `537`, score `850086863`, layer mask `0x6`, top counters
+  `178050/24947620` reads and `12312/52227` writes, tail writes `1024/3`, and
+  `0` final write mismatches. QMAP packet/image layout is unchanged by this
+  control adapter.
+- AXI-Lite bounded true three-layer top-to-tail result: the same productized
+  wrapper now launches Layer 0(QKV-first) -> Layer 1 -> Layer 2 -> final-tail
+  through AXI-Lite register writes/reads under `+true3_mmio_top_tail_only` plus
+  `+fastmem +notrace +progress`. It completes with scheduler done cycle
+  `20095284`, tail done cycle `64195689`, token `537`, score `850086863`, layer
+  mask `0x7`, scheduler counters `138820/6418838` reads and `18464/75776`
+  writes, top counters `224314/27085750` reads and `18466/76803` writes, tail
+  writes `1024/3`, and `0` final write mismatches. Layer 0 is intentionally
+  QKV-first until full-chain Layer 0 input-RMSNorm artifacts are generated.
+- PS-side register/runtime skeleton: `FPGA_Project/software/qmap_one_token_runtime/`
+  now mirrors the control register offsets and table ids, including optional
+  input-RMSNorm table commits, so the current mixed Layer0/Layer1/Layer2 QMAP
+  contract can be represented by software before the Vivado BD base address is
+  assigned. `qmap_one_token_axi_top.sv` now provides the first Vivado-facing
+  shell for that software contract by adapting the existing local memory port to
+  AXI4 read/write masters; `tb_qmap_one_token_axi_top.sv` proves its no-memory
+  validation path without issuing AXI4 memory traffic.
+- Exact write-back coverage now spans the Layer 0 QKV-first path plus chained
+  Layer 1 and Layer 2 packet/cache/weight windows: Q/K/V projection, K/V cache,
+  Q RoPE, attention output, `o_proj`, post-attention hidden/norm, MLP gate/up,
+  SiLU hidden, down output, and final `layer_out[1024]` all match the Python
+  golden words in the covered local RTL paths.
 - Error validation: QKV-stage invalid activation dtype and later attention
   front-end invalid descriptor paths propagate through the loop wrapper with
   the expected layer masks. A missing selected Layer 0 QKV base-table entry, a
@@ -1399,6 +1597,31 @@ Local validation:
   mismatches. Layer 1 unit traces are emitted for chained score/value,
   `o_proj`, post-attention residual/RMSNorm, MLP gate/up, MLP SiLU/multiply,
   MLP down, and final MLP residual-add runs.
+- Trace audit for the Layer2-chained final-token tail confirms final hidden and
+  gamma reads complete before final_norm writes, final_norm/weight/scale reads
+  start only after the 1024-word final_norm write-back completes, token/score
+  output writes occur after all LM-head tile reads, and `done` follows the
+  output write.
+- Trace audit for the shared scheduler-to-tail run confirms final-hidden reads
+  start after scheduler completion, final_norm reads start after final_norm
+  write-back, LM-head weight/scale reads complete before output writes, and the
+  output write finishes before tail `done`.
+- Trace audit for the reusable top/control run
+  `qmap_one_token_top_layer2_input_norm_to_final_tail_trace.csv` has `307615`
+  data rows and confirms tail state starts at cycle `6700591`, hidden reads start
+  at `6701175` after scheduler completion, final-norm write-back completes at
+  `6708411`, norm reads start at `6709001`, LM-head weight reads start at
+  `6711056`, output write request/data runs at `50800983..50800986`, and top
+  `done` follows
+  at `50800996`.
+- Trace audit for the reusable top/control multi-layer run
+  `qmap_one_token_top_layer1_layer2_input_norm_to_final_tail_trace.csv` has
+  `444228` data rows and confirms Layer 1 output write-back completes at cycle
+  `6700579` before Layer 2 reads that buffer at cycle `9967557`, Layer 2 output
+  write-back completes at cycle `13401159` before final-tail hidden reads begin
+  at cycle `13401755`, final-norm write-back completes at cycle `13408995`
+  before norm reads begin at cycle `13409581`, output write request/data runs
+  at `57501563..57501566`, and top `done` follows at cycle `57501576`.
 
 ### LM-head Memory-Backed Scan Contract
 
@@ -1522,7 +1745,7 @@ DDR4, even if later optimized versions keep some of them on chip:
 | Tensor Family | Shape | Suggested Dtype | Write Policy |
 | --- | --- | --- | --- |
 | hidden ping-pong buffers | `[1024]` | `I32_Q14_10` or `I32_Q12_12` by stage | write after embedding/layer output |
-| RMSNorm output | `[1024]` | `I32_Q12_12` | write for projection input and debug |
+| RMSNorm output | `[1024]` | `I32_Q12_12` | QMAP input RMSNorm wrapper writes exact projection input locally; one-token scheduler prechecks cover Layer 0/1/2 RMSNorm output feeding QKV, and focused Layer 1/2 full-layer runs now use that input-normalized activation contract |
 | Q projection output | `[2048]` | `I32_Q12_12` | write for q_norm/RoPE input |
 | K projection output | `[1024]` | `I32_Q12_12` | write for k_norm/RoPE input |
 | V projection output | `[1024]` | `I32_Q12_12` | write for KV-cache append |

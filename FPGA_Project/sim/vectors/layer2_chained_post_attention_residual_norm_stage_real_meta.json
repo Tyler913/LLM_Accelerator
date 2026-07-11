@@ -20,7 +20,7 @@
     "mode": "hex_override",
     "source_name": "layer1_chained_mlp_residual_add",
     "source_hex": "F:\\LLM_Accelerator\\FPGA_Project\\sim\\vectors\\qmap_layer1_chained_mlp_residual_add_expected_words32.hex",
-    "override_max_abs_diff_vs_hf_quantized": 820
+    "override_max_abs_diff_vs_hf_quantized": 185
   },
   "source_o_proj_prefix": "layer2_chained_o_proj_stage_real",
   "formats": {
@@ -35,20 +35,20 @@
     "norm_output": false
   },
   "debug": {
-    "residual_input_q14_10_max_abs": 6892,
-    "o_proj_q12_12_max_abs": 5335,
-    "post_attention_hidden_q14_10_max_abs": 5558,
-    "sum_squares": 111545402,
-    "mean_square": 108931,
-    "sqrt_radicand": 108932,
-    "rms_q14_10": 330,
-    "inv_rms_uq8_16": 203360,
-    "div_remainder": 64,
-    "fixed_residual_input_vs_hf_layer_input_max_abs_diff": 0.800933837890625,
-    "fixed_post_attention_hidden_vs_hf_max_abs_diff": 0.4536799192428589,
-    "fixed_post_attention_hidden_vs_hf_mean_abs_diff": 0.09435973955623922,
-    "fixed_post_norm_vs_hf_max_abs_diff": 2.2881431579589844,
-    "fixed_post_norm_vs_hf_mean_abs_diff": 0.23176092037626717
+    "residual_input_q14_10_max_abs": 7677,
+    "o_proj_q12_12_max_abs": 8961,
+    "post_attention_hidden_q14_10_max_abs": 5436,
+    "sum_squares": 125729055,
+    "mean_square": 122782,
+    "sqrt_radicand": 122783,
+    "rms_q14_10": 350,
+    "inv_rms_uq8_16": 191739,
+    "div_remainder": 214,
+    "fixed_residual_input_vs_hf_layer_input_max_abs_diff": 0.18055862188339233,
+    "fixed_post_attention_hidden_vs_hf_max_abs_diff": 0.17022329568862915,
+    "fixed_post_attention_hidden_vs_hf_mean_abs_diff": 0.043453383856103756,
+    "fixed_post_norm_vs_hf_max_abs_diff": 0.5561896562576294,
+    "fixed_post_norm_vs_hf_mean_abs_diff": 0.1030417609911396
   },
   "files": {
     "residual_input": "layer2_chained_post_attention_residual_norm_stage_real_residual_input.hex",

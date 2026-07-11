@@ -43,11 +43,14 @@ module qmap_final_token_tail_compute_path #(
 
     input  wire logic                         i_start,
     input  wire logic [ADDR_WIDTH-1 : 0]      i_qmap_base_addr,
+    input  wire logic                         i_final_hidden_base_override_valid,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_final_hidden_base_override_addr,
 
     output logic                              o_busy,
     output logic                              o_done,
     output logic                              o_error,
     output logic                              o_norm_saturation,
+    output logic [ADDR_WIDTH-1 : 0]           o_effective_final_hidden_base_addr,
     output logic [TOKEN_ID_WIDTH-1 : 0]       o_best_token_id,
     output logic signed [ROW_ACC_WIDTH-1 : 0] o_best_score_q26,
     output logic [31 : 0]                     o_tiles_started,
@@ -160,6 +163,8 @@ module qmap_final_token_tail_compute_path #(
     logic [63 : 0] desc_base_addr [0 : DESCRIPTOR_SLOTS-1];
     logic [63 : 0] desc_nbytes [0 : DESCRIPTOR_SLOTS-1];
     logic [31 : 0] desc_dim0 [0 : DESCRIPTOR_SLOTS-1];
+
+    logic [ADDR_WIDTH-1 : 0] effective_final_hidden_base_addr;
 
     logic [INPUT_SIZE*HIDDEN_WIDTH-1 : 0] hidden_flat;
     logic [INPUT_SIZE*GAMMA_WIDTH-1 : 0] gamma_flat;
@@ -346,6 +351,12 @@ module qmap_final_token_tail_compute_path #(
         .i_mem_wr_error(i_mem_wr_error)
     );
 
+    assign effective_final_hidden_base_addr =
+        i_final_hidden_base_override_valid ?
+        i_final_hidden_base_override_addr :
+        desc_base_addr[SLOT_FINAL_HIDDEN][ADDR_WIDTH-1 : 0];
+    assign o_effective_final_hidden_base_addr = effective_final_hidden_base_addr;
+
     assign reader_start = (state == S_READER_START);
     assign norm_start = (state == S_RMS_START);
     assign lm_start = (state == S_LM_START);
@@ -371,7 +382,7 @@ module qmap_final_token_tail_compute_path #(
         1'b0;
     assign o_mem_rd_req_addr =
         (state == S_READER_WAIT) ? reader_req_addr :
-        (state == S_HIDDEN_REQ)  ? (desc_base_addr[SLOT_FINAL_HIDDEN] + (hidden_chunk_index * MAX_READ_BYTES)) :
+        (state == S_HIDDEN_REQ)  ? (effective_final_hidden_base_addr + (hidden_chunk_index * MAX_READ_BYTES)) :
         (state == S_GAMMA_REQ)   ? (desc_base_addr[SLOT_FINAL_GAMMA] + (gamma_chunk_index * MAX_READ_BYTES)) :
         (state == S_LM_WAIT)     ? lm_rd_req_addr :
         'd0;
@@ -466,7 +477,8 @@ module qmap_final_token_tail_compute_path #(
             (desc_dim0[SLOT_FINAL_GAMMA] != INPUT_SIZE) ||
             (desc_nbytes[SLOT_NORM_OUTPUT] != NORM_BYTES) ||
             (desc_nbytes[SLOT_FINAL_HIDDEN] != HIDDEN_BYTES) ||
-            (desc_nbytes[SLOT_FINAL_GAMMA] != GAMMA_BYTES)) begin
+            (desc_nbytes[SLOT_FINAL_GAMMA] != GAMMA_BYTES) ||
+            (effective_final_hidden_base_addr == '0)) begin
             validate_error = 1'b1;
         end
     end

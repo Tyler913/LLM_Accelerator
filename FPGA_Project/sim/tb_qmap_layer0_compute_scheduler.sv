@@ -20,6 +20,7 @@ module tb_qmap_layer0_compute_scheduler;
     localparam int KV_REPEAT = NUM_Q_HEADS / NUM_KV_HEADS;
     localparam int TOTAL_CACHE_WRITES = 2 * KV_COUNT;
 
+    localparam int INPUT_NORM_IMAGE_BYTES = 32'h0000_5000;
     localparam int QKV_IMAGE_BYTES = 32'h0022_B000;
     localparam int FRONT_IMAGE_BYTES = 32'h0000_8000;
     localparam int SCORE_IMAGE_BYTES = 32'h0000_5000;
@@ -30,6 +31,7 @@ module tb_qmap_layer0_compute_scheduler;
     localparam int DOWN_IMAGE_BYTES = 32'h0000_6000;
     localparam int RESIDUAL_IMAGE_BYTES = 32'h0000_5000;
 
+    localparam int INPUT_NORM_WORDS = INPUT_NORM_IMAGE_BYTES / MEM_DATA_BYTES;
     localparam int QKV_WORDS = QKV_IMAGE_BYTES / MEM_DATA_BYTES;
     localparam int FRONT_WORDS = FRONT_IMAGE_BYTES / MEM_DATA_BYTES;
     localparam int SCORE_WORDS = SCORE_IMAGE_BYTES / MEM_DATA_BYTES;
@@ -50,6 +52,7 @@ module tb_qmap_layer0_compute_scheduler;
     localparam int DESC_BASE_HI_WORD = 9;
 
     localparam int QKV_SLOT_ACTIVATION = 1;
+    localparam int INPUT_NORM_SLOT_OUTPUT = 3;
     localparam int QKV_SLOT_Q_OUT = 8;
     localparam int QKV_SLOT_K_OUT = 9;
     localparam int QKV_SLOT_V_OUT = 10;
@@ -86,6 +89,7 @@ module tb_qmap_layer0_compute_scheduler;
     localparam logic [ADDR_WIDTH-1 : 0] CACHE_BASE_ADDR = 64'h0000_0004_1410_0000;
     localparam int CACHE_WORDS_FULL = 2 * NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM;
 
+    localparam int WRITE_INPUT_NORM = 15;
     localparam int WRITE_QKV_Q = 1;
     localparam int WRITE_QKV_K = 2;
     localparam int WRITE_QKV_V = 3;
@@ -101,6 +105,10 @@ module tb_qmap_layer0_compute_scheduler;
     localparam int WRITE_DOWN = 13;
     localparam int WRITE_LAYER = 14;
 
+    localparam int EXPECTED_INPUT_NORM_RD_REQS = 14;
+    localparam int EXPECTED_INPUT_NORM_RD_WORDS = 2224;
+    localparam int EXPECTED_INPUT_NORM_WR_REQS = 1;
+    localparam int EXPECTED_INPUT_NORM_WR_WORDS = 1024;
     localparam int EXPECTED_QKV_RD_REQS = 8209;
     localparam int EXPECTED_QKV_RD_WORDS = 558480;
     localparam int EXPECTED_QKV_WR_REQS = 4096;
@@ -109,14 +117,14 @@ module tb_qmap_layer0_compute_scheduler;
     localparam int EXPECTED_FULL_RD_WORDS = 1579650;
     localparam int EXPECTED_FULL_WR_REQS = 2058;
     localparam int EXPECTED_FULL_WR_WORDS = 20480;
-    localparam int EXPECTED_QKV_INVALID_RD_REQS = 13;
-    localparam int EXPECTED_QKV_INVALID_RD_WORDS = 400;
-    localparam int EXPECTED_FRONTEND_INVALID_RD_REQS = EXPECTED_QKV_RD_REQS + 11;
-    localparam int EXPECTED_FRONTEND_INVALID_RD_WORDS = EXPECTED_QKV_RD_WORDS + 336;
-    localparam int EXPECTED_NORMAL_RD_REQS = EXPECTED_QKV_RD_REQS + EXPECTED_FULL_RD_REQS;
-    localparam int EXPECTED_NORMAL_RD_WORDS = EXPECTED_QKV_RD_WORDS + EXPECTED_FULL_RD_WORDS;
-    localparam int EXPECTED_NORMAL_WR_REQS = EXPECTED_QKV_WR_REQS + EXPECTED_FULL_WR_REQS;
-    localparam int EXPECTED_NORMAL_WR_WORDS = EXPECTED_QKV_WR_WORDS + EXPECTED_FULL_WR_WORDS;
+    localparam int EXPECTED_QKV_INVALID_RD_REQS = EXPECTED_INPUT_NORM_RD_REQS + 13;
+    localparam int EXPECTED_QKV_INVALID_RD_WORDS = EXPECTED_INPUT_NORM_RD_WORDS + 400;
+    localparam int EXPECTED_FRONTEND_INVALID_RD_REQS = EXPECTED_INPUT_NORM_RD_REQS + EXPECTED_QKV_RD_REQS + 11;
+    localparam int EXPECTED_FRONTEND_INVALID_RD_WORDS = EXPECTED_INPUT_NORM_RD_WORDS + EXPECTED_QKV_RD_WORDS + 336;
+    localparam int EXPECTED_NORMAL_RD_REQS = EXPECTED_INPUT_NORM_RD_REQS + EXPECTED_QKV_RD_REQS + EXPECTED_FULL_RD_REQS;
+    localparam int EXPECTED_NORMAL_RD_WORDS = EXPECTED_INPUT_NORM_RD_WORDS + EXPECTED_QKV_RD_WORDS + EXPECTED_FULL_RD_WORDS;
+    localparam int EXPECTED_NORMAL_WR_REQS = EXPECTED_INPUT_NORM_WR_REQS + EXPECTED_QKV_WR_REQS + EXPECTED_FULL_WR_REQS;
+    localparam int EXPECTED_NORMAL_WR_WORDS = EXPECTED_INPUT_NORM_WR_WORDS + EXPECTED_QKV_WR_WORDS + EXPECTED_FULL_WR_WORDS;
 
     logic clk;
     logic rst_n;
@@ -132,6 +140,10 @@ module tb_qmap_layer0_compute_scheduler;
     logic [3 : 0] layer0_full_stage_error_mask;
     logic [4 : 0] body_stage_done_mask;
     logic [4 : 0] body_stage_error_mask;
+    logic input_norm_done;
+    logic input_norm_error;
+    logic input_norm_saturation;
+    logic [31 : 0] input_norm_write_word_count;
     logic [31 : 0] qkv_rows_done;
     logic signed [55 : 0] qkv_last_row_sum_q26;
     logic signed [31 : 0] qkv_last_output_q12_12;
@@ -160,6 +172,7 @@ module tb_qmap_layer0_compute_scheduler;
     logic mem_wr_done;
     logic mem_wr_error;
 
+    logic [31 : 0] input_norm_qmap [0 : INPUT_NORM_WORDS-1];
     logic [31 : 0] qkv_qmap [0 : QKV_WORDS-1];
     logic [31 : 0] frontend_qmap [0 : FRONT_WORDS-1];
     logic [31 : 0] score_qmap [0 : SCORE_WORDS-1];
@@ -182,6 +195,7 @@ module tb_qmap_layer0_compute_scheduler;
     logic [31 : 0] down_weight_mem [0 : DOWN_WEIGHT_WORDS-1];
     logic [31 : 0] down_scale_mem [0 : DOWN_SCALE_WORDS-1];
 
+    logic [31 : 0] expected_input_norm [0 : VEC1024-1];
     logic [31 : 0] expected_qkv [0 : (VEC2048 + (2 * VEC1024))-1];
     logic [31 : 0] expected_q_rope [0 : VEC2048-1];
     logic [63 : 0] expected_cache_addr [0 : TOTAL_CACHE_WRITES-1];
@@ -197,6 +211,7 @@ module tb_qmap_layer0_compute_scheduler;
     logic [31 : 0] expected_down [0 : VEC1024-1];
     logic [31 : 0] expected_layer [0 : VEC1024-1];
 
+    logic [ADDR_WIDTH-1 : 0] input_norm_output_base;
     logic [ADDR_WIDTH-1 : 0] qkv_q_base;
     logic [ADDR_WIDTH-1 : 0] qkv_k_base;
     logic [ADDR_WIDTH-1 : 0] qkv_v_base;
@@ -225,6 +240,7 @@ module tb_qmap_layer0_compute_scheduler;
     integer rd_rsp_accept_count;
     integer wr_req_accept_count;
     integer wr_data_accept_count;
+    integer input_norm_write_accept_count;
     integer qkv_q_write_accept_count;
     integer qkv_k_write_accept_count;
     integer qkv_v_write_accept_count;
@@ -256,6 +272,7 @@ module tb_qmap_layer0_compute_scheduler;
     integer normal_mismatch_count;
     integer normal_write_mismatch_count;
     longint signed normal_max_abs_diff;
+    integer normal_input_norm_write_accept_count;
     integer normal_qkv_q_write_accept_count;
     integer normal_qkv_k_write_accept_count;
     integer normal_qkv_v_write_accept_count;
@@ -302,6 +319,7 @@ module tb_qmap_layer0_compute_scheduler;
     integer write_done_delay;
     logic [ADDR_WIDTH-1 : 0] active_write_addr;
 
+    logic input_norm_written;
     logic qkv_q_written;
     logic qkv_k_written;
     logic qkv_v_written;
@@ -326,6 +344,7 @@ module tb_qmap_layer0_compute_scheduler;
         .i_clk(clk),
         .i_rst_n(rst_n),
         .i_start(start),
+        .i_input_norm_qmap_base_addr(`QMAP_INPUT_NORM_BASE_ADDR),
         .i_qkv_qmap_base_addr(`QMAP_QKV_BASE_ADDR),
         .i_attn_frontend_qmap_base_addr(`QMAP_ATTN_FRONTEND_BASE_ADDR),
         .i_attn_score_value_qmap_base_addr(`QMAP_ATTN_SCORE_VALUE_BASE_ADDR),
@@ -346,6 +365,10 @@ module tb_qmap_layer0_compute_scheduler;
         .o_layer0_full_stage_error_mask(layer0_full_stage_error_mask),
         .o_body_stage_done_mask(body_stage_done_mask),
         .o_body_stage_error_mask(body_stage_error_mask),
+        .o_input_norm_done(input_norm_done),
+        .o_input_norm_error(input_norm_error),
+        .o_input_norm_saturation(input_norm_saturation),
+        .o_input_norm_write_word_count(input_norm_write_word_count),
         .o_qkv_rows_done(qkv_rows_done),
         .o_qkv_last_row_sum_q26(qkv_last_row_sum_q26),
         .o_qkv_last_output_q12_12(qkv_last_output_q12_12),
@@ -430,6 +453,15 @@ module tb_qmap_layer0_compute_scheduler;
         end
     endfunction
 
+    function automatic logic [ADDR_WIDTH-1 : 0] input_norm_desc_base(input integer slot);
+        begin
+            input_norm_desc_base = {
+                input_norm_qmap[desc_idx(slot, DESC_BASE_HI_WORD)],
+                input_norm_qmap[desc_idx(slot, DESC_BASE_LO_WORD)]
+            };
+        end
+    endfunction
+
     function automatic logic is_cache_addr(input logic [ADDR_WIDTH-1 : 0] addr);
         begin
             is_cache_addr =
@@ -509,6 +541,15 @@ module tb_qmap_layer0_compute_scheduler;
             };
         end
     endfunction
+
+    task patch_qkv_base;
+        input integer slot;
+        input logic [ADDR_WIDTH-1 : 0] base_addr;
+        begin
+            qkv_qmap[desc_idx(slot, DESC_BASE_LO_WORD)] = base_addr[31 : 0];
+            qkv_qmap[desc_idx(slot, DESC_BASE_HI_WORD)] = base_addr[63 : 32];
+        end
+    endtask
 
     task patch_frontend_base;
         input integer slot;
@@ -594,6 +635,7 @@ module tb_qmap_layer0_compute_scheduler;
 
     task load_vectors;
         begin
+            $readmemh("FPGA_Project/sim/vectors/qmap_input_rmsnorm_image_words32.hex", input_norm_qmap);
             $readmemh("artifacts/test_vectors/qwen3_0p6b_qmap_v1/layer0_qkv_projection_full_image_words32.hex", qkv_qmap);
             $readmemh("FPGA_Project/sim/vectors/qmap_attention_frontend_image_words32.hex", frontend_qmap);
             $readmemh("FPGA_Project/sim/vectors/qmap_attention_score_value_image_words32.hex", score_qmap);
@@ -615,7 +657,8 @@ module tb_qmap_layer0_compute_scheduler;
             $readmemh("FPGA_Project/sim/vectors/mlp_down_proj_stage_real_weight_words32.hex", down_weight_mem);
             $readmemh("FPGA_Project/sim/vectors/mlp_down_proj_stage_real_scale_words32.hex", down_scale_mem);
 
-            $readmemh("artifacts/test_vectors/qwen3_0p6b_qmap_v1/layer0_qkv_projection_full_expected_words32.hex", expected_qkv);
+            $readmemh("FPGA_Project/sim/vectors/qmap_input_rmsnorm_expected_words32.hex", expected_input_norm);
+            $readmemh("FPGA_Project/sim/vectors/qmap_qkv_projection_expected_from_input_rmsnorm_words32.hex", expected_qkv);
             $readmemh("FPGA_Project/sim/vectors/qmap_attention_frontend_q_rope_expected_words32.hex", expected_q_rope);
             $readmemh("FPGA_Project/sim/vectors/kv_cache_append_real_expected_addr.hex", expected_cache_addr);
             $readmemh("FPGA_Project/sim/vectors/kv_cache_append_real_expected_data.hex", expected_cache_data);
@@ -629,6 +672,9 @@ module tb_qmap_layer0_compute_scheduler;
             $readmemh("FPGA_Project/sim/vectors/qmap_mlp_silu_mul_expected_hidden_words32.hex", expected_silu_hidden);
             $readmemh("FPGA_Project/sim/vectors/qmap_mlp_down_expected_words32.hex", expected_down);
             $readmemh("FPGA_Project/sim/vectors/qmap_mlp_residual_add_expected_words32.hex", expected_layer);
+
+            input_norm_output_base = input_norm_desc_base(INPUT_NORM_SLOT_OUTPUT);
+            patch_qkv_base(QKV_SLOT_ACTIVATION, input_norm_output_base);
 
             qkv_q_base = qkv_desc_base(QKV_SLOT_Q_OUT);
             qkv_k_base = qkv_desc_base(QKV_SLOT_K_OUT);
@@ -703,7 +749,22 @@ module tb_qmap_layer0_compute_scheduler;
         integer index;
         begin
             memory_word = 32'hBAD0_BAD0;
-            if (in_range(addr, `QMAP_QKV_BASE_ADDR, QKV_IMAGE_BYTES)) begin
+            if (in_range(addr, input_norm_output_base, VEC1024 * MEM_DATA_BYTES)) begin
+                index = (addr - `QMAP_INPUT_NORM_BASE_ADDR) >> 2;
+                memory_word = input_norm_qmap[index];
+                if (!input_norm_written) begin
+                    if (print_count < 64) begin
+                        $display("FAIL: input_norm output read before producer write completed");
+                        print_count = print_count + 1;
+                    end
+                    mismatch_count = mismatch_count + 1;
+                end
+            end
+            else if (in_range(addr, `QMAP_INPUT_NORM_BASE_ADDR, INPUT_NORM_IMAGE_BYTES)) begin
+                index = (addr - `QMAP_INPUT_NORM_BASE_ADDR) >> 2;
+                memory_word = input_norm_qmap[index];
+            end
+            else if (in_range(addr, `QMAP_QKV_BASE_ADDR, QKV_IMAGE_BYTES)) begin
                 index = (addr - `QMAP_QKV_BASE_ADDR) >> 2;
                 memory_word = qkv_qmap[index];
             end
@@ -789,7 +850,11 @@ module tb_qmap_layer0_compute_scheduler;
         input logic [31 : 0] data;
         integer index;
         begin
-            if (in_range(addr, `QMAP_QKV_BASE_ADDR, QKV_IMAGE_BYTES)) begin
+            if (in_range(addr, `QMAP_INPUT_NORM_BASE_ADDR, INPUT_NORM_IMAGE_BYTES)) begin
+                index = (addr - `QMAP_INPUT_NORM_BASE_ADDR) >> 2;
+                input_norm_qmap[index] = data;
+            end
+            else if (in_range(addr, `QMAP_QKV_BASE_ADDR, QKV_IMAGE_BYTES)) begin
                 index = (addr - `QMAP_QKV_BASE_ADDR) >> 2;
                 qkv_qmap[index] = data;
             end
@@ -869,7 +934,10 @@ module tb_qmap_layer0_compute_scheduler;
     function automatic integer classify_write_addr(input logic [ADDR_WIDTH-1 : 0] addr);
         begin
             classify_write_addr = 0;
-            if (in_range(addr, qkv_q_base, VEC2048 * MEM_DATA_BYTES)) begin
+            if (in_range(addr, input_norm_output_base, VEC1024 * MEM_DATA_BYTES)) begin
+                classify_write_addr = WRITE_INPUT_NORM;
+            end
+            else if (in_range(addr, qkv_q_base, VEC2048 * MEM_DATA_BYTES)) begin
                 classify_write_addr = WRITE_QKV_Q;
             end
             else if (in_range(addr, qkv_k_base, VEC1024 * MEM_DATA_BYTES)) begin
@@ -934,6 +1002,9 @@ module tb_qmap_layer0_compute_scheduler;
         input integer words;
         begin
             case (kind)
+                WRITE_INPUT_NORM: if ((addr !== input_norm_output_base) || (words != VEC1024)) begin
+                    fail_once("FAIL: input_norm write request mismatch");
+                end
                 WRITE_QKV_Q: begin
                     if ((words != 1) ||
                         (qkv_q_write_accept_count >= VEC2048) ||
@@ -1009,6 +1080,19 @@ module tb_qmap_layer0_compute_scheduler;
         begin
             expected = 32'h0;
             case (kind)
+                WRITE_INPUT_NORM: begin
+                    expected = expected_input_norm[index];
+                    if (data !== expected) begin
+                        fail_once("FAIL: input_norm write data mismatch");
+                        write_mismatch_count = write_mismatch_count + 1;
+                    end
+                    write_qmap_word(addr, data);
+                    track_diff(data, expected);
+                    input_norm_write_accept_count = input_norm_write_accept_count + 1;
+                    if (is_last) begin
+                        input_norm_written = 1'b1;
+                    end
+                end
                 WRITE_QKV_Q: begin
                     if (!is_last) begin
                         fail_once("FAIL: QKV Q single-word write missing last");
@@ -1216,6 +1300,9 @@ module tb_qmap_layer0_compute_scheduler;
         input logic [ADDR_WIDTH-1 : 0] addr;
         input integer len_bytes;
         begin
+            if (in_range(addr, input_norm_output_base, VEC1024 * MEM_DATA_BYTES) && !input_norm_written) begin
+                fail_once("FAIL: QKV activation read before input RMSNorm write completed");
+            end
             if (in_range(addr, qkv_q_base, VEC2048 * MEM_DATA_BYTES) && !qkv_q_written) begin
                 fail_once("FAIL: QKV Q output read before producer write completed");
             end
@@ -1268,6 +1355,7 @@ module tb_qmap_layer0_compute_scheduler;
             rd_rsp_accept_count = 0;
             wr_req_accept_count = 0;
             wr_data_accept_count = 0;
+            input_norm_write_accept_count = 0;
             qkv_q_write_accept_count = 0;
             qkv_k_write_accept_count = 0;
             qkv_v_write_accept_count = 0;
@@ -1297,6 +1385,7 @@ module tb_qmap_layer0_compute_scheduler;
             active_write_total_words = 0;
             write_done_delay = 0;
             active_write_addr = '0;
+            input_norm_written = 1'b0;
             qkv_q_written = 1'b0;
             qkv_k_written = 1'b0;
             qkv_v_written = 1'b0;
@@ -1544,6 +1633,98 @@ module tb_qmap_layer0_compute_scheduler;
             );
         end
 
+        if ($test$plusargs("qkv_precheck")) begin
+            rst_n = 1'b0;
+            start = 1'b0;
+            load_vectors();
+            clear_scoreboard();
+            if ($test$plusargs("fastmem")) begin
+                fastmem = 1'b1;
+            end
+            corrupt_frontend_cos_dtype();
+            repeat (10) @(posedge clk);
+            rst_n = 1'b1;
+            repeat (4) @(posedge clk);
+
+            run_until_done(8000000);
+            invalid_done_cycle = cycle_count;
+            invalid_read_bursts = dut_read_burst_count;
+            invalid_read_words = dut_read_word_count;
+            invalid_write_reqs = dut_write_req_count;
+            invalid_write_words = dut_write_word_count;
+            invalid_stage_done_mask = stage_done_mask;
+            invalid_stage_error_mask = stage_error_mask;
+            invalid_layer0_full_stage_done_mask = layer0_full_stage_done_mask;
+            invalid_layer0_full_stage_error_mask = layer0_full_stage_error_mask;
+            invalid_error = error;
+
+            if (!input_norm_done || input_norm_error || input_norm_saturation ||
+                (input_norm_write_word_count != VEC1024) ||
+                (input_norm_write_accept_count != VEC1024)) begin
+                fail_once("FAIL: qkv_precheck input RMSNorm pre-stage mismatch");
+            end
+            if (!invalid_error) begin
+                fail_once("FAIL: qkv_precheck did not stop at invalid frontend descriptor");
+            end
+            if ((invalid_stage_done_mask != 2'b01) || (invalid_stage_error_mask != 2'b10) ||
+                (invalid_layer0_full_stage_done_mask != 4'h0) ||
+                (invalid_layer0_full_stage_error_mask != 4'h1)) begin
+                fail_once("FAIL: qkv_precheck stage masks mismatch");
+            end
+            if ((qkv_q_write_accept_count != VEC2048) ||
+                (qkv_k_write_accept_count != VEC1024) ||
+                (qkv_v_write_accept_count != VEC1024) ||
+                (cache_write_accept_count != 0) ||
+                (q_rope_write_accept_count != 0) ||
+                (attn_out_write_accept_count != 0) ||
+                (o_proj_write_accept_count != 0) ||
+                (post_hidden_write_accept_count != 0) ||
+                (post_norm_write_accept_count != 0) ||
+                (gate_write_accept_count != 0) ||
+                (up_write_accept_count != 0) ||
+                (silu_write_accept_count != 0) ||
+                (down_write_accept_count != 0) ||
+                (layer_write_accept_count != 0)) begin
+                fail_once("FAIL: qkv_precheck producer write counts mismatch");
+            end
+            if ((invalid_write_reqs != (EXPECTED_INPUT_NORM_WR_REQS + EXPECTED_QKV_WR_REQS)) ||
+                (invalid_write_words != (EXPECTED_INPUT_NORM_WR_WORDS + EXPECTED_QKV_WR_WORDS)) ||
+                (invalid_read_bursts != EXPECTED_FRONTEND_INVALID_RD_REQS) ||
+                (invalid_read_words != EXPECTED_FRONTEND_INVALID_RD_WORDS)) begin
+                fail_once("FAIL: qkv_precheck memory counters mismatch");
+            end
+            if ((mismatch_count != 0) || (write_mismatch_count != 0) || (max_abs_diff != 0)) begin
+                $display("FAIL: qkv_precheck found mismatch_count=%0d write_mismatches=%0d max_abs=%0d",
+                         mismatch_count, write_mismatch_count, max_abs_diff);
+                $finish(1);
+            end
+
+            $display("qmap_layer0_compute_scheduler input RMSNorm -> QKV precheck");
+            $display("  done cycle       = %0d", invalid_done_cycle);
+            $display("  input_norm writes= %0d debug_words=%0d saturation=%0d",
+                     input_norm_write_accept_count,
+                     input_norm_write_word_count,
+                     input_norm_saturation);
+            $display("  qkv writes       = q %0d k %0d v %0d",
+                     qkv_q_write_accept_count,
+                     qkv_k_write_accept_count,
+                     qkv_v_write_accept_count);
+            $display("  rd/wr            = %0d/%0d reads, %0d/%0d writes",
+                     invalid_read_bursts,
+                     invalid_read_words,
+                     invalid_write_reqs,
+                     invalid_write_words);
+            if (trace_fd != 0) begin
+                $display("  trace            = %s", tracefile);
+                $fclose(trace_fd);
+            end
+            else begin
+                $display("  trace            = disabled by +notrace");
+            end
+            $display("PASS: qmap_layer0_compute_scheduler chained input RMSNorm into QKV and stopped cleanly before downstream frontend work.");
+            $finish;
+        end
+
         rst_n = 1'b0;
         start = 1'b0;
         load_vectors();
@@ -1571,6 +1752,7 @@ module tb_qmap_layer0_compute_scheduler;
         normal_mismatch_count = mismatch_count;
         normal_write_mismatch_count = write_mismatch_count;
         normal_max_abs_diff = max_abs_diff;
+        normal_input_norm_write_accept_count = input_norm_write_accept_count;
         normal_qkv_q_write_accept_count = qkv_q_write_accept_count;
         normal_qkv_k_write_accept_count = qkv_k_write_accept_count;
         normal_qkv_v_write_accept_count = qkv_v_write_accept_count;
@@ -1592,6 +1774,10 @@ module tb_qmap_layer0_compute_scheduler;
         if ((normal_stage_done_mask != 2'b11) || (normal_stage_error_mask != 2'b00)) begin
             fail_once("FAIL: normal outer stage masks mismatch");
         end
+        if (!input_norm_done || input_norm_error || input_norm_saturation ||
+            (input_norm_write_word_count != VEC1024)) begin
+            fail_once("FAIL: input RMSNorm pre-stage debug outputs mismatch");
+        end
         if (qkv_rows_done != (VEC2048 + (2 * VEC1024))) begin
             fail_once("FAIL: QKV rows_done mismatch");
         end
@@ -1608,7 +1794,8 @@ module tb_qmap_layer0_compute_scheduler;
             (normal_write_words != EXPECTED_NORMAL_WR_WORDS)) begin
             fail_once("FAIL: Layer 0 compute scheduler memory counters mismatch");
         end
-        if ((qkv_q_write_accept_count != VEC2048) ||
+        if ((input_norm_write_accept_count != VEC1024) ||
+            (qkv_q_write_accept_count != VEC2048) ||
             (qkv_k_write_accept_count != VEC1024) ||
             (qkv_v_write_accept_count != VEC1024) ||
             (cache_write_accept_count != TOTAL_CACHE_WRITES) ||
@@ -1657,9 +1844,14 @@ module tb_qmap_layer0_compute_scheduler;
             (qkv_invalid_stage_error_mask != 2'b01)) begin
             fail_once("FAIL: invalid QKV run stage masks mismatch");
         end
-        if ((qkv_invalid_write_reqs != 0) || (qkv_invalid_write_words != 0) ||
-            (wr_req_accept_count != 0) || (wr_data_accept_count != 0)) begin
-            fail_once("FAIL: invalid QKV descriptor produced writes");
+        if ((qkv_invalid_write_reqs != EXPECTED_INPUT_NORM_WR_REQS) ||
+            (qkv_invalid_write_words != EXPECTED_INPUT_NORM_WR_WORDS) ||
+            (wr_req_accept_count != EXPECTED_INPUT_NORM_WR_REQS) ||
+            (wr_data_accept_count != EXPECTED_INPUT_NORM_WR_WORDS) ||
+            (input_norm_write_accept_count != VEC1024) ||
+            !input_norm_done ||
+            input_norm_error) begin
+            fail_once("FAIL: invalid QKV descriptor did not stop after input RMSNorm");
         end
         if ((qkv_invalid_read_bursts != EXPECTED_QKV_INVALID_RD_REQS) ||
             (qkv_invalid_read_words != EXPECTED_QKV_INVALID_RD_WORDS)) begin
@@ -1701,7 +1893,8 @@ module tb_qmap_layer0_compute_scheduler;
             (invalid_layer0_full_stage_error_mask != 4'h1)) begin
             fail_once("FAIL: invalid frontend run stage masks mismatch");
         end
-        if ((qkv_q_write_accept_count != VEC2048) ||
+        if ((input_norm_write_accept_count != VEC1024) ||
+            (qkv_q_write_accept_count != VEC2048) ||
             (qkv_k_write_accept_count != VEC1024) ||
             (qkv_v_write_accept_count != VEC1024) ||
             (cache_write_accept_count != 0) ||
@@ -1717,8 +1910,8 @@ module tb_qmap_layer0_compute_scheduler;
             (layer_write_accept_count != 0)) begin
             fail_once("FAIL: invalid frontend run produced unexpected downstream writes");
         end
-        if ((invalid_write_reqs != EXPECTED_QKV_WR_REQS) ||
-            (invalid_write_words != EXPECTED_QKV_WR_WORDS)) begin
+        if ((invalid_write_reqs != (EXPECTED_INPUT_NORM_WR_REQS + EXPECTED_QKV_WR_REQS)) ||
+            (invalid_write_words != (EXPECTED_INPUT_NORM_WR_WORDS + EXPECTED_QKV_WR_WORDS))) begin
             fail_once("FAIL: invalid frontend run write counters did not stop after QKV");
         end
         if ((invalid_read_bursts != EXPECTED_FRONTEND_INVALID_RD_REQS) ||
@@ -1726,8 +1919,12 @@ module tb_qmap_layer0_compute_scheduler;
             fail_once("FAIL: invalid frontend read counters mismatch");
         end
 
-        $display("qmap_layer0_compute_scheduler chained QKV through Layer 0 test");
+        $display("qmap_layer0_compute_scheduler chained input RMSNorm -> QKV through Layer 0 test");
         $display("  normal done cycle      = %0d", normal_done_cycle);
+        $display("  input_norm writes      = %0d debug_words=%0d saturation=%0d",
+                 normal_input_norm_write_accept_count,
+                 input_norm_write_word_count,
+                 input_norm_saturation);
         $display("  qkv invalid rd/wr      = %0d/%0d reads, %0d/%0d writes",
                  qkv_invalid_read_bursts, qkv_invalid_read_words,
                  qkv_invalid_write_reqs, qkv_invalid_write_words);
@@ -1745,7 +1942,8 @@ module tb_qmap_layer0_compute_scheduler;
         $display("  stage masks frontend invalid = done 0x%0h error 0x%0h full_done 0x%0h full_error 0x%0h",
                  invalid_stage_done_mask, invalid_stage_error_mask,
                  invalid_layer0_full_stage_done_mask, invalid_layer0_full_stage_error_mask);
-        $display("  producer writes        = qkv %0d/%0d/%0d cache %0d qrope %0d attn %0d oproj %0d post %0d/%0d gate/up %0d/%0d silu %0d down %0d layer %0d",
+        $display("  producer writes        = input_norm %0d qkv %0d/%0d/%0d cache %0d qrope %0d attn %0d oproj %0d post %0d/%0d gate/up %0d/%0d silu %0d down %0d layer %0d",
+                 normal_input_norm_write_accept_count,
                  normal_qkv_q_write_accept_count, normal_qkv_k_write_accept_count,
                  normal_qkv_v_write_accept_count, normal_cache_write_accept_count,
                  normal_q_rope_write_accept_count,
@@ -1768,7 +1966,7 @@ module tb_qmap_layer0_compute_scheduler;
             $finish(1);
         end
 
-        $display("PASS: qmap_layer0_compute_scheduler chained QKV projection through Layer 0 body with exact write-back and error propagation.");
+        $display("PASS: qmap_layer0_compute_scheduler chained input RMSNorm into QKV projection through Layer 0 body with exact write-back and error propagation.");
         if (trace_fd != 0) begin
             $fclose(trace_fd);
         end

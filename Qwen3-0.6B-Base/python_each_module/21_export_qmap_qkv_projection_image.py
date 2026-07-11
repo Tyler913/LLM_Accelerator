@@ -439,6 +439,7 @@ def descriptor_specs(
     k_rows: int,
     v_rows: int,
     metadata_words: int,
+    activation_base_addr: Optional[int] = None,
 ) -> list[dict[str, Any]]:
     def addr(name: str) -> int:
         return qmap_base + int(payloads[name]["offset"])
@@ -481,7 +482,9 @@ def descriptor_specs(
                 element_bits=32,
                 group_size=0,
                 scale_tensor_id=NO_TENSOR_ID,
-                base_addr=addr("activation_q12_12"),
+                base_addr=activation_base_addr
+                if activation_base_addr is not None
+                else addr("activation_q12_12"),
                 nbytes=size("activation_q12_12"),
                 dims=(HIDDEN_SIZE, 0, 0, 0),
                 strides=(4, 0, 0, 0),
@@ -681,6 +684,7 @@ def build_qmap_image(
     v_rows: int,
     activation_hex: Optional[Path] = None,
     activation_source_name: Optional[str] = None,
+    activation_base_addr: Optional[int] = None,
 ) -> tuple[bytes, dict[str, Any], np.ndarray]:
     if not source_npz.is_file():
         raise FileNotFoundError(
@@ -786,6 +790,12 @@ def build_qmap_image(
         v_outputs=v_outputs,
     )
     payloads_by_name = payload_map(payloads)
+    default_activation_base_addr = qmap_base + int(payloads_by_name["activation_q12_12"]["offset"])
+    descriptor_activation_base_addr = (
+        int(activation_base_addr)
+        if activation_base_addr is not None
+        else default_activation_base_addr
+    )
     descriptors = descriptor_specs(
         qmap_base=qmap_base,
         layer_id=layer_id,
@@ -794,6 +804,7 @@ def build_qmap_image(
         k_rows=k_rows,
         v_rows=v_rows,
         metadata_words=metadata_words.shape[0],
+        activation_base_addr=descriptor_activation_base_addr,
     )
 
     image = bytearray(image_bytes)
@@ -828,6 +839,9 @@ def build_qmap_image(
             "source_hex": activation_hex_relpath,
             "source_npz_tensor": "input_norm_q4_12",
             "override_max_abs_diff_vs_npz": activation_override_max_abs_diff_vs_npz,
+            "descriptor_base_addr": format_addr(descriptor_activation_base_addr),
+            "payload_base_addr": format_addr(default_activation_base_addr),
+            "descriptor_uses_external_base": activation_base_addr is not None,
         },
         "layer_id": layer_id,
         "image_base_addr": format_addr(qmap_base),
@@ -1026,6 +1040,15 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional human-readable activation source label for the manifest",
     )
+    parser.add_argument(
+        "--activation-base-addr",
+        type=lambda text: int(text.replace("_", ""), 0),
+        default=None,
+        help=(
+            "Optional physical base address for the activation descriptor. "
+            "Use this when activation words are produced by an earlier QMAP packet."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -1040,6 +1063,7 @@ def main() -> None:
         v_rows=args.v_rows,
         activation_hex=args.activation_hex,
         activation_source_name=args.activation_source_name,
+        activation_base_addr=args.activation_base_addr,
     )
     write_outputs(
         image=image,

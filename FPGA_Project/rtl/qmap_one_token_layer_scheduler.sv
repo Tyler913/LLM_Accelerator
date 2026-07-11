@@ -49,6 +49,7 @@ module qmap_one_token_layer_scheduler #(
     input  wire logic [ADDR_WIDTH-1 : 0]      i_kv_cache_base_addr,
 
     input  wire logic [MAX_LAYERS*ADDR_WIDTH-1 : 0] i_qkv_qmap_base_addr_table,
+    input  wire logic [MAX_LAYERS*ADDR_WIDTH-1 : 0] i_input_norm_qmap_base_addr_table,
     input  wire logic [MAX_LAYERS*ADDR_WIDTH-1 : 0] i_attn_frontend_qmap_base_addr_table,
     input  wire logic [MAX_LAYERS*ADDR_WIDTH-1 : 0] i_attn_score_value_qmap_base_addr_table,
     input  wire logic [MAX_LAYERS*ADDR_WIDTH-1 : 0] i_o_proj_qmap_base_addr_table,
@@ -67,6 +68,7 @@ module qmap_one_token_layer_scheduler #(
     output logic [LAYER_COUNT_WIDTH-1:0]      o_layers_completed,
     output logic [MAX_LAYERS-1:0]             o_layer_done_mask,
     output logic [MAX_LAYERS-1:0]             o_layer_error_mask,
+    output logic [ADDR_WIDTH-1:0]             o_last_layer_output_base_addr,
 
     output logic [1 : 0]                      o_layer0_active_stage_debug,
     output logic [7 : 0]                      o_layer0_state_debug,
@@ -123,6 +125,8 @@ module qmap_one_token_layer_scheduler #(
         MAX_CONTEXT[POSITION_WIDTH-1:0] - {{(POSITION_WIDTH-1){1'b0}}, 1'b1};
     localparam logic [LAYER_INDEX_WIDTH-1:0] MAX_LAYER_INDEX =
         MAX_LAYERS[LAYER_INDEX_WIDTH-1:0] - {{(LAYER_INDEX_WIDTH-1){1'b0}}, 1'b1};
+    localparam logic [ADDR_WIDTH-1:0] MLP_RESIDUAL_OUTPUT_OFFSET =
+        `QMAP_MLP_RESIDUAL_ADD_OUTPUT_OFFSET;
 
     state_t state;
 
@@ -190,6 +194,7 @@ module qmap_one_token_layer_scheduler #(
     logic layer0_active;
     logic [LAYER_INDEX_WIDTH-1:0] active_layer_index_reg;
     logic [LAYER_INDEX_WIDTH-1:0] validation_error_layer_index;
+    logic [ADDR_WIDTH-1:0] selected_input_norm_qmap_base_addr;
     logic [ADDR_WIDTH-1:0] selected_qkv_qmap_base_addr;
     logic [ADDR_WIDTH-1:0] selected_attn_frontend_qmap_base_addr;
     logic [ADDR_WIDTH-1:0] selected_attn_score_value_qmap_base_addr;
@@ -199,6 +204,7 @@ module qmap_one_token_layer_scheduler #(
     logic [ADDR_WIDTH-1:0] selected_mlp_silu_mul_qmap_base_addr;
     logic [ADDR_WIDTH-1:0] selected_mlp_down_qmap_base_addr;
     logic [ADDR_WIDTH-1:0] selected_mlp_residual_add_qmap_base_addr;
+    logic [ADDR_WIDTH-1:0] selected_layer_output_base_addr;
     integer validation_idx;
     integer validation_start_int;
     integer validation_stop_int;
@@ -212,6 +218,8 @@ module qmap_one_token_layer_scheduler #(
 
     assign selected_qkv_qmap_base_addr =
         select_layer_base_addr(i_qkv_qmap_base_addr_table, active_layer_index_reg);
+    assign selected_input_norm_qmap_base_addr =
+        select_layer_base_addr(i_input_norm_qmap_base_addr_table, active_layer_index_reg);
     assign selected_attn_frontend_qmap_base_addr =
         select_layer_base_addr(i_attn_frontend_qmap_base_addr_table, active_layer_index_reg);
     assign selected_attn_score_value_qmap_base_addr =
@@ -228,6 +236,8 @@ module qmap_one_token_layer_scheduler #(
         select_layer_base_addr(i_mlp_down_qmap_base_addr_table, active_layer_index_reg);
     assign selected_mlp_residual_add_qmap_base_addr =
         select_layer_base_addr(i_mlp_residual_add_qmap_base_addr_table, active_layer_index_reg);
+    assign selected_layer_output_base_addr =
+        selected_mlp_residual_add_qmap_base_addr + MLP_RESIDUAL_OUTPUT_OFFSET;
 
     assign selected_base_error =
         (selected_qkv_qmap_base_addr == '0) ||
@@ -240,7 +250,7 @@ module qmap_one_token_layer_scheduler #(
         (selected_mlp_down_qmap_base_addr == '0) ||
         (selected_mlp_residual_add_qmap_base_addr == '0);
 
-    always @* begin
+    always_comb begin
         validation_start_int = i_layer_start_index;
         validation_stop_int = i_layer_start_index + i_layer_count;
         validation_range_error =
@@ -313,6 +323,7 @@ module qmap_one_token_layer_scheduler #(
         .i_clk(i_clk),
         .i_rst_n(i_rst_n),
         .i_start(layer0_start),
+        .i_input_norm_qmap_base_addr(selected_input_norm_qmap_base_addr),
         .i_qkv_qmap_base_addr(selected_qkv_qmap_base_addr),
         .i_attn_frontend_qmap_base_addr(selected_attn_frontend_qmap_base_addr),
         .i_attn_score_value_qmap_base_addr(selected_attn_score_value_qmap_base_addr),
@@ -333,6 +344,10 @@ module qmap_one_token_layer_scheduler #(
         .o_layer0_full_stage_error_mask(o_layer0_full_stage_error_mask),
         .o_body_stage_done_mask(o_body_stage_done_mask),
         .o_body_stage_error_mask(o_body_stage_error_mask),
+        .o_input_norm_done(),
+        .o_input_norm_error(),
+        .o_input_norm_saturation(),
+        .o_input_norm_write_word_count(),
         .o_qkv_rows_done(o_qkv_rows_done),
         .o_qkv_last_row_sum_q26(o_qkv_last_row_sum_q26),
         .o_qkv_last_output_q12_12(o_qkv_last_output_q12_12),
@@ -370,6 +385,7 @@ module qmap_one_token_layer_scheduler #(
             o_layers_completed <= '0;
             o_layer_done_mask <= '0;
             o_layer_error_mask <= '0;
+            o_last_layer_output_base_addr <= '0;
             o_mem_read_burst_count <= 32'd0;
             o_mem_read_word_count <= 32'd0;
             o_mem_write_req_count <= 32'd0;
@@ -400,6 +416,7 @@ module qmap_one_token_layer_scheduler #(
                         o_layers_completed <= '0;
                         o_layer_done_mask <= '0;
                         o_layer_error_mask <= '0;
+                        o_last_layer_output_base_addr <= '0;
                         o_mem_read_burst_count <= 32'd0;
                         o_mem_read_word_count <= 32'd0;
                         o_mem_write_req_count <= 32'd0;
@@ -437,6 +454,7 @@ module qmap_one_token_layer_scheduler #(
                         else begin
                             o_layers_completed <= o_layers_completed + ONE_LAYER_COUNT;
                             o_layer_done_mask[active_layer_index_reg] <= 1'b1;
+                            o_last_layer_output_base_addr <= selected_layer_output_base_addr;
                             if ((o_layers_completed + ONE_LAYER_COUNT) == i_layer_count) begin
                                 state <= S_DONE;
                             end

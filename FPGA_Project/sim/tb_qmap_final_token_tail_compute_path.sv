@@ -121,6 +121,7 @@ module tb_qmap_final_token_tail_compute_path #(
 
     string vector_dir;
     string lm_prefix;
+    string final_norm_prefix;
     string qmap_image_file;
     string qmap_expected_file;
     string tracefile;
@@ -212,10 +213,13 @@ module tb_qmap_final_token_tail_compute_path #(
         .i_rst_n                (rst_n),
         .i_start                (start),
         .i_qmap_base_addr       (`QMAP_FINAL_TOKEN_BASE_ADDR),
+        .i_final_hidden_base_override_valid(1'b0),
+        .i_final_hidden_base_override_addr ('0),
         .o_busy                 (busy),
         .o_done                 (done),
         .o_error                (error),
         .o_norm_saturation      (norm_saturation),
+        .o_effective_final_hidden_base_addr(),
         .o_best_token_id        (best_token_id),
         .o_best_score_q26       (best_score_q26),
         .o_tiles_started        (tiles_started),
@@ -382,7 +386,7 @@ module tb_qmap_final_token_tail_compute_path #(
         begin
             $readmemh(qmap_image_file, qmap_mem);
             $readmemh(qmap_expected_file, expected_words_mem);
-            $readmemh({vector_dir, "/final_rmsnorm_stage_real_expected.hex"}, final_norm_expected_mem);
+            $readmemh({vector_dir, "/", final_norm_prefix, "_expected.hex"}, final_norm_expected_mem);
             $readmemh({vector_dir, "/", lm_prefix, "_weight_words32.hex"}, weight_words_mem);
             $readmemh({vector_dir, "/", lm_prefix, "_scale_words32.hex"}, scale_words_mem);
             $readmemh({vector_dir, "/", lm_prefix, "_expected_scan_logits_q26.hex"}, expected_logits_mem);
@@ -1085,13 +1089,22 @@ module tb_qmap_final_token_tail_compute_path #(
         vector_dir = "FPGA_Project/sim/vectors";
 `ifdef QMAP_FINAL_TOKEN_TB_FULL_VOCAB
         lm_prefix = "lm_head_argmax_full_vocab_real";
+        final_norm_prefix = "final_rmsnorm_stage_real";
         qmap_image_file = "FPGA_Project/sim/vectors/qmap_final_token_tail_full_vocab_image_words32.hex";
         qmap_expected_file = "FPGA_Project/sim/vectors/qmap_final_token_tail_full_vocab_expected_words32.hex";
         tracefile = "FPGA_Project/sim/qmap_final_token_tail_full_vocab_trace.csv";
         trace_every_cycle = 0;
         fast_memory = 1;
+`ifdef QMAP_FINAL_TOKEN_TB_LAYER2_CHAINED
+        lm_prefix = "lm_head_argmax_layer2_chained_full_vocab_real";
+        final_norm_prefix = "final_rmsnorm_layer2_chained_stage_real";
+        qmap_image_file = "FPGA_Project/sim/vectors/qmap_final_token_tail_layer2_chained_full_vocab_image_words32.hex";
+        qmap_expected_file = "FPGA_Project/sim/vectors/qmap_final_token_tail_layer2_chained_full_vocab_expected_words32.hex";
+        tracefile = "FPGA_Project/sim/qmap_final_token_tail_layer2_chained_full_vocab_xsim_trace.csv";
+`endif
 `else
         lm_prefix = "lm_head_argmax_stage_real";
+        final_norm_prefix = "final_rmsnorm_stage_real";
         qmap_image_file = "FPGA_Project/sim/vectors/qmap_final_token_tail_compact_image_words32.hex";
         qmap_expected_file = "FPGA_Project/sim/vectors/qmap_final_token_tail_compact_expected_words32.hex";
         tracefile = "FPGA_Project/sim/qmap_final_token_tail_compute_path_trace.csv";
@@ -1101,6 +1114,8 @@ module tb_qmap_final_token_tail_compute_path #(
         if ($value$plusargs("vectordir=%s", vector_dir)) begin
         end
         if ($value$plusargs("lm_prefix=%s", lm_prefix)) begin
+        end
+        if ($value$plusargs("final_norm_prefix=%s", final_norm_prefix)) begin
         end
         if ($value$plusargs("qmap_image=%s", qmap_image_file)) begin
         end
@@ -1147,6 +1162,8 @@ module tb_qmap_final_token_tail_compute_path #(
         trace_fd = 0;
 
         $display("qmap_final_token_tail_compute_path final-token tail test");
+        $display("  final norm prefix       = %s", final_norm_prefix);
+        $display("  lm prefix               = %s", lm_prefix);
         $display("  expected token          = %0d", expected_run_token);
         $display("  expected score q26      = %0d", expected_run_score_q26);
         $display("  success token           = %0d", last_success_token);

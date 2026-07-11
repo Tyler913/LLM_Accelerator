@@ -21,6 +21,7 @@ BODY_QMAP_BASE0 = 0x0000_0004_0500_0000
 LAYER_QMAP_STRIDE = 0x0000_0000_1000_0000
 WEIGHT_WINDOW_BASE0 = 0x0000_0004_0600_0000
 WEIGHT_WINDOW_STRIDE = 0x0000_0000_0100_0000
+INPUT_RMSNORM_OUTPUT_OFFSET = 0x0000_2540
 
 
 def parse_int_auto(text: str) -> int:
@@ -46,6 +47,7 @@ def sha256_file(path: Path) -> str:
 
 @dataclass(frozen=True)
 class LayerBases:
+    input_rmsnorm: int
     qkv: int
     attn_frontend: int
     attn_score_value: int
@@ -67,6 +69,8 @@ class LayerBases:
 
 @dataclass(frozen=True)
 class LayerPrefixes:
+    input_norm_prefix: str
+    input_norm_qmap_prefix: str
     qkv_prefix: str
     qk_prefix: str
     kv_prefix: str
@@ -95,6 +99,7 @@ def layer_bases(layer_id: int) -> LayerBases:
     weight_base = WEIGHT_WINDOW_BASE0 + (layer_id * WEIGHT_WINDOW_STRIDE)
     body_base = BODY_QMAP_BASE0 + qmap_offset
     return LayerBases(
+        input_rmsnorm=body_base + 0x000A_0000,
         qkv=QKV_QMAP_BASE0 + qmap_offset,
         attn_frontend=body_base + 0x0002_0000,
         attn_score_value=body_base + 0x0003_0000,
@@ -117,6 +122,8 @@ def layer_bases(layer_id: int) -> LayerBases:
 
 def layer_prefixes(layer_id: int) -> LayerPrefixes:
     return LayerPrefixes(
+        input_norm_prefix=f"layer{layer_id}_chained_input_rmsnorm_stage_real",
+        input_norm_qmap_prefix=f"qmap_layer{layer_id}_chained_input_rmsnorm",
         qkv_prefix=f"layer{layer_id}_qkv_from_layer{layer_id - 1}_rtl_full",
         qk_prefix=f"layer{layer_id}_chained_qk_norm_rope_stage_128_real",
         kv_prefix=f"layer{layer_id}_chained_kv_cache_append_real",
@@ -262,6 +269,12 @@ def build_plan(args: argparse.Namespace) -> tuple[LayerBases, LayerPrefixes, dic
         "qkv_npz": qkv_npz,
         "previous_layer_output_hex": previous_hex,
         "previous_layer_label": previous_label,
+        "input_norm": {
+            "binary": qmap_bin(f"layer{args.layer_id}_chained_input_rmsnorm_runtime"),
+            "manifest": qmap_manifest(f"layer{args.layer_id}_chained_input_rmsnorm_runtime"),
+            "sim_hex": sim_hex(f"{prefixes.input_norm_qmap_prefix}_image"),
+            "expected_hex": sim_hex(f"{prefixes.input_norm_qmap_prefix}_expected"),
+        },
         "qkv": {
             "binary": qmap_bin(prefixes.qkv_prefix),
             "manifest": QMAP_VECTOR_DIR / f"{prefixes.qkv_prefix}_manifest.json",
@@ -356,6 +369,46 @@ def emit_commands(
     else:
         print(f"SKIP: existing {relpath(qkv_npz)}", flush=True)
 
+    input_norm = paths["input_norm"]
+    run_command(
+        py_cmd(
+            "17_export_rmsnorm_fixed_vectors.py",
+            "--layer-id",
+            args.layer_id,
+            "--prefix",
+            prefixes.input_norm_prefix,
+            "--input-hex",
+            previous_hex,
+            "--input-hex-width",
+            32,
+            "--input-source-name",
+            previous_label,
+        ),
+        dry_run=args.dry_run,
+        commands=commands,
+    )
+    run_command(
+        py_cmd(
+            "48_export_qmap_input_rmsnorm_image.py",
+            "--prefix",
+            prefixes.input_norm_prefix,
+            "--layer-id",
+            args.layer_id,
+            "--qmap-base",
+            hex(bases.input_rmsnorm),
+            "--output",
+            input_norm["binary"],
+            "--manifest",
+            input_norm["manifest"],
+            "--sim-hex",
+            input_norm["sim_hex"],
+            "--expected-hex",
+            input_norm["expected_hex"],
+        ),
+        dry_run=args.dry_run,
+        commands=commands,
+    )
+
     qkv = paths["qkv"]
     run_command(
         py_cmd(
@@ -367,9 +420,11 @@ def emit_commands(
             "--qmap-base",
             hex(bases.qkv),
             "--activation-hex",
-            previous_hex,
+            input_norm["expected_hex"],
             "--activation-source-name",
-            previous_label,
+            prefixes.input_norm_prefix,
+            "--activation-base-addr",
+            hex(bases.input_rmsnorm + INPUT_RMSNORM_OUTPUT_OFFSET),
             "--output",
             qkv["binary"],
             "--manifest",
@@ -823,6 +878,10 @@ def write_chain_manifest(
             "weight_window_stride": format_addr(WEIGHT_WINDOW_STRIDE),
         },
         "qmap_bases": {
+            "input_rmsnorm": format_addr(bases.input_rmsnorm),
+            "input_rmsnorm_output": format_addr(
+                bases.input_rmsnorm + INPUT_RMSNORM_OUTPUT_OFFSET
+            ),
             "qkv": format_addr(bases.qkv),
             "attn_frontend": format_addr(bases.attn_frontend),
             "attn_score_value": format_addr(bases.attn_score_value),

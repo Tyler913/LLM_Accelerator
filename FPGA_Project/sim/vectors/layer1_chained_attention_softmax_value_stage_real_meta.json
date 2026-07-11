@@ -52,7 +52,7 @@
   "debug": {
     "value_saturation": false,
     "prob_min": 0,
-    "prob_max": 65536,
-    "attn_out_q12_12_max_abs": 2253
+    "prob_max": 63173,
+    "attn_out_q12_12_max_abs": 2290
   }
 }

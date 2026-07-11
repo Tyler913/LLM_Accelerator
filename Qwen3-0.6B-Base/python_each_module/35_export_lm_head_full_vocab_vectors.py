@@ -134,6 +134,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prefix", default=DEFAULT_PREFIX)
     parser.add_argument("--tile-rows", type=int, default=16)
     parser.add_argument("--chunk-rows", type=int, default=1024)
+    parser.add_argument(
+        "--activation-hex",
+        type=Path,
+        default=None,
+        help="Optional signed Q12.12 final RMSNorm output hex. Defaults to final_rmsnorm_stage_real_expected.hex.",
+    )
+    parser.add_argument("--activation-source-name", default=None)
     return parser.parse_args()
 
 
@@ -156,20 +163,30 @@ def main() -> None:
     selected_position = prompt_len - 1
     selected_token_id = int(input_ids[0, selected_position].item())
 
-    records: dict[str, dict[str, torch.Tensor]] = {}
-    hook = model.lm_head.register_forward_hook(capture_module_io(records, "lm_head"))
-    try:
-        with torch.no_grad():
-            outputs = model(input_ids=input_ids, use_cache=False)
-    finally:
-        hook.remove()
+    hf_logits: np.ndarray | None = None
+    hf_argmax: int | None = None
+    fp32_argmax: int | None = None
+    if args.activation_hex is None:
+        records: dict[str, dict[str, torch.Tensor]] = {}
+        hook = model.lm_head.register_forward_hook(capture_module_io(records, "lm_head"))
+        try:
+            with torch.no_grad():
+                outputs = model(input_ids=input_ids, use_cache=False)
+        finally:
+            hook.remove()
+        hf_logits = require_output(records, "lm_head")[0, selected_position, :].numpy().astype(np.float64)
+        hf_argmax = int(torch.argmax(outputs.logits[:, -1, :], dim=-1).item())
+        fp32_argmax = int(np.argmax(hf_logits))
 
-    activation_path = SIM_VECTOR_DIR / f"{FINAL_NORM_PREFIX}_expected.hex"
-    activation_meta_path = SIM_VECTOR_DIR / f"{FINAL_NORM_PREFIX}_meta.json"
+    activation_path = args.activation_hex or (SIM_VECTOR_DIR / f"{FINAL_NORM_PREFIX}_expected.hex")
+    activation_source = args.activation_source_name or (
+        FINAL_NORM_PREFIX if args.activation_hex is None else activation_path.as_posix()
+    )
+    activation_meta_path = SIM_VECTOR_DIR / f"{activation_source}_meta.json"
     activation_q12_12 = read_signed_hex_lines(activation_path, ACT_WIDTH)
     if activation_q12_12.shape != (INPUT_SIZE,):
         raise RuntimeError(f"Expected final_norm shape {(INPUT_SIZE,)}, got {activation_q12_12.shape}")
-    if activation_meta_path.is_file():
+    if args.activation_hex is None and activation_meta_path.is_file():
         final_meta = json.loads(activation_meta_path.read_text(encoding="utf-8"))
         if int(final_meta["selected_position"]) != selected_position:
             raise RuntimeError("final RMSNorm vector selected position does not match prompt")
@@ -237,12 +254,9 @@ def main() -> None:
     if best_token < 0:
         raise RuntimeError("Failed to find Q4 argmax")
 
-    hf_logits = require_output(records, "lm_head")[0, selected_position, :].numpy().astype(np.float64)
-    hf_argmax = int(torch.argmax(outputs.logits[:, -1, :], dim=-1).item())
-    fp32_argmax = int(np.argmax(hf_logits))
     best_token_text = tokenizer.decode([best_token])
-    hf_token_text = tokenizer.decode([hf_argmax])
-    fp32_token_text = tokenizer.decode([fp32_argmax])
+    hf_token_text = tokenizer.decode([hf_argmax]) if hf_argmax is not None else None
+    fp32_token_text = tokenizer.decode([fp32_argmax]) if fp32_argmax is not None else None
 
     write_scalar(files["expected_best_token"], best_token, 32)
     write_scalar(files["expected_best_score_q26"], best_score, ROW_ACC_WIDTH)
@@ -256,7 +270,8 @@ def main() -> None:
         "selected_position": int(selected_position),
         "selected_token_id": int(selected_token_id),
         "selected_token_text": tokenizer.decode([selected_token_id]),
-        "source_final_norm_prefix": FINAL_NORM_PREFIX,
+        "source_final_norm_prefix": activation_source,
+        "activation_path": activation_path.resolve().relative_to(REPO_ROOT.resolve()).as_posix(),
         "shape": {
             "vocab_size": vocab_size,
             "input_size": INPUT_SIZE,
@@ -287,9 +302,9 @@ def main() -> None:
             "full_q4_token": int(best_token),
             "full_q4_token_text": best_token_text,
             "full_q4_score_q26": int(best_score),
-            "hf_argmax_token": int(hf_argmax),
+            "hf_argmax_token": None if hf_argmax is None else int(hf_argmax),
             "hf_argmax_token_text": hf_token_text,
-            "fp32_lm_head_argmax_token": int(fp32_argmax),
+            "fp32_lm_head_argmax_token": None if fp32_argmax is None else int(fp32_argmax),
             "fp32_lm_head_argmax_token_text": fp32_token_text,
         },
         "debug": {
@@ -309,9 +324,11 @@ def main() -> None:
     print("=" * 80)
     print(f"Prompt: {PROMPT!r}")
     print(f"Selected token id: {selected_token_id} / {tokenizer.decode([selected_token_id])!r}")
+    print(f"Activation source: {activation_source}")
     print(f"Full Q4 argmax: {best_token} / {best_token_text!r}, score_q26={best_score}")
-    print(f"HF argmax:      {hf_argmax} / {hf_token_text!r}")
-    print(f"FP32 argmax:    {fp32_argmax} / {fp32_token_text!r}")
+    if hf_argmax is not None and fp32_argmax is not None:
+        print(f"HF argmax:      {hf_argmax} / {hf_token_text!r}")
+        print(f"FP32 argmax:    {fp32_argmax} / {fp32_token_text!r}")
     print(f"Scan window:    [0, {vocab_size}) rows={vocab_size}, tiles={vocab_size // tile_rows}")
     print(f"Weight words32: {files['weight_words32']}")
     print(f"Scale words32:  {files['scale_words32']}")

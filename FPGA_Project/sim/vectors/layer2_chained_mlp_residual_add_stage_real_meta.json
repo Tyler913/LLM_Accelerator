@@ -28,17 +28,17 @@
     "residual_count": 0
   },
   "debug": {
-    "post_attn_hidden_q14_10_min": -1569,
-    "post_attn_hidden_q14_10_max": 5558,
-    "post_attn_hidden_q14_10_max_abs": 5558,
-    "down_q12_12_min": -1897,
-    "down_q12_12_max": 6879,
-    "down_q12_12_max_abs": 6879,
-    "layer_out_q14_10_min": -1913,
-    "layer_out_q14_10_max": 7277,
-    "layer_out_q14_10_max_abs": 7277,
-    "fixed_layer_out_vs_hf_max_abs_diff": 0.5967817306518555,
-    "fixed_layer_out_vs_hf_mean_abs_diff": 0.09668218438218901
+    "post_attn_hidden_q14_10_min": -2016,
+    "post_attn_hidden_q14_10_max": 5436,
+    "post_attn_hidden_q14_10_max_abs": 5436,
+    "down_q12_12_min": -2192,
+    "down_q12_12_max": 7132,
+    "down_q12_12_max_abs": 7132,
+    "layer_out_q14_10_min": -2419,
+    "layer_out_q14_10_max": 7219,
+    "layer_out_q14_10_max_abs": 7219,
+    "fixed_layer_out_vs_hf_max_abs_diff": 0.2261771410703659,
+    "fixed_layer_out_vs_hf_mean_abs_diff": 0.051331534829841985
   },
   "files": {
     "post_attn_hidden": "layer2_chained_mlp_residual_add_stage_real_post_attn_hidden.hex",

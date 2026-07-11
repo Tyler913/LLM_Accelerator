@@ -49,13 +49,13 @@
   "debug": {
     "k_projection_recompute_vs_artifact_max_abs_diff": null,
     "v_projection_recompute_vs_artifact_max_abs_diff": null,
-    "k_rope_q12_12_max_abs": 432319,
-    "v_input_q12_12_max_abs": 671,
+    "k_rope_q12_12_max_abs": 754185,
+    "v_input_q12_12_max_abs": 2142,
     "k_norm_head0": {
-      "sum_squares": 7736837,
-      "mean_square": 60444,
-      "rms_q12_12": 245,
-      "inv_rms_uq8_16": 1095654
+      "sum_squares": 106059135,
+      "mean_square": 828586,
+      "rms_q12_12": 910,
+      "inv_rms_uq8_16": 294984
     }
   },
   "files": {

@@ -34,18 +34,18 @@
     "up_output_count": 0
   },
   "debug": {
-    "post_norm_q12_12_max_abs": 116596,
-    "fixed_input_vs_hf_post_norm_max_abs_diff": 2.2881431579589844,
-    "gate_q26_min": -378946886,
-    "gate_q26_max": 133392962,
-    "up_q26_min": -284660031,
-    "up_q26_max": 271637284,
-    "gate_q12_12_max_abs": 23130,
-    "up_q12_12_max_abs": 17375,
-    "fixed_gate_vs_hf_max_abs_diff": 2.0489284992218018,
-    "fixed_gate_vs_hf_mean_abs_diff": 0.32978810159177857,
-    "fixed_up_vs_hf_max_abs_diff": 1.926712989807129,
-    "fixed_up_vs_hf_mean_abs_diff": 0.1945399373900424
+    "post_norm_q12_12_max_abs": 121492,
+    "fixed_input_vs_hf_post_norm_max_abs_diff": 0.5561896562576294,
+    "gate_q26_min": -420194434,
+    "gate_q26_max": 144096474,
+    "up_q26_min": -414925161,
+    "up_q26_max": 317859001,
+    "gate_q12_12_max_abs": 25647,
+    "up_q12_12_max_abs": 25326,
+    "fixed_gate_vs_hf_max_abs_diff": 1.1100564002990723,
+    "fixed_gate_vs_hf_mean_abs_diff": 0.19393806753911727,
+    "fixed_up_vs_hf_max_abs_diff": 0.5626457333564758,
+    "fixed_up_vs_hf_mean_abs_diff": 0.10491023136501099
   },
   "files": {
     "activation": "layer2_chained_mlp_gate_up_proj_stage_real_activation.hex",

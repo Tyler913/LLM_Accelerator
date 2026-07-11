@@ -10,6 +10,9 @@ module tb_qmap_one_token_layer_scheduler;
     localparam int MEM_DATA_BYTES = MEM_DATA_WIDTH / 8;
     localparam int MAX_LAYERS = 28;
     localparam int BASE_TABLE_BITS = MAX_LAYERS * ADDR_WIDTH;
+    localparam int LAYER_INDEX_WIDTH = $clog2(MAX_LAYERS);
+    localparam int LAYER_COUNT_WIDTH = $clog2(MAX_LAYERS + 1);
+    localparam int POSITION_WIDTH = 8;
 
     localparam int NUM_Q_HEADS = 16;
     localparam int NUM_KV_HEADS = 8;
@@ -31,6 +34,7 @@ module tb_qmap_one_token_layer_scheduler;
     localparam int SILU_IMAGE_BYTES = 32'h0000_E000;
     localparam int DOWN_IMAGE_BYTES = 32'h0000_6000;
     localparam int RESIDUAL_IMAGE_BYTES = 32'h0000_5000;
+    localparam int INPUT_NORM_IMAGE_BYTES = 32'h0000_5000;
 
     localparam int QKV_WORDS = QKV_IMAGE_BYTES / MEM_DATA_BYTES;
     localparam int FRONT_WORDS = FRONT_IMAGE_BYTES / MEM_DATA_BYTES;
@@ -41,6 +45,7 @@ module tb_qmap_one_token_layer_scheduler;
     localparam int SILU_WORDS = SILU_IMAGE_BYTES / MEM_DATA_BYTES;
     localparam int DOWN_WORDS = DOWN_IMAGE_BYTES / MEM_DATA_BYTES;
     localparam int RESIDUAL_WORDS = RESIDUAL_IMAGE_BYTES / MEM_DATA_BYTES;
+    localparam int INPUT_NORM_WORDS = INPUT_NORM_IMAGE_BYTES / MEM_DATA_BYTES;
 
     localparam int VEC1024 = 1024;
     localparam int VEC2048 = 2048;
@@ -78,6 +83,7 @@ module tb_qmap_one_token_layer_scheduler;
     localparam int RESIDUAL_SLOT_POST_ATTN = 1;
     localparam int RESIDUAL_SLOT_DOWN = 2;
     localparam int RESIDUAL_SLOT_OUTPUT = 3;
+    localparam int INPUT_NORM_SLOT_OUTPUT = 3;
 
     localparam int OPROJ_WEIGHT_WORDS = (1024 * 1024) / 4;
     localparam int OPROJ_SCALE_WORDS = (1024 * 64) / 4;
@@ -100,6 +106,7 @@ module tb_qmap_one_token_layer_scheduler;
     localparam logic [ADDR_WIDTH-1 : 0] QMAP_LAYER1_MLP_SILU_MUL_BASE_ADDR = 64'h0000_0004_1507_0000;
     localparam logic [ADDR_WIDTH-1 : 0] QMAP_LAYER1_MLP_DOWN_BASE_ADDR = 64'h0000_0004_1508_0000;
     localparam logic [ADDR_WIDTH-1 : 0] QMAP_LAYER1_MLP_RESIDUAL_ADD_BASE_ADDR = 64'h0000_0004_1509_0000;
+    localparam logic [ADDR_WIDTH-1 : 0] QMAP_LAYER1_INPUT_NORM_BASE_ADDR = 64'h0000_0004_150A_0000;
     localparam logic [ADDR_WIDTH-1 : 0] QMAP_LAYER1_O_PROJ_WEIGHT_BASE_ADDR = 64'h0000_0004_0700_0000;
     localparam logic [ADDR_WIDTH-1 : 0] QMAP_LAYER1_O_PROJ_SCALE_BASE_ADDR = 64'h0000_0004_0710_0000;
     localparam logic [ADDR_WIDTH-1 : 0] QMAP_LAYER1_MLP_GATE_WEIGHT_BASE_ADDR = 64'h0000_0004_0720_0000;
@@ -118,6 +125,7 @@ module tb_qmap_one_token_layer_scheduler;
     localparam logic [ADDR_WIDTH-1 : 0] QMAP_LAYER2_MLP_SILU_MUL_BASE_ADDR = 64'h0000_0004_2507_0000;
     localparam logic [ADDR_WIDTH-1 : 0] QMAP_LAYER2_MLP_DOWN_BASE_ADDR = 64'h0000_0004_2508_0000;
     localparam logic [ADDR_WIDTH-1 : 0] QMAP_LAYER2_MLP_RESIDUAL_ADD_BASE_ADDR = 64'h0000_0004_2509_0000;
+    localparam logic [ADDR_WIDTH-1 : 0] QMAP_LAYER2_INPUT_NORM_BASE_ADDR = 64'h0000_0004_250A_0000;
     localparam logic [ADDR_WIDTH-1 : 0] QMAP_LAYER2_O_PROJ_WEIGHT_BASE_ADDR = 64'h0000_0004_0800_0000;
     localparam logic [ADDR_WIDTH-1 : 0] QMAP_LAYER2_O_PROJ_SCALE_BASE_ADDR = 64'h0000_0004_0810_0000;
     localparam logic [ADDR_WIDTH-1 : 0] QMAP_LAYER2_MLP_GATE_WEIGHT_BASE_ADDR = 64'h0000_0004_0820_0000;
@@ -141,6 +149,7 @@ module tb_qmap_one_token_layer_scheduler;
     localparam int WRITE_SILU_HIDDEN = 12;
     localparam int WRITE_DOWN = 13;
     localparam int WRITE_LAYER = 14;
+    localparam int WRITE_INPUT_NORM = 15;
 
     localparam int EXPECTED_QKV_RD_REQS = 8209;
     localparam int EXPECTED_QKV_RD_WORDS = 558480;
@@ -154,10 +163,18 @@ module tb_qmap_one_token_layer_scheduler;
     localparam int EXPECTED_QKV_INVALID_RD_WORDS = 400;
     localparam int EXPECTED_FRONTEND_INVALID_RD_REQS = EXPECTED_QKV_RD_REQS + 11;
     localparam int EXPECTED_FRONTEND_INVALID_RD_WORDS = EXPECTED_QKV_RD_WORDS + 336;
+    localparam int EXPECTED_INPUT_NORM_QKV_RD_REQS = 8234;
+    localparam int EXPECTED_INPUT_NORM_QKV_RD_WORDS = 561040;
+    localparam int EXPECTED_INPUT_NORM_QKV_WR_REQS = 4097;
+    localparam int EXPECTED_INPUT_NORM_QKV_WR_WORDS = 5120;
     localparam int EXPECTED_NORMAL_RD_REQS = EXPECTED_QKV_RD_REQS + EXPECTED_FULL_RD_REQS;
     localparam int EXPECTED_NORMAL_RD_WORDS = EXPECTED_QKV_RD_WORDS + EXPECTED_FULL_RD_WORDS;
     localparam int EXPECTED_NORMAL_WR_REQS = EXPECTED_QKV_WR_REQS + EXPECTED_FULL_WR_REQS;
     localparam int EXPECTED_NORMAL_WR_WORDS = EXPECTED_QKV_WR_WORDS + EXPECTED_FULL_WR_WORDS;
+    localparam int EXPECTED_INPUT_NORM_FULL_RD_REQS = EXPECTED_NORMAL_RD_REQS + 14;
+    localparam int EXPECTED_INPUT_NORM_FULL_RD_WORDS = EXPECTED_NORMAL_RD_WORDS + 2224;
+    localparam int EXPECTED_INPUT_NORM_FULL_WR_REQS = EXPECTED_NORMAL_WR_REQS + 1;
+    localparam int EXPECTED_INPUT_NORM_FULL_WR_WORDS = EXPECTED_NORMAL_WR_WORDS + VEC1024;
     localparam int EXPECTED_TWO_LAYER_RD_REQS = 2 * EXPECTED_NORMAL_RD_REQS;
     localparam int EXPECTED_TWO_LAYER_RD_WORDS = 2 * EXPECTED_NORMAL_RD_WORDS;
     localparam int EXPECTED_TWO_LAYER_WR_REQS = 2 * EXPECTED_NORMAL_WR_REQS;
@@ -166,10 +183,59 @@ module tb_qmap_one_token_layer_scheduler;
     localparam int EXPECTED_THREE_LAYER_RD_WORDS = 3 * EXPECTED_NORMAL_RD_WORDS;
     localparam int EXPECTED_THREE_LAYER_WR_REQS = 3 * EXPECTED_NORMAL_WR_REQS;
     localparam int EXPECTED_THREE_LAYER_WR_WORDS = 3 * EXPECTED_NORMAL_WR_WORDS;
+    localparam int EXPECTED_INPUT_NORM_TWO_LAYER_FULL_RD_REQS = 2 * EXPECTED_INPUT_NORM_FULL_RD_REQS;
+    localparam int EXPECTED_INPUT_NORM_TWO_LAYER_FULL_RD_WORDS = 2 * EXPECTED_INPUT_NORM_FULL_RD_WORDS;
+    localparam int EXPECTED_INPUT_NORM_TWO_LAYER_FULL_WR_REQS = 2 * EXPECTED_INPUT_NORM_FULL_WR_REQS;
+    localparam int EXPECTED_INPUT_NORM_TWO_LAYER_FULL_WR_WORDS = 2 * EXPECTED_INPUT_NORM_FULL_WR_WORDS;
+    localparam int EXPECTED_INPUT_NORM_THREE_LAYER_FULL_RD_REQS = 3 * EXPECTED_INPUT_NORM_FULL_RD_REQS;
+    localparam int EXPECTED_INPUT_NORM_THREE_LAYER_FULL_RD_WORDS = 3 * EXPECTED_INPUT_NORM_FULL_RD_WORDS;
+    localparam int EXPECTED_INPUT_NORM_THREE_LAYER_FULL_WR_REQS = 3 * EXPECTED_INPUT_NORM_FULL_WR_REQS;
+    localparam int EXPECTED_INPUT_NORM_THREE_LAYER_FULL_WR_WORDS = 3 * EXPECTED_INPUT_NORM_FULL_WR_WORDS;
+    localparam int EXPECTED_MIXED_THREE_LAYER_FULL_RD_REQS = EXPECTED_NORMAL_RD_REQS + EXPECTED_INPUT_NORM_TWO_LAYER_FULL_RD_REQS;
+    localparam int EXPECTED_MIXED_THREE_LAYER_FULL_RD_WORDS = EXPECTED_NORMAL_RD_WORDS + EXPECTED_INPUT_NORM_TWO_LAYER_FULL_RD_WORDS;
+    localparam int EXPECTED_MIXED_THREE_LAYER_FULL_WR_REQS = EXPECTED_NORMAL_WR_REQS + EXPECTED_INPUT_NORM_TWO_LAYER_FULL_WR_REQS;
+    localparam int EXPECTED_MIXED_THREE_LAYER_FULL_WR_WORDS = EXPECTED_NORMAL_WR_WORDS + EXPECTED_INPUT_NORM_TWO_LAYER_FULL_WR_WORDS;
+
+    localparam int TAIL_MAX_TILES = 9496;
+    localparam int TAIL_TILE_ROWS = 16;
+    localparam int TAIL_SCAN_ROWS = TAIL_MAX_TILES * TAIL_TILE_ROWS;
+    localparam int TAIL_INPUT_SIZE = 1024;
+    localparam int TAIL_HIDDEN_WIDTH = 24;
+    localparam int TAIL_NORM_WIDTH = 24;
+    localparam int TAIL_GROUP_SIZE = 64;
+    localparam int TAIL_GROUP_COUNT = TAIL_INPUT_SIZE / TAIL_GROUP_SIZE;
+    localparam int TAIL_WEIGHT_WIDTH = 4;
+    localparam int TAIL_SCALE_WIDTH = 16;
+    localparam int TAIL_PARTIAL_WIDTH = TAIL_NORM_WIDTH + TAIL_WEIGHT_WIDTH + $clog2(TAIL_GROUP_SIZE);
+    localparam int TAIL_SCALED_WIDTH = TAIL_PARTIAL_WIDTH + TAIL_SCALE_WIDTH;
+    localparam int TAIL_ROW_ACC_WIDTH = TAIL_SCALED_WIDTH + $clog2(TAIL_GROUP_COUNT) + 2;
+    localparam int TAIL_WEIGHT_ROW_BYTES = (TAIL_INPUT_SIZE * TAIL_WEIGHT_WIDTH) / 8;
+    localparam int TAIL_SCALE_ROW_BYTES = (TAIL_GROUP_COUNT * TAIL_SCALE_WIDTH) / 8;
+    localparam int TAIL_TILE_WEIGHT_BYTES = TAIL_TILE_ROWS * TAIL_WEIGHT_ROW_BYTES;
+    localparam int TAIL_TILE_SCALE_BYTES = TAIL_TILE_ROWS * TAIL_SCALE_ROW_BYTES;
+    localparam int TAIL_WEIGHT_BURSTS_PER_TILE = TAIL_TILE_WEIGHT_BYTES / `QMAP_FINAL_TOKEN_MAX_READ_BYTES;
+    localparam int TAIL_SCALE_BURSTS_PER_TILE = 1;
+    localparam int TAIL_BURSTS_PER_TILE = TAIL_WEIGHT_BURSTS_PER_TILE + TAIL_SCALE_BURSTS_PER_TILE;
+    localparam int TAIL_QMAP_IMAGE_BYTES = 32'h0000_4000;
+    localparam int TAIL_QMAP_WORDS = TAIL_QMAP_IMAGE_BYTES / MEM_DATA_BYTES;
+    localparam int TAIL_WEIGHT_WORDS = TAIL_SCAN_ROWS * TAIL_WEIGHT_ROW_BYTES / MEM_DATA_BYTES;
+    localparam int TAIL_SCALE_WORDS = TAIL_SCAN_ROWS * TAIL_SCALE_ROW_BYTES / MEM_DATA_BYTES;
+    localparam int TAIL_SLOT_NORM_OUTPUT = 1;
+    localparam int TAIL_SLOT_WEIGHT = 2;
+    localparam int TAIL_SLOT_SCALE = 3;
+    localparam int TAIL_SLOT_OUTPUT = 4;
+    localparam int TAIL_SLOT_FINAL_HIDDEN = 6;
+    localparam int TAIL_SLOT_FINAL_GAMMA = 7;
+    localparam int TAIL_WRITE_NONE = 100;
+    localparam int TAIL_WRITE_NORM = 101;
+    localparam int TAIL_WRITE_OUTPUT = 102;
 
     logic clk;
     logic rst_n;
     logic start;
+    logic tail_start;
+    logic use_tail_mem_manual;
+    wire use_tail_mem;
     logic busy;
     logic done;
     logic error;
@@ -183,6 +249,7 @@ module tb_qmap_one_token_layer_scheduler;
     logic [ADDR_WIDTH-1 : 0] output_hidden_base_addr;
     logic [ADDR_WIDTH-1 : 0] kv_cache_base_addr;
     logic [BASE_TABLE_BITS-1 : 0] qkv_qmap_base_addr_table;
+    logic [BASE_TABLE_BITS-1 : 0] input_norm_qmap_base_addr_table;
     logic [BASE_TABLE_BITS-1 : 0] attn_frontend_qmap_base_addr_table;
     logic [BASE_TABLE_BITS-1 : 0] attn_score_value_qmap_base_addr_table;
     logic [BASE_TABLE_BITS-1 : 0] o_proj_qmap_base_addr_table;
@@ -196,6 +263,7 @@ module tb_qmap_one_token_layer_scheduler;
     logic [4 : 0] layers_completed;
     logic [27 : 0] layer_done_mask;
     logic [27 : 0] layer_error_mask;
+    logic [ADDR_WIDTH-1 : 0] scheduler_last_layer_output_base;
     logic [1 : 0] stage_done_mask;
     logic [1 : 0] stage_error_mask;
     logic [3 : 0] layer0_full_stage_done_mask;
@@ -209,6 +277,122 @@ module tb_qmap_one_token_layer_scheduler;
     logic [31 : 0] dut_read_word_count;
     logic [31 : 0] dut_write_req_count;
     logic [31 : 0] dut_write_word_count;
+
+`ifdef QMAP_ONE_TOKEN_TB_USE_TOP
+    logic [7 : 0] top_phase_debug;
+    logic top_scheduler_done_pulse;
+    logic top_tail_start_pulse;
+    logic top_tail_done_pulse;
+    logic top_tail_active;
+    logic [ADDR_WIDTH-1 : 0] top_tail_effective_final_hidden_base;
+    logic [31 : 0] top_mem_read_burst_count;
+    logic [31 : 0] top_mem_read_word_count;
+    logic [31 : 0] top_mem_write_req_count;
+    logic [31 : 0] top_mem_write_word_count;
+    integer top_scheduler_done_seen_count;
+    integer top_tail_start_seen_count;
+
+`ifdef QMAP_ONE_TOKEN_TB_USE_MMIO_CONTROL
+    localparam logic [11 : 0] MMIO_REG_CTRL                 = 12'h000;
+    localparam logic [11 : 0] MMIO_REG_STATUS               = 12'h004;
+    localparam logic [11 : 0] MMIO_REG_LAYER_START          = 12'h008;
+    localparam logic [11 : 0] MMIO_REG_LAYER_COUNT          = 12'h00C;
+    localparam logic [11 : 0] MMIO_REG_POSITION             = 12'h010;
+    localparam logic [11 : 0] MMIO_REG_INPUT_TOKEN          = 12'h014;
+    localparam logic [11 : 0] MMIO_REG_INPUT_HIDDEN_LO      = 12'h020;
+    localparam logic [11 : 0] MMIO_REG_INPUT_HIDDEN_HI      = 12'h024;
+    localparam logic [11 : 0] MMIO_REG_OUTPUT_HIDDEN_LO     = 12'h028;
+    localparam logic [11 : 0] MMIO_REG_OUTPUT_HIDDEN_HI     = 12'h02C;
+    localparam logic [11 : 0] MMIO_REG_KV_CACHE_LO          = 12'h030;
+    localparam logic [11 : 0] MMIO_REG_KV_CACHE_HI          = 12'h034;
+    localparam logic [11 : 0] MMIO_REG_FINAL_TAIL_QMAP_LO   = 12'h038;
+    localparam logic [11 : 0] MMIO_REG_FINAL_TAIL_QMAP_HI   = 12'h03C;
+    localparam logic [11 : 0] MMIO_REG_FINAL_OVERRIDE_CTRL  = 12'h048;
+    localparam logic [11 : 0] MMIO_REG_TABLE_SELECT         = 12'h050;
+    localparam logic [11 : 0] MMIO_REG_TABLE_DATA_LO        = 12'h054;
+    localparam logic [11 : 0] MMIO_REG_TABLE_DATA_HI        = 12'h058;
+    localparam logic [11 : 0] MMIO_REG_TABLE_COMMIT         = 12'h05C;
+    localparam logic [11 : 0] MMIO_REG_OUT_TOKEN            = 12'h060;
+    localparam logic [11 : 0] MMIO_REG_OUT_SCORE_LO         = 12'h064;
+    localparam logic [11 : 0] MMIO_REG_OUT_SCORE_HI         = 12'h068;
+    localparam logic [11 : 0] MMIO_REG_LAYERS               = 12'h06C;
+    localparam logic [11 : 0] MMIO_REG_LAYER_DONE_MASK      = 12'h070;
+    localparam logic [11 : 0] MMIO_REG_LAST_OUTPUT_LO       = 12'h078;
+    localparam logic [11 : 0] MMIO_REG_TAIL_HIDDEN_LO       = 12'h080;
+    localparam logic [11 : 0] MMIO_REG_MEM_RD_REQS          = 12'h090;
+    localparam logic [11 : 0] MMIO_REG_MEM_RD_WORDS         = 12'h094;
+    localparam logic [11 : 0] MMIO_REG_MEM_WR_REQS          = 12'h098;
+    localparam logic [11 : 0] MMIO_REG_MEM_WR_WORDS         = 12'h09C;
+
+    localparam logic [7 : 0] MMIO_TABLE_QKV             = 8'd0;
+    localparam logic [7 : 0] MMIO_TABLE_INPUT_NORM      = 8'd1;
+    localparam logic [7 : 0] MMIO_TABLE_ATTN_FRONTEND   = 8'd2;
+    localparam logic [7 : 0] MMIO_TABLE_ATTN_SCORE      = 8'd3;
+    localparam logic [7 : 0] MMIO_TABLE_O_PROJ          = 8'd4;
+    localparam logic [7 : 0] MMIO_TABLE_POST_ATTN_NORM  = 8'd5;
+    localparam logic [7 : 0] MMIO_TABLE_MLP_GATE_UP     = 8'd6;
+    localparam logic [7 : 0] MMIO_TABLE_MLP_SILU_MUL    = 8'd7;
+    localparam logic [7 : 0] MMIO_TABLE_MLP_DOWN        = 8'd8;
+    localparam logic [7 : 0] MMIO_TABLE_MLP_RESIDUAL    = 8'd9;
+
+    logic mmio_reg_wr_valid;
+    logic mmio_reg_wr_ready;
+    logic mmio_reg_rd_valid;
+    logic mmio_reg_rd_ready;
+    logic [11 : 0] mmio_reg_addr;
+    logic [31 : 0] mmio_reg_wdata;
+    logic [31 : 0] mmio_reg_rdata;
+    logic mmio_reg_error;
+    logic [31 : 0] mmio_read_data;
+
+`ifdef QMAP_ONE_TOKEN_TB_USE_AXIL_TOP
+    localparam logic [1 : 0] AXIL_RESP_OKAY = 2'b00;
+
+    logic [11 : 0] axil_awaddr;
+    logic [2 : 0]  axil_awprot;
+    logic          axil_awvalid;
+    logic          axil_awready;
+    logic [31 : 0] axil_wdata;
+    logic [3 : 0]  axil_wstrb;
+    logic          axil_wvalid;
+    logic          axil_wready;
+    logic [1 : 0]  axil_bresp;
+    logic          axil_bvalid;
+    logic          axil_bready;
+    logic [11 : 0] axil_araddr;
+    logic [2 : 0]  axil_arprot;
+    logic          axil_arvalid;
+    logic          axil_arready;
+    logic [31 : 0] axil_rdata;
+    logic [1 : 0]  axil_rresp;
+    logic          axil_rvalid;
+    logic          axil_rready;
+    logic          axil_busy;
+`endif
+
+    logic mmio_start_pulse;
+    logic [31 : 0] mmio_input_token_id;
+    logic [LAYER_INDEX_WIDTH-1 : 0] mmio_layer_start_index;
+    logic [LAYER_COUNT_WIDTH-1 : 0] mmio_layer_count;
+    logic [POSITION_WIDTH-1 : 0] mmio_position;
+    logic [ADDR_WIDTH-1 : 0] mmio_input_hidden_base_addr;
+    logic [ADDR_WIDTH-1 : 0] mmio_output_hidden_base_addr;
+    logic [ADDR_WIDTH-1 : 0] mmio_kv_cache_base_addr;
+    logic [ADDR_WIDTH-1 : 0] mmio_final_tail_qmap_base_addr;
+    logic mmio_final_hidden_base_override_valid;
+    logic [ADDR_WIDTH-1 : 0] mmio_final_hidden_base_override_addr;
+    logic [BASE_TABLE_BITS-1 : 0] mmio_qkv_qmap_base_addr_table;
+    logic [BASE_TABLE_BITS-1 : 0] mmio_input_norm_qmap_base_addr_table;
+    logic [BASE_TABLE_BITS-1 : 0] mmio_attn_frontend_qmap_base_addr_table;
+    logic [BASE_TABLE_BITS-1 : 0] mmio_attn_score_value_qmap_base_addr_table;
+    logic [BASE_TABLE_BITS-1 : 0] mmio_o_proj_qmap_base_addr_table;
+    logic [BASE_TABLE_BITS-1 : 0] mmio_post_attn_norm_qmap_base_addr_table;
+    logic [BASE_TABLE_BITS-1 : 0] mmio_mlp_gate_up_qmap_base_addr_table;
+    logic [BASE_TABLE_BITS-1 : 0] mmio_mlp_silu_mul_qmap_base_addr_table;
+    logic [BASE_TABLE_BITS-1 : 0] mmio_mlp_down_qmap_base_addr_table;
+    logic [BASE_TABLE_BITS-1 : 0] mmio_mlp_residual_add_qmap_base_addr_table;
+`endif
+`endif
 
     logic mem_rd_req_valid;
     logic mem_rd_req_ready;
@@ -230,6 +414,61 @@ module tb_qmap_one_token_layer_scheduler;
     logic mem_wr_done;
     logic mem_wr_error;
 
+    logic sched_mem_rd_req_valid;
+    logic sched_mem_rd_req_ready;
+    logic [ADDR_WIDTH-1 : 0] sched_mem_rd_req_addr;
+    logic [15 : 0] sched_mem_rd_req_len_bytes;
+    logic sched_mem_rd_rsp_valid;
+    logic sched_mem_rd_rsp_ready;
+    logic [MEM_DATA_WIDTH-1 : 0] sched_mem_rd_rsp_data;
+    logic sched_mem_rd_rsp_last;
+
+    logic sched_mem_wr_req_valid;
+    logic sched_mem_wr_req_ready;
+    logic [ADDR_WIDTH-1 : 0] sched_mem_wr_req_addr;
+    logic [15 : 0] sched_mem_wr_req_len_bytes;
+    logic [31 : 0] sched_mem_wr_data;
+    logic sched_mem_wr_data_valid;
+    logic sched_mem_wr_data_ready;
+    logic sched_mem_wr_data_last;
+    logic sched_mem_wr_done;
+    logic sched_mem_wr_error;
+
+`ifdef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+    logic tail_busy;
+    logic tail_done;
+    logic tail_error;
+    logic tail_norm_saturation;
+    logic [31 : 0] tail_best_token_id;
+    logic signed [TAIL_ROW_ACC_WIDTH-1 : 0] tail_best_score_q26;
+    logic [31 : 0] tail_tiles_started;
+    logic [31 : 0] tail_tiles_completed;
+    logic [31 : 0] tail_norm_cycle_count;
+    logic [31 : 0] tail_mem_read_burst_count;
+    logic [31 : 0] tail_mem_read_word_count;
+    logic [31 : 0] tail_mem_write_word_count;
+
+    logic tail_mem_rd_req_valid;
+    logic tail_mem_rd_req_ready;
+    logic [ADDR_WIDTH-1 : 0] tail_mem_rd_req_addr;
+    logic [15 : 0] tail_mem_rd_req_len_bytes;
+    logic tail_mem_rd_rsp_valid;
+    logic tail_mem_rd_rsp_ready;
+    logic [MEM_DATA_WIDTH-1 : 0] tail_mem_rd_rsp_data;
+    logic tail_mem_rd_rsp_last;
+
+    logic tail_mem_wr_req_valid;
+    logic tail_mem_wr_req_ready;
+    logic [ADDR_WIDTH-1 : 0] tail_mem_wr_req_addr;
+    logic [15 : 0] tail_mem_wr_req_len_bytes;
+    logic [31 : 0] tail_mem_wr_data;
+    logic tail_mem_wr_data_valid;
+    logic tail_mem_wr_data_ready;
+    logic tail_mem_wr_data_last;
+    logic tail_mem_wr_done;
+    logic tail_mem_wr_error;
+`endif
+
     logic [31 : 0] qkv_qmap [0 : QKV_WORDS-1];
     logic [31 : 0] frontend_qmap [0 : FRONT_WORDS-1];
     logic [31 : 0] score_qmap [0 : SCORE_WORDS-1];
@@ -239,6 +478,7 @@ module tb_qmap_one_token_layer_scheduler;
     logic [31 : 0] silu_qmap [0 : SILU_WORDS-1];
     logic [31 : 0] down_qmap [0 : DOWN_WORDS-1];
     logic [31 : 0] residual_qmap [0 : RESIDUAL_WORDS-1];
+    logic [31 : 0] input_norm_qmap [0 : INPUT_NORM_WORDS-1];
 
     logic [31 : 0] qkv_qmap_l1 [0 : QKV_WORDS-1];
     logic [31 : 0] frontend_qmap_l1 [0 : FRONT_WORDS-1];
@@ -249,6 +489,7 @@ module tb_qmap_one_token_layer_scheduler;
     logic [31 : 0] silu_qmap_l1 [0 : SILU_WORDS-1];
     logic [31 : 0] down_qmap_l1 [0 : DOWN_WORDS-1];
     logic [31 : 0] residual_qmap_l1 [0 : RESIDUAL_WORDS-1];
+    logic [31 : 0] input_norm_qmap_l1 [0 : INPUT_NORM_WORDS-1];
 
     logic [31 : 0] qkv_qmap_l2 [0 : QKV_WORDS-1];
     logic [31 : 0] frontend_qmap_l2 [0 : FRONT_WORDS-1];
@@ -259,6 +500,7 @@ module tb_qmap_one_token_layer_scheduler;
     logic [31 : 0] silu_qmap_l2 [0 : SILU_WORDS-1];
     logic [31 : 0] down_qmap_l2 [0 : DOWN_WORDS-1];
     logic [31 : 0] residual_qmap_l2 [0 : RESIDUAL_WORDS-1];
+    logic [31 : 0] input_norm_qmap_l2 [0 : INPUT_NORM_WORDS-1];
 
     logic signed [IN_WIDTH-1 : 0] k_cache_mem [0 : CACHE_LENGTH*KV_COUNT-1];
     logic signed [IN_WIDTH-1 : 0] v_cache_mem [0 : CACHE_LENGTH*KV_COUNT-1];
@@ -308,6 +550,8 @@ module tb_qmap_one_token_layer_scheduler;
     logic [31 : 0] expected_silu_hidden [0 : VEC3072-1];
     logic [31 : 0] expected_down [0 : VEC1024-1];
     logic [31 : 0] expected_layer [0 : VEC1024-1];
+    logic [31 : 0] expected_input_norm [0 : VEC1024-1];
+    logic [31 : 0] expected_qkv_input_norm [0 : (VEC2048 + (2 * VEC1024))-1];
 
     logic [31 : 0] expected_qkv_l1 [0 : (VEC2048 + (2 * VEC1024))-1];
     logic [31 : 0] expected_q_rope_l1 [0 : VEC2048-1];
@@ -323,6 +567,7 @@ module tb_qmap_one_token_layer_scheduler;
     logic [31 : 0] expected_silu_hidden_l1 [0 : VEC3072-1];
     logic [31 : 0] expected_down_l1 [0 : VEC1024-1];
     logic [31 : 0] expected_layer_l1 [0 : VEC1024-1];
+    logic [31 : 0] expected_input_norm_l1 [0 : VEC1024-1];
 
     logic [31 : 0] expected_qkv_l2 [0 : (VEC2048 + (2 * VEC1024))-1];
     logic [31 : 0] expected_q_rope_l2 [0 : VEC2048-1];
@@ -338,6 +583,17 @@ module tb_qmap_one_token_layer_scheduler;
     logic [31 : 0] expected_silu_hidden_l2 [0 : VEC3072-1];
     logic [31 : 0] expected_down_l2 [0 : VEC1024-1];
     logic [31 : 0] expected_layer_l2 [0 : VEC1024-1];
+    logic [31 : 0] expected_input_norm_l2 [0 : VEC1024-1];
+
+    logic [31 : 0] tail_qmap [0 : TAIL_QMAP_WORDS-1];
+    logic [31 : 0] tail_weight_mem [0 : TAIL_WEIGHT_WORDS-1];
+    logic [31 : 0] tail_scale_mem [0 : TAIL_SCALE_WORDS-1];
+    logic signed [TAIL_ROW_ACC_WIDTH-1 : 0] tail_expected_logits [0 : TAIL_SCAN_ROWS-1];
+    logic signed [TAIL_NORM_WIDTH-1 : 0] tail_final_norm_expected [0 : TAIL_INPUT_SIZE-1];
+    logic [31 : 0] tail_expected_words [0 : 2];
+    logic [31 : 0] tail_scan_base_token_mem [0 : 0];
+    logic [ADDR_WIDTH-1 : 0] tail_weight_base_addr_mem [0 : 0];
+    logic [ADDR_WIDTH-1 : 0] tail_scale_base_addr_mem [0 : 0];
 
     logic [ADDR_WIDTH-1 : 0] qkv_q_base;
     logic [ADDR_WIDTH-1 : 0] qkv_k_base;
@@ -352,6 +608,7 @@ module tb_qmap_one_token_layer_scheduler;
     logic [ADDR_WIDTH-1 : 0] silu_hidden_base;
     logic [ADDR_WIDTH-1 : 0] down_output_base;
     logic [ADDR_WIDTH-1 : 0] layer_output_base;
+    logic [ADDR_WIDTH-1 : 0] input_norm_output_base;
 
     logic [ADDR_WIDTH-1 : 0] qkv_q_base_l1;
     logic [ADDR_WIDTH-1 : 0] qkv_k_base_l1;
@@ -366,6 +623,7 @@ module tb_qmap_one_token_layer_scheduler;
     logic [ADDR_WIDTH-1 : 0] silu_hidden_base_l1;
     logic [ADDR_WIDTH-1 : 0] down_output_base_l1;
     logic [ADDR_WIDTH-1 : 0] layer_output_base_l1;
+    logic [ADDR_WIDTH-1 : 0] input_norm_output_base_l1;
 
     logic [ADDR_WIDTH-1 : 0] qkv_q_base_l2;
     logic [ADDR_WIDTH-1 : 0] qkv_k_base_l2;
@@ -380,6 +638,15 @@ module tb_qmap_one_token_layer_scheduler;
     logic [ADDR_WIDTH-1 : 0] silu_hidden_base_l2;
     logic [ADDR_WIDTH-1 : 0] down_output_base_l2;
     logic [ADDR_WIDTH-1 : 0] layer_output_base_l2;
+    logic [ADDR_WIDTH-1 : 0] input_norm_output_base_l2;
+
+    logic [ADDR_WIDTH-1 : 0] tail_weight_base_addr;
+    logic [ADDR_WIDTH-1 : 0] tail_scale_base_addr;
+    logic [ADDR_WIDTH-1 : 0] tail_norm_output_base;
+    logic [ADDR_WIDTH-1 : 0] tail_output_base;
+    logic [ADDR_WIDTH-1 : 0] tail_final_hidden_base;
+    logic [ADDR_WIDTH-1 : 0] tail_descriptor_final_hidden_base;
+    logic [ADDR_WIDTH-1 : 0] tail_final_gamma_base;
 
     string tracefile;
     string wavefile;
@@ -410,8 +677,29 @@ module tb_qmap_one_token_layer_scheduler;
     integer silu_write_accept_count;
     integer down_write_accept_count;
     integer layer_write_accept_count;
+    integer input_norm_write_accept_count;
     integer write_mismatch_count;
     longint signed max_abs_diff;
+
+    integer tail_scheduler_done_cycle;
+    integer tail_done_cycle;
+    integer tail_mismatch_count;
+    integer tail_write_mismatch_count;
+    integer tail_read_req_count;
+    integer tail_hidden_req_count;
+    integer tail_gamma_req_count;
+    integer tail_norm_read_req_count;
+    integer tail_weight_req_count;
+    integer tail_scale_req_count;
+    integer tail_lm_req_count;
+    integer tail_norm_write_word_count;
+    integer tail_output_write_word_count;
+    integer tail_done_seen_count;
+    integer tail_first_hidden_read_cycle;
+    integer tail_first_weight_read_cycle;
+    integer tail_first_output_write_cycle;
+    logic [31 : 0] tail_expected_token;
+    logic signed [TAIL_ROW_ACC_WIDTH-1 : 0] tail_expected_score_q26;
 
     integer normal_read_bursts;
     integer normal_read_words;
@@ -475,11 +763,21 @@ module tb_qmap_one_token_layer_scheduler;
     integer invalid_read_words;
     integer invalid_write_reqs;
     integer invalid_write_words;
+    integer input_norm_qkv_done_cycle;
+    integer input_norm_qkv_read_bursts;
+    integer input_norm_qkv_read_words;
+    integer input_norm_qkv_write_reqs;
+    integer input_norm_qkv_write_words;
     logic [1 : 0] invalid_stage_done_mask;
     logic [1 : 0] invalid_stage_error_mask;
+    logic [1 : 0] input_norm_qkv_stage_done_mask;
+    logic [1 : 0] input_norm_qkv_stage_error_mask;
     logic [3 : 0] invalid_layer0_full_stage_done_mask;
     logic [3 : 0] invalid_layer0_full_stage_error_mask;
+    logic [3 : 0] input_norm_qkv_layer0_full_stage_done_mask;
+    logic [3 : 0] input_norm_qkv_layer0_full_stage_error_mask;
     logic invalid_error;
+    logic input_norm_qkv_error;
     integer qkv_invalid_read_bursts;
     integer qkv_invalid_read_words;
     integer qkv_invalid_write_reqs;
@@ -536,6 +834,10 @@ module tb_qmap_one_token_layer_scheduler;
     logic silu_hidden_written;
     logic down_written;
     logic layer_written;
+    logic input_norm_written;
+    logic input_norm_written_l1;
+    logic input_norm_written_l2;
+    logic use_input_norm_qkv_expected;
 
     integer last_trace_stage;
     integer last_trace_state;
@@ -543,34 +845,119 @@ module tb_qmap_one_token_layer_scheduler;
     integer scoreboard_layer_iterations;
     logic fastmem;
 
-    qmap_one_token_layer_scheduler dut (
+`ifdef QMAP_ONE_TOKEN_TB_USE_TOP
+    assign use_tail_mem = top_tail_active;
+
+`ifdef QMAP_ONE_TOKEN_TB_USE_MMIO_CONTROL
+    qmap_one_token_control_regs #(
+        .ADDR_WIDTH        (ADDR_WIDTH),
+        .MAX_LAYERS        (MAX_LAYERS),
+        .MAX_CONTEXT       (MAX_CONTEXT),
+        .TOKEN_ID_WIDTH    (32),
+        .SCORE_WIDTH       (TAIL_ROW_ACC_WIDTH)
+    ) control_regs (
         .i_clk(clk),
         .i_rst_n(rst_n),
-        .i_start(start),
-        .i_layer_start_index(layer_start_index),
-        .i_layer_count(layer_count),
-        .i_position(token_position),
-        .i_input_hidden_base_addr(input_hidden_base_addr),
-        .i_output_hidden_base_addr(output_hidden_base_addr),
-        .i_kv_cache_base_addr(kv_cache_base_addr),
-        .i_qkv_qmap_base_addr_table(qkv_qmap_base_addr_table),
-        .i_attn_frontend_qmap_base_addr_table(attn_frontend_qmap_base_addr_table),
-        .i_attn_score_value_qmap_base_addr_table(attn_score_value_qmap_base_addr_table),
-        .i_o_proj_qmap_base_addr_table(o_proj_qmap_base_addr_table),
-        .i_post_attn_norm_qmap_base_addr_table(post_attn_norm_qmap_base_addr_table),
-        .i_mlp_gate_up_qmap_base_addr_table(mlp_gate_up_qmap_base_addr_table),
-        .i_mlp_silu_mul_qmap_base_addr_table(mlp_silu_mul_qmap_base_addr_table),
-        .i_mlp_down_qmap_base_addr_table(mlp_down_qmap_base_addr_table),
-        .i_mlp_residual_add_qmap_base_addr_table(mlp_residual_add_qmap_base_addr_table),
+        .i_reg_wr_valid(mmio_reg_wr_valid),
+        .o_reg_wr_ready(mmio_reg_wr_ready),
+        .i_reg_rd_valid(mmio_reg_rd_valid),
+        .o_reg_rd_ready(mmio_reg_rd_ready),
+        .i_reg_addr(mmio_reg_addr),
+        .i_reg_wdata(mmio_reg_wdata),
+        .o_reg_rdata(mmio_reg_rdata),
+        .o_reg_error(mmio_reg_error),
+        .o_start_pulse(mmio_start_pulse),
+        .o_input_token_id(mmio_input_token_id),
+        .o_layer_start_index(mmio_layer_start_index),
+        .o_layer_count(mmio_layer_count),
+        .o_position(mmio_position),
+        .o_input_hidden_base_addr(mmio_input_hidden_base_addr),
+        .o_output_hidden_base_addr(mmio_output_hidden_base_addr),
+        .o_kv_cache_base_addr(mmio_kv_cache_base_addr),
+        .o_final_tail_qmap_base_addr(mmio_final_tail_qmap_base_addr),
+        .o_final_hidden_base_override_valid(mmio_final_hidden_base_override_valid),
+        .o_final_hidden_base_override_addr(mmio_final_hidden_base_override_addr),
+        .o_qkv_qmap_base_addr_table(mmio_qkv_qmap_base_addr_table),
+        .o_input_norm_qmap_base_addr_table(mmio_input_norm_qmap_base_addr_table),
+        .o_attn_frontend_qmap_base_addr_table(mmio_attn_frontend_qmap_base_addr_table),
+        .o_attn_score_value_qmap_base_addr_table(mmio_attn_score_value_qmap_base_addr_table),
+        .o_o_proj_qmap_base_addr_table(mmio_o_proj_qmap_base_addr_table),
+        .o_post_attn_norm_qmap_base_addr_table(mmio_post_attn_norm_qmap_base_addr_table),
+        .o_mlp_gate_up_qmap_base_addr_table(mmio_mlp_gate_up_qmap_base_addr_table),
+        .o_mlp_silu_mul_qmap_base_addr_table(mmio_mlp_silu_mul_qmap_base_addr_table),
+        .o_mlp_down_qmap_base_addr_table(mmio_mlp_down_qmap_base_addr_table),
+        .o_mlp_residual_add_qmap_base_addr_table(mmio_mlp_residual_add_qmap_base_addr_table),
+        .i_top_busy(busy),
+        .i_top_done(done),
+        .i_top_error(error),
+        .i_top_state_debug(state_debug),
+        .i_top_phase_debug(top_phase_debug),
+        .i_layers_started(layers_started),
+        .i_layers_completed(layers_completed),
+        .i_layer_done_mask(layer_done_mask),
+        .i_layer_error_mask(layer_error_mask),
+        .i_last_layer_output_base_addr(scheduler_last_layer_output_base),
+        .i_tail_error(tail_error),
+        .i_tail_norm_saturation(tail_norm_saturation),
+        .i_tail_effective_final_hidden_base_addr(top_tail_effective_final_hidden_base),
+        .i_tail_best_token_id(tail_best_token_id),
+        .i_tail_best_score_q26(tail_best_score_q26),
+        .i_tail_tiles_started(tail_tiles_started),
+        .i_tail_tiles_completed(tail_tiles_completed),
+        .i_mem_read_burst_count(top_mem_read_burst_count),
+        .i_mem_read_word_count(top_mem_read_word_count),
+        .i_mem_write_req_count(top_mem_write_req_count),
+        .i_mem_write_word_count(top_mem_write_word_count)
+    );
+`endif
+
+`ifdef QMAP_ONE_TOKEN_TB_USE_AXIL_TOP
+    qmap_one_token_axil_top #(
+        .AXI_ADDR_WIDTH (12),
+        .ADDR_WIDTH     (ADDR_WIDTH),
+        .MEM_DATA_WIDTH (MEM_DATA_WIDTH),
+        .MAX_LAYERS     (MAX_LAYERS),
+        .MAX_CONTEXT    (MAX_CONTEXT),
+        .TAIL_MAX_TILES (TAIL_MAX_TILES),
+        .TOKEN_ID_WIDTH (32)
+    ) dut (
+        .i_clk(clk),
+        .i_rst_n(rst_n),
+        .i_s_axi_awaddr(axil_awaddr),
+        .i_s_axi_awprot(axil_awprot),
+        .i_s_axi_awvalid(axil_awvalid),
+        .o_s_axi_awready(axil_awready),
+        .i_s_axi_wdata(axil_wdata),
+        .i_s_axi_wstrb(axil_wstrb),
+        .i_s_axi_wvalid(axil_wvalid),
+        .o_s_axi_wready(axil_wready),
+        .o_s_axi_bresp(axil_bresp),
+        .o_s_axi_bvalid(axil_bvalid),
+        .i_s_axi_bready(axil_bready),
+        .i_s_axi_araddr(axil_araddr),
+        .i_s_axi_arprot(axil_arprot),
+        .i_s_axi_arvalid(axil_arvalid),
+        .o_s_axi_arready(axil_arready),
+        .o_s_axi_rdata(axil_rdata),
+        .o_s_axi_rresp(axil_rresp),
+        .o_s_axi_rvalid(axil_rvalid),
+        .i_s_axi_rready(axil_rready),
+        .o_axil_busy(axil_busy),
         .o_busy(busy),
         .o_done(done),
         .o_error(error),
         .o_state_debug(state_debug),
+        .o_phase_debug(top_phase_debug),
+        .o_scheduler_done_pulse(top_scheduler_done_pulse),
+        .o_tail_start_pulse(top_tail_start_pulse),
+        .o_tail_done_pulse(top_tail_done_pulse),
+        .o_tail_active(top_tail_active),
         .o_active_layer_index(active_layer_index),
         .o_layers_started(layers_started),
         .o_layers_completed(layers_completed),
         .o_layer_done_mask(layer_done_mask),
         .o_layer_error_mask(layer_error_mask),
+        .o_last_layer_output_base_addr(scheduler_last_layer_output_base),
         .o_layer0_active_stage_debug(active_stage_debug),
         .o_layer0_state_debug(layer0_state_debug),
         .o_layer0_stage_done_mask(stage_done_mask),
@@ -579,13 +966,25 @@ module tb_qmap_one_token_layer_scheduler;
         .o_layer0_full_stage_error_mask(layer0_full_stage_error_mask),
         .o_body_stage_done_mask(body_stage_done_mask),
         .o_body_stage_error_mask(body_stage_error_mask),
-        .o_qkv_rows_done(qkv_rows_done),
-        .o_qkv_last_row_sum_q26(qkv_last_row_sum_q26),
-        .o_qkv_last_output_q12_12(qkv_last_output_q12_12),
-        .o_mem_read_burst_count(dut_read_burst_count),
-        .o_mem_read_word_count(dut_read_word_count),
-        .o_mem_write_req_count(dut_write_req_count),
-        .o_mem_write_word_count(dut_write_word_count),
+        .o_scheduler_mem_read_burst_count(dut_read_burst_count),
+        .o_scheduler_mem_read_word_count(dut_read_word_count),
+        .o_scheduler_mem_write_req_count(dut_write_req_count),
+        .o_scheduler_mem_write_word_count(dut_write_word_count),
+        .o_tail_error(tail_error),
+        .o_tail_norm_saturation(tail_norm_saturation),
+        .o_tail_effective_final_hidden_base_addr(top_tail_effective_final_hidden_base),
+        .o_tail_best_token_id(tail_best_token_id),
+        .o_tail_best_score_q26(tail_best_score_q26),
+        .o_tail_tiles_started(tail_tiles_started),
+        .o_tail_tiles_completed(tail_tiles_completed),
+        .o_tail_norm_cycle_count(tail_norm_cycle_count),
+        .o_tail_mem_read_burst_count(tail_mem_read_burst_count),
+        .o_tail_mem_read_word_count(tail_mem_read_word_count),
+        .o_tail_mem_write_word_count(tail_mem_write_word_count),
+        .o_mem_read_burst_count(top_mem_read_burst_count),
+        .o_mem_read_word_count(top_mem_read_word_count),
+        .o_mem_write_req_count(top_mem_write_req_count),
+        .o_mem_write_word_count(top_mem_write_word_count),
         .o_mem_rd_req_valid(mem_rd_req_valid),
         .i_mem_rd_req_ready(mem_rd_req_ready),
         .o_mem_rd_req_addr(mem_rd_req_addr),
@@ -605,6 +1004,311 @@ module tb_qmap_one_token_layer_scheduler;
         .i_mem_wr_done(mem_wr_done),
         .i_mem_wr_error(mem_wr_error)
     );
+`else
+`ifdef QMAP_ONE_TOKEN_TB_USE_MMIO_CONTROL
+    wire logic top_start_signal = mmio_start_pulse;
+    wire logic [LAYER_INDEX_WIDTH-1 : 0] top_layer_start_index_signal = mmio_layer_start_index;
+    wire logic [LAYER_COUNT_WIDTH-1 : 0] top_layer_count_signal = mmio_layer_count;
+    wire logic [POSITION_WIDTH-1 : 0] top_position_signal = mmio_position;
+    wire logic [ADDR_WIDTH-1 : 0] top_input_hidden_base_signal = mmio_input_hidden_base_addr;
+    wire logic [ADDR_WIDTH-1 : 0] top_output_hidden_base_signal = mmio_output_hidden_base_addr;
+    wire logic [ADDR_WIDTH-1 : 0] top_kv_cache_base_signal = mmio_kv_cache_base_addr;
+    wire logic [ADDR_WIDTH-1 : 0] top_final_tail_qmap_base_signal = mmio_final_tail_qmap_base_addr;
+    wire logic top_final_hidden_override_valid_signal = mmio_final_hidden_base_override_valid;
+    wire logic [ADDR_WIDTH-1 : 0] top_final_hidden_override_addr_signal = mmio_final_hidden_base_override_addr;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_qkv_qmap_base_addr_table_signal = mmio_qkv_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_input_norm_qmap_base_addr_table_signal = mmio_input_norm_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_attn_frontend_qmap_base_addr_table_signal = mmio_attn_frontend_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_attn_score_value_qmap_base_addr_table_signal = mmio_attn_score_value_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_o_proj_qmap_base_addr_table_signal = mmio_o_proj_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_post_attn_norm_qmap_base_addr_table_signal = mmio_post_attn_norm_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_mlp_gate_up_qmap_base_addr_table_signal = mmio_mlp_gate_up_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_mlp_silu_mul_qmap_base_addr_table_signal = mmio_mlp_silu_mul_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_mlp_down_qmap_base_addr_table_signal = mmio_mlp_down_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_mlp_residual_add_qmap_base_addr_table_signal = mmio_mlp_residual_add_qmap_base_addr_table;
+`else
+    wire logic top_start_signal = start;
+    wire logic [LAYER_INDEX_WIDTH-1 : 0] top_layer_start_index_signal = layer_start_index;
+    wire logic [LAYER_COUNT_WIDTH-1 : 0] top_layer_count_signal = layer_count;
+    wire logic [POSITION_WIDTH-1 : 0] top_position_signal = token_position;
+    wire logic [ADDR_WIDTH-1 : 0] top_input_hidden_base_signal = input_hidden_base_addr;
+    wire logic [ADDR_WIDTH-1 : 0] top_output_hidden_base_signal = output_hidden_base_addr;
+    wire logic [ADDR_WIDTH-1 : 0] top_kv_cache_base_signal = kv_cache_base_addr;
+    wire logic [ADDR_WIDTH-1 : 0] top_final_tail_qmap_base_signal = `QMAP_FINAL_TOKEN_BASE_ADDR;
+    wire logic top_final_hidden_override_valid_signal = 1'b0;
+    wire logic [ADDR_WIDTH-1 : 0] top_final_hidden_override_addr_signal = {ADDR_WIDTH{1'b0}};
+    wire logic [BASE_TABLE_BITS-1 : 0] top_qkv_qmap_base_addr_table_signal = qkv_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_input_norm_qmap_base_addr_table_signal = input_norm_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_attn_frontend_qmap_base_addr_table_signal = attn_frontend_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_attn_score_value_qmap_base_addr_table_signal = attn_score_value_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_o_proj_qmap_base_addr_table_signal = o_proj_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_post_attn_norm_qmap_base_addr_table_signal = post_attn_norm_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_mlp_gate_up_qmap_base_addr_table_signal = mlp_gate_up_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_mlp_silu_mul_qmap_base_addr_table_signal = mlp_silu_mul_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_mlp_down_qmap_base_addr_table_signal = mlp_down_qmap_base_addr_table;
+    wire logic [BASE_TABLE_BITS-1 : 0] top_mlp_residual_add_qmap_base_addr_table_signal = mlp_residual_add_qmap_base_addr_table;
+`endif
+
+    qmap_one_token_top #(
+        .ADDR_WIDTH     (ADDR_WIDTH),
+        .MEM_DATA_WIDTH (MEM_DATA_WIDTH),
+        .MAX_LAYERS     (MAX_LAYERS),
+        .MAX_CONTEXT    (MAX_CONTEXT),
+        .TAIL_MAX_TILES (TAIL_MAX_TILES),
+        .TOKEN_ID_WIDTH (32)
+    ) dut (
+        .i_clk(clk),
+        .i_rst_n(rst_n),
+        .i_start(top_start_signal),
+        .i_layer_start_index(top_layer_start_index_signal),
+        .i_layer_count(top_layer_count_signal),
+        .i_position(top_position_signal),
+        .i_input_hidden_base_addr(top_input_hidden_base_signal),
+        .i_output_hidden_base_addr(top_output_hidden_base_signal),
+        .i_kv_cache_base_addr(top_kv_cache_base_signal),
+        .i_final_tail_qmap_base_addr(top_final_tail_qmap_base_signal),
+        .i_final_hidden_base_override_valid(top_final_hidden_override_valid_signal),
+        .i_final_hidden_base_override_addr(top_final_hidden_override_addr_signal),
+        .i_qkv_qmap_base_addr_table(top_qkv_qmap_base_addr_table_signal),
+        .i_input_norm_qmap_base_addr_table(top_input_norm_qmap_base_addr_table_signal),
+        .i_attn_frontend_qmap_base_addr_table(top_attn_frontend_qmap_base_addr_table_signal),
+        .i_attn_score_value_qmap_base_addr_table(top_attn_score_value_qmap_base_addr_table_signal),
+        .i_o_proj_qmap_base_addr_table(top_o_proj_qmap_base_addr_table_signal),
+        .i_post_attn_norm_qmap_base_addr_table(top_post_attn_norm_qmap_base_addr_table_signal),
+        .i_mlp_gate_up_qmap_base_addr_table(top_mlp_gate_up_qmap_base_addr_table_signal),
+        .i_mlp_silu_mul_qmap_base_addr_table(top_mlp_silu_mul_qmap_base_addr_table_signal),
+        .i_mlp_down_qmap_base_addr_table(top_mlp_down_qmap_base_addr_table_signal),
+        .i_mlp_residual_add_qmap_base_addr_table(top_mlp_residual_add_qmap_base_addr_table_signal),
+        .o_busy(busy),
+        .o_done(done),
+        .o_error(error),
+        .o_state_debug(state_debug),
+        .o_phase_debug(top_phase_debug),
+        .o_scheduler_done_pulse(top_scheduler_done_pulse),
+        .o_tail_start_pulse(top_tail_start_pulse),
+        .o_tail_done_pulse(top_tail_done_pulse),
+        .o_tail_active(top_tail_active),
+        .o_active_layer_index(active_layer_index),
+        .o_layers_started(layers_started),
+        .o_layers_completed(layers_completed),
+        .o_layer_done_mask(layer_done_mask),
+        .o_layer_error_mask(layer_error_mask),
+        .o_last_layer_output_base_addr(scheduler_last_layer_output_base),
+        .o_layer0_active_stage_debug(active_stage_debug),
+        .o_layer0_state_debug(layer0_state_debug),
+        .o_layer0_stage_done_mask(stage_done_mask),
+        .o_layer0_stage_error_mask(stage_error_mask),
+        .o_layer0_full_stage_done_mask(layer0_full_stage_done_mask),
+        .o_layer0_full_stage_error_mask(layer0_full_stage_error_mask),
+        .o_body_stage_done_mask(body_stage_done_mask),
+        .o_body_stage_error_mask(body_stage_error_mask),
+        .o_qkv_rows_done(qkv_rows_done),
+        .o_qkv_last_row_sum_q26(qkv_last_row_sum_q26),
+        .o_qkv_last_output_q12_12(qkv_last_output_q12_12),
+        .o_scheduler_mem_read_burst_count(dut_read_burst_count),
+        .o_scheduler_mem_read_word_count(dut_read_word_count),
+        .o_scheduler_mem_write_req_count(dut_write_req_count),
+        .o_scheduler_mem_write_word_count(dut_write_word_count),
+        .o_tail_error(tail_error),
+        .o_tail_norm_saturation(tail_norm_saturation),
+        .o_tail_effective_final_hidden_base_addr(top_tail_effective_final_hidden_base),
+        .o_tail_best_token_id(tail_best_token_id),
+        .o_tail_best_score_q26(tail_best_score_q26),
+        .o_tail_tiles_started(tail_tiles_started),
+        .o_tail_tiles_completed(tail_tiles_completed),
+        .o_tail_norm_cycle_count(tail_norm_cycle_count),
+        .o_tail_mem_read_burst_count(tail_mem_read_burst_count),
+        .o_tail_mem_read_word_count(tail_mem_read_word_count),
+        .o_tail_mem_write_word_count(tail_mem_write_word_count),
+        .o_mem_read_burst_count(top_mem_read_burst_count),
+        .o_mem_read_word_count(top_mem_read_word_count),
+        .o_mem_write_req_count(top_mem_write_req_count),
+        .o_mem_write_word_count(top_mem_write_word_count),
+        .o_mem_rd_req_valid(mem_rd_req_valid),
+        .i_mem_rd_req_ready(mem_rd_req_ready),
+        .o_mem_rd_req_addr(mem_rd_req_addr),
+        .o_mem_rd_req_len_bytes(mem_rd_req_len_bytes),
+        .i_mem_rd_rsp_valid(mem_rd_rsp_valid),
+        .o_mem_rd_rsp_ready(mem_rd_rsp_ready),
+        .i_mem_rd_rsp_data(mem_rd_rsp_data),
+        .i_mem_rd_rsp_last(mem_rd_rsp_last),
+        .o_mem_wr_req_valid(mem_wr_req_valid),
+        .i_mem_wr_req_ready(mem_wr_req_ready),
+        .o_mem_wr_req_addr(mem_wr_req_addr),
+        .o_mem_wr_req_len_bytes(mem_wr_req_len_bytes),
+        .o_mem_wr_data(mem_wr_data),
+        .o_mem_wr_data_valid(mem_wr_data_valid),
+        .i_mem_wr_data_ready(mem_wr_data_ready),
+        .o_mem_wr_data_last(mem_wr_data_last),
+        .i_mem_wr_done(mem_wr_done),
+        .i_mem_wr_error(mem_wr_error)
+    );
+`endif
+`else
+    assign use_tail_mem = use_tail_mem_manual;
+
+    qmap_one_token_layer_scheduler dut (
+        .i_clk(clk),
+        .i_rst_n(rst_n),
+        .i_start(start),
+        .i_layer_start_index(layer_start_index),
+        .i_layer_count(layer_count),
+        .i_position(token_position),
+        .i_input_hidden_base_addr(input_hidden_base_addr),
+        .i_output_hidden_base_addr(output_hidden_base_addr),
+        .i_kv_cache_base_addr(kv_cache_base_addr),
+        .i_qkv_qmap_base_addr_table(qkv_qmap_base_addr_table),
+        .i_input_norm_qmap_base_addr_table(input_norm_qmap_base_addr_table),
+        .i_attn_frontend_qmap_base_addr_table(attn_frontend_qmap_base_addr_table),
+        .i_attn_score_value_qmap_base_addr_table(attn_score_value_qmap_base_addr_table),
+        .i_o_proj_qmap_base_addr_table(o_proj_qmap_base_addr_table),
+        .i_post_attn_norm_qmap_base_addr_table(post_attn_norm_qmap_base_addr_table),
+        .i_mlp_gate_up_qmap_base_addr_table(mlp_gate_up_qmap_base_addr_table),
+        .i_mlp_silu_mul_qmap_base_addr_table(mlp_silu_mul_qmap_base_addr_table),
+        .i_mlp_down_qmap_base_addr_table(mlp_down_qmap_base_addr_table),
+        .i_mlp_residual_add_qmap_base_addr_table(mlp_residual_add_qmap_base_addr_table),
+        .o_busy(busy),
+        .o_done(done),
+        .o_error(error),
+        .o_state_debug(state_debug),
+        .o_active_layer_index(active_layer_index),
+        .o_layers_started(layers_started),
+        .o_layers_completed(layers_completed),
+        .o_layer_done_mask(layer_done_mask),
+        .o_layer_error_mask(layer_error_mask),
+        .o_last_layer_output_base_addr(scheduler_last_layer_output_base),
+        .o_layer0_active_stage_debug(active_stage_debug),
+        .o_layer0_state_debug(layer0_state_debug),
+        .o_layer0_stage_done_mask(stage_done_mask),
+        .o_layer0_stage_error_mask(stage_error_mask),
+        .o_layer0_full_stage_done_mask(layer0_full_stage_done_mask),
+        .o_layer0_full_stage_error_mask(layer0_full_stage_error_mask),
+        .o_body_stage_done_mask(body_stage_done_mask),
+        .o_body_stage_error_mask(body_stage_error_mask),
+        .o_qkv_rows_done(qkv_rows_done),
+        .o_qkv_last_row_sum_q26(qkv_last_row_sum_q26),
+        .o_qkv_last_output_q12_12(qkv_last_output_q12_12),
+        .o_mem_read_burst_count(dut_read_burst_count),
+        .o_mem_read_word_count(dut_read_word_count),
+        .o_mem_write_req_count(dut_write_req_count),
+        .o_mem_write_word_count(dut_write_word_count),
+        .o_mem_rd_req_valid(sched_mem_rd_req_valid),
+        .i_mem_rd_req_ready(sched_mem_rd_req_ready),
+        .o_mem_rd_req_addr(sched_mem_rd_req_addr),
+        .o_mem_rd_req_len_bytes(sched_mem_rd_req_len_bytes),
+        .i_mem_rd_rsp_valid(sched_mem_rd_rsp_valid),
+        .o_mem_rd_rsp_ready(sched_mem_rd_rsp_ready),
+        .i_mem_rd_rsp_data(sched_mem_rd_rsp_data),
+        .i_mem_rd_rsp_last(sched_mem_rd_rsp_last),
+        .o_mem_wr_req_valid(sched_mem_wr_req_valid),
+        .i_mem_wr_req_ready(sched_mem_wr_req_ready),
+        .o_mem_wr_req_addr(sched_mem_wr_req_addr),
+        .o_mem_wr_req_len_bytes(sched_mem_wr_req_len_bytes),
+        .o_mem_wr_data(sched_mem_wr_data),
+        .o_mem_wr_data_valid(sched_mem_wr_data_valid),
+        .i_mem_wr_data_ready(sched_mem_wr_data_ready),
+        .o_mem_wr_data_last(sched_mem_wr_data_last),
+        .i_mem_wr_done(sched_mem_wr_done),
+        .i_mem_wr_error(sched_mem_wr_error)
+    );
+
+`ifdef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+    qmap_final_token_tail_compute_path #(
+        .ADDR_WIDTH      (ADDR_WIDTH),
+        .MAX_TILES       (TAIL_MAX_TILES),
+        .INPUT_SIZE      (TAIL_INPUT_SIZE),
+        .MEM_DATA_WIDTH  (MEM_DATA_WIDTH)
+    ) tail_dut (
+        .i_clk(clk),
+        .i_rst_n(rst_n),
+        .i_start(tail_start),
+        .i_qmap_base_addr(`QMAP_FINAL_TOKEN_BASE_ADDR),
+        .i_final_hidden_base_override_valid(1'b0),
+        .i_final_hidden_base_override_addr({ADDR_WIDTH{1'b0}}),
+        .o_busy(tail_busy),
+        .o_done(tail_done),
+        .o_error(tail_error),
+        .o_norm_saturation(tail_norm_saturation),
+        .o_effective_final_hidden_base_addr(),
+        .o_best_token_id(tail_best_token_id),
+        .o_best_score_q26(tail_best_score_q26),
+        .o_tiles_started(tail_tiles_started),
+        .o_tiles_completed(tail_tiles_completed),
+        .o_norm_cycle_count(tail_norm_cycle_count),
+        .o_mem_read_burst_count(tail_mem_read_burst_count),
+        .o_mem_read_word_count(tail_mem_read_word_count),
+        .o_mem_write_word_count(tail_mem_write_word_count),
+        .o_mem_rd_req_valid(tail_mem_rd_req_valid),
+        .i_mem_rd_req_ready(tail_mem_rd_req_ready),
+        .o_mem_rd_req_addr(tail_mem_rd_req_addr),
+        .o_mem_rd_req_len_bytes(tail_mem_rd_req_len_bytes),
+        .i_mem_rd_rsp_valid(tail_mem_rd_rsp_valid),
+        .o_mem_rd_rsp_ready(tail_mem_rd_rsp_ready),
+        .i_mem_rd_rsp_data(tail_mem_rd_rsp_data),
+        .i_mem_rd_rsp_last(tail_mem_rd_rsp_last),
+        .o_mem_wr_req_valid(tail_mem_wr_req_valid),
+        .i_mem_wr_req_ready(tail_mem_wr_req_ready),
+        .o_mem_wr_req_addr(tail_mem_wr_req_addr),
+        .o_mem_wr_req_len_bytes(tail_mem_wr_req_len_bytes),
+        .o_mem_wr_data(tail_mem_wr_data),
+        .o_mem_wr_data_valid(tail_mem_wr_data_valid),
+        .i_mem_wr_data_ready(tail_mem_wr_data_ready),
+        .o_mem_wr_data_last(tail_mem_wr_data_last),
+        .i_mem_wr_done(tail_mem_wr_done),
+        .i_mem_wr_error(tail_mem_wr_error)
+    );
+`endif
+
+`ifdef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+    assign mem_rd_req_valid = use_tail_mem ? tail_mem_rd_req_valid : sched_mem_rd_req_valid;
+    assign mem_rd_req_addr = use_tail_mem ? tail_mem_rd_req_addr : sched_mem_rd_req_addr;
+    assign mem_rd_req_len_bytes = use_tail_mem ? tail_mem_rd_req_len_bytes : sched_mem_rd_req_len_bytes;
+    assign sched_mem_rd_req_ready = use_tail_mem ? 1'b0 : mem_rd_req_ready;
+    assign tail_mem_rd_req_ready = use_tail_mem ? mem_rd_req_ready : 1'b0;
+    assign sched_mem_rd_rsp_valid = use_tail_mem ? 1'b0 : mem_rd_rsp_valid;
+    assign tail_mem_rd_rsp_valid = use_tail_mem ? mem_rd_rsp_valid : 1'b0;
+    assign sched_mem_rd_rsp_data = mem_rd_rsp_data;
+    assign tail_mem_rd_rsp_data = mem_rd_rsp_data;
+    assign sched_mem_rd_rsp_last = use_tail_mem ? 1'b0 : mem_rd_rsp_last;
+    assign tail_mem_rd_rsp_last = use_tail_mem ? mem_rd_rsp_last : 1'b0;
+    assign mem_rd_rsp_ready = use_tail_mem ? tail_mem_rd_rsp_ready : sched_mem_rd_rsp_ready;
+
+    assign mem_wr_req_valid = use_tail_mem ? tail_mem_wr_req_valid : sched_mem_wr_req_valid;
+    assign mem_wr_req_addr = use_tail_mem ? tail_mem_wr_req_addr : sched_mem_wr_req_addr;
+    assign mem_wr_req_len_bytes = use_tail_mem ? tail_mem_wr_req_len_bytes : sched_mem_wr_req_len_bytes;
+    assign sched_mem_wr_req_ready = use_tail_mem ? 1'b0 : mem_wr_req_ready;
+    assign tail_mem_wr_req_ready = use_tail_mem ? mem_wr_req_ready : 1'b0;
+    assign mem_wr_data = use_tail_mem ? tail_mem_wr_data : sched_mem_wr_data;
+    assign mem_wr_data_valid = use_tail_mem ? tail_mem_wr_data_valid : sched_mem_wr_data_valid;
+    assign mem_wr_data_last = use_tail_mem ? tail_mem_wr_data_last : sched_mem_wr_data_last;
+    assign sched_mem_wr_data_ready = use_tail_mem ? 1'b0 : mem_wr_data_ready;
+    assign tail_mem_wr_data_ready = use_tail_mem ? mem_wr_data_ready : 1'b0;
+    assign sched_mem_wr_done = use_tail_mem ? 1'b0 : mem_wr_done;
+    assign tail_mem_wr_done = use_tail_mem ? mem_wr_done : 1'b0;
+    assign sched_mem_wr_error = use_tail_mem ? 1'b0 : mem_wr_error;
+    assign tail_mem_wr_error = use_tail_mem ? mem_wr_error : 1'b0;
+`else
+    assign mem_rd_req_valid = sched_mem_rd_req_valid;
+    assign mem_rd_req_addr = sched_mem_rd_req_addr;
+    assign mem_rd_req_len_bytes = sched_mem_rd_req_len_bytes;
+    assign sched_mem_rd_req_ready = mem_rd_req_ready;
+    assign sched_mem_rd_rsp_valid = mem_rd_rsp_valid;
+    assign sched_mem_rd_rsp_data = mem_rd_rsp_data;
+    assign sched_mem_rd_rsp_last = mem_rd_rsp_last;
+    assign mem_rd_rsp_ready = sched_mem_rd_rsp_ready;
+
+    assign mem_wr_req_valid = sched_mem_wr_req_valid;
+    assign mem_wr_req_addr = sched_mem_wr_req_addr;
+    assign mem_wr_req_len_bytes = sched_mem_wr_req_len_bytes;
+    assign sched_mem_wr_req_ready = mem_wr_req_ready;
+    assign mem_wr_data = sched_mem_wr_data;
+    assign mem_wr_data_valid = sched_mem_wr_data_valid;
+    assign mem_wr_data_last = sched_mem_wr_data_last;
+    assign sched_mem_wr_data_ready = mem_wr_data_ready;
+    assign sched_mem_wr_done = mem_wr_done;
+    assign sched_mem_wr_error = mem_wr_error;
+`endif
+`endif
 
     initial begin
         clk = 1'b0;
@@ -905,6 +1609,69 @@ module tb_qmap_one_token_layer_scheduler;
         end
     endfunction
 
+    function automatic logic [ADDR_WIDTH-1 : 0] tail_desc_base(input integer slot);
+        begin
+            tail_desc_base = {
+                tail_qmap[desc_idx(slot, DESC_BASE_HI_WORD)],
+                tail_qmap[desc_idx(slot, DESC_BASE_LO_WORD)]
+            };
+        end
+    endfunction
+
+    function automatic logic [ADDR_WIDTH-1 : 0] input_norm_desc_base(input integer slot);
+        begin
+            input_norm_desc_base = {
+                input_norm_qmap[desc_idx(slot, DESC_BASE_HI_WORD)],
+                input_norm_qmap[desc_idx(slot, DESC_BASE_LO_WORD)]
+            };
+        end
+    endfunction
+
+    function automatic logic [ADDR_WIDTH-1 : 0] input_norm_desc_base_l1(input integer slot);
+        begin
+            input_norm_desc_base_l1 = {
+                input_norm_qmap_l1[desc_idx(slot, DESC_BASE_HI_WORD)],
+                input_norm_qmap_l1[desc_idx(slot, DESC_BASE_LO_WORD)]
+            };
+        end
+    endfunction
+
+    function automatic logic [ADDR_WIDTH-1 : 0] input_norm_desc_base_l2(input integer slot);
+        begin
+            input_norm_desc_base_l2 = {
+                input_norm_qmap_l2[desc_idx(slot, DESC_BASE_HI_WORD)],
+                input_norm_qmap_l2[desc_idx(slot, DESC_BASE_LO_WORD)]
+            };
+        end
+    endfunction
+
+    function automatic logic [31 : 0] tail_norm_expected_word(input integer index);
+        begin
+            tail_norm_expected_word = {
+                {8{tail_final_norm_expected[index][TAIL_NORM_WIDTH-1]}},
+                tail_final_norm_expected[index]
+            };
+        end
+    endfunction
+
+    task patch_tail_base;
+        input integer slot;
+        input logic [ADDR_WIDTH-1 : 0] base_addr;
+        begin
+            tail_qmap[desc_idx(slot, DESC_BASE_LO_WORD)] = base_addr[31 : 0];
+            tail_qmap[desc_idx(slot, DESC_BASE_HI_WORD)] = base_addr[63 : 32];
+        end
+    endtask
+
+    task patch_qkv_base;
+        input integer slot;
+        input logic [ADDR_WIDTH-1 : 0] base_addr;
+        begin
+            qkv_qmap[desc_idx(slot, DESC_BASE_LO_WORD)] = base_addr[31 : 0];
+            qkv_qmap[desc_idx(slot, DESC_BASE_HI_WORD)] = base_addr[63 : 32];
+        end
+    endtask
+
     task patch_frontend_base;
         input integer slot;
         input logic [ADDR_WIDTH-1 : 0] base_addr;
@@ -1152,7 +1919,11 @@ module tb_qmap_one_token_layer_scheduler;
 
     task load_vectors;
         begin
-            $readmemh("artifacts/test_vectors/qwen3_0p6b_qmap_v1/layer0_qkv_projection_full_image_words32.hex", qkv_qmap);
+            if ($test$plusargs("input_norm_qkv_only")) begin
+                $readmemh("FPGA_Project/sim/vectors/qmap_qkv_projection_from_input_rmsnorm_image_words32.hex", qkv_qmap);
+            end else begin
+                $readmemh("artifacts/test_vectors/qwen3_0p6b_qmap_v1/layer0_qkv_projection_full_image_words32.hex", qkv_qmap);
+            end
             $readmemh("FPGA_Project/sim/vectors/qmap_attention_frontend_image_words32.hex", frontend_qmap);
             $readmemh("FPGA_Project/sim/vectors/qmap_attention_score_value_image_words32.hex", score_qmap);
             $readmemh("FPGA_Project/sim/vectors/qmap_o_proj_image_words32.hex", oproj_qmap);
@@ -1161,6 +1932,7 @@ module tb_qmap_one_token_layer_scheduler;
             $readmemh("FPGA_Project/sim/vectors/qmap_mlp_silu_mul_image_words32.hex", silu_qmap);
             $readmemh("FPGA_Project/sim/vectors/qmap_mlp_down_image_words32.hex", down_qmap);
             $readmemh("FPGA_Project/sim/vectors/qmap_mlp_residual_add_image_words32.hex", residual_qmap);
+            $readmemh("FPGA_Project/sim/vectors/qmap_input_rmsnorm_image_words32.hex", input_norm_qmap);
             $readmemh("artifacts/test_vectors/qwen3_0p6b_qmap_v1/layer1_qkv_from_layer0_rtl_full_image_words32.hex", qkv_qmap_l1);
             $readmemh("FPGA_Project/sim/vectors/qmap_layer1_chained_attention_frontend_image_words32.hex", frontend_qmap_l1);
             $readmemh("FPGA_Project/sim/vectors/qmap_layer1_chained_attention_score_value_image_words32.hex", score_qmap_l1);
@@ -1170,6 +1942,7 @@ module tb_qmap_one_token_layer_scheduler;
             $readmemh("FPGA_Project/sim/vectors/qmap_layer1_chained_mlp_silu_mul_image_words32.hex", silu_qmap_l1);
             $readmemh("FPGA_Project/sim/vectors/qmap_layer1_chained_mlp_down_image_words32.hex", down_qmap_l1);
             $readmemh("FPGA_Project/sim/vectors/qmap_layer1_chained_mlp_residual_add_image_words32.hex", residual_qmap_l1);
+            $readmemh("FPGA_Project/sim/vectors/qmap_layer1_chained_input_rmsnorm_image_words32.hex", input_norm_qmap_l1);
             $readmemh("artifacts/test_vectors/qwen3_0p6b_qmap_v1/layer2_qkv_from_layer1_rtl_full_image_words32.hex", qkv_qmap_l2);
             $readmemh("FPGA_Project/sim/vectors/qmap_layer2_chained_attention_frontend_image_words32.hex", frontend_qmap_l2);
             $readmemh("FPGA_Project/sim/vectors/qmap_layer2_chained_attention_score_value_image_words32.hex", score_qmap_l2);
@@ -1179,6 +1952,7 @@ module tb_qmap_one_token_layer_scheduler;
             $readmemh("FPGA_Project/sim/vectors/qmap_layer2_chained_mlp_silu_mul_image_words32.hex", silu_qmap_l2);
             $readmemh("FPGA_Project/sim/vectors/qmap_layer2_chained_mlp_down_image_words32.hex", down_qmap_l2);
             $readmemh("FPGA_Project/sim/vectors/qmap_layer2_chained_mlp_residual_add_image_words32.hex", residual_qmap_l2);
+            $readmemh("FPGA_Project/sim/vectors/qmap_layer2_chained_input_rmsnorm_image_words32.hex", input_norm_qmap_l2);
 
             $readmemh("FPGA_Project/sim/vectors/attention_score_stage_real_k_cache.hex", k_cache_mem);
             $readmemh("FPGA_Project/sim/vectors/attention_softmax_value_stage_real_v_cache.hex", v_cache_mem);
@@ -1225,6 +1999,8 @@ module tb_qmap_one_token_layer_scheduler;
             $readmemh("FPGA_Project/sim/vectors/qmap_mlp_silu_mul_expected_hidden_words32.hex", expected_silu_hidden);
             $readmemh("FPGA_Project/sim/vectors/qmap_mlp_down_expected_words32.hex", expected_down);
             $readmemh("FPGA_Project/sim/vectors/qmap_mlp_residual_add_expected_words32.hex", expected_layer);
+            $readmemh("FPGA_Project/sim/vectors/qmap_input_rmsnorm_expected_words32.hex", expected_input_norm);
+            $readmemh("FPGA_Project/sim/vectors/qmap_qkv_projection_expected_from_input_rmsnorm_words32.hex", expected_qkv_input_norm);
             $readmemh("artifacts/test_vectors/qwen3_0p6b_qmap_v1/layer1_qkv_from_layer0_rtl_full_expected_words32.hex", expected_qkv_l1);
             $readmemh("FPGA_Project/sim/vectors/qmap_layer1_chained_attention_frontend_q_rope_expected_words32.hex", expected_q_rope_l1);
             $readmemh("FPGA_Project/sim/vectors/layer1_chained_kv_cache_append_real_expected_addr.hex", expected_cache_addr_l1);
@@ -1239,6 +2015,7 @@ module tb_qmap_one_token_layer_scheduler;
             $readmemh("FPGA_Project/sim/vectors/qmap_layer1_chained_mlp_silu_mul_expected_hidden_words32.hex", expected_silu_hidden_l1);
             $readmemh("FPGA_Project/sim/vectors/qmap_layer1_chained_mlp_down_expected_words32.hex", expected_down_l1);
             $readmemh("FPGA_Project/sim/vectors/qmap_layer1_chained_mlp_residual_add_expected_words32.hex", expected_layer_l1);
+            $readmemh("FPGA_Project/sim/vectors/qmap_layer1_chained_input_rmsnorm_expected_words32.hex", expected_input_norm_l1);
             $readmemh("artifacts/test_vectors/qwen3_0p6b_qmap_v1/layer2_qkv_from_layer1_rtl_full_expected_words32.hex", expected_qkv_l2);
             $readmemh("FPGA_Project/sim/vectors/qmap_layer2_chained_attention_frontend_q_rope_expected_words32.hex", expected_q_rope_l2);
             $readmemh("FPGA_Project/sim/vectors/layer2_chained_kv_cache_append_real_expected_addr.hex", expected_cache_addr_l2);
@@ -1253,6 +2030,18 @@ module tb_qmap_one_token_layer_scheduler;
             $readmemh("FPGA_Project/sim/vectors/qmap_layer2_chained_mlp_silu_mul_expected_hidden_words32.hex", expected_silu_hidden_l2);
             $readmemh("FPGA_Project/sim/vectors/qmap_layer2_chained_mlp_down_expected_words32.hex", expected_down_l2);
             $readmemh("FPGA_Project/sim/vectors/qmap_layer2_chained_mlp_residual_add_expected_words32.hex", expected_layer_l2);
+            $readmemh("FPGA_Project/sim/vectors/qmap_layer2_chained_input_rmsnorm_expected_words32.hex", expected_input_norm_l2);
+`ifdef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+            $readmemh("FPGA_Project/sim/vectors/qmap_final_token_tail_layer2_chained_full_vocab_image_words32.hex", tail_qmap);
+            $readmemh("FPGA_Project/sim/vectors/qmap_final_token_tail_layer2_chained_full_vocab_expected_words32.hex", tail_expected_words);
+            $readmemh("FPGA_Project/sim/vectors/final_rmsnorm_layer2_chained_stage_real_expected.hex", tail_final_norm_expected);
+            $readmemh("FPGA_Project/sim/vectors/lm_head_argmax_layer2_chained_full_vocab_real_weight_words32.hex", tail_weight_mem);
+            $readmemh("FPGA_Project/sim/vectors/lm_head_argmax_layer2_chained_full_vocab_real_scale_words32.hex", tail_scale_mem);
+            $readmemh("FPGA_Project/sim/vectors/lm_head_argmax_layer2_chained_full_vocab_real_expected_scan_logits_q26.hex", tail_expected_logits);
+            $readmemh("FPGA_Project/sim/vectors/lm_head_argmax_layer2_chained_full_vocab_real_scan_base_token.hex", tail_scan_base_token_mem);
+            $readmemh("FPGA_Project/sim/vectors/lm_head_argmax_layer2_chained_full_vocab_real_weight_base_addr.hex", tail_weight_base_addr_mem);
+            $readmemh("FPGA_Project/sim/vectors/lm_head_argmax_layer2_chained_full_vocab_real_scale_base_addr.hex", tail_scale_base_addr_mem);
+`endif
 
             qkv_q_base = qkv_desc_base(QKV_SLOT_Q_OUT);
             qkv_k_base = qkv_desc_base(QKV_SLOT_K_OUT);
@@ -1267,6 +2056,7 @@ module tb_qmap_one_token_layer_scheduler;
             silu_hidden_base = silu_desc_base(SILU_SLOT_HIDDEN);
             down_output_base = down_desc_base(DOWN_SLOT_OUTPUT);
             layer_output_base = residual_desc_base(RESIDUAL_SLOT_OUTPUT);
+            input_norm_output_base = input_norm_desc_base(INPUT_NORM_SLOT_OUTPUT);
             qkv_q_base_l1 = qkv_desc_base_l1(QKV_SLOT_Q_OUT);
             qkv_k_base_l1 = qkv_desc_base_l1(QKV_SLOT_K_OUT);
             qkv_v_base_l1 = qkv_desc_base_l1(QKV_SLOT_V_OUT);
@@ -1280,6 +2070,7 @@ module tb_qmap_one_token_layer_scheduler;
             silu_hidden_base_l1 = silu_desc_base_l1(SILU_SLOT_HIDDEN);
             down_output_base_l1 = down_desc_base_l1(DOWN_SLOT_OUTPUT);
             layer_output_base_l1 = residual_desc_base_l1(RESIDUAL_SLOT_OUTPUT);
+            input_norm_output_base_l1 = input_norm_desc_base_l1(INPUT_NORM_SLOT_OUTPUT);
             qkv_q_base_l2 = qkv_desc_base_l2(QKV_SLOT_Q_OUT);
             qkv_k_base_l2 = qkv_desc_base_l2(QKV_SLOT_K_OUT);
             qkv_v_base_l2 = qkv_desc_base_l2(QKV_SLOT_V_OUT);
@@ -1293,6 +2084,7 @@ module tb_qmap_one_token_layer_scheduler;
             silu_hidden_base_l2 = silu_desc_base_l2(SILU_SLOT_HIDDEN);
             down_output_base_l2 = down_desc_base_l2(DOWN_SLOT_OUTPUT);
             layer_output_base_l2 = residual_desc_base_l2(RESIDUAL_SLOT_OUTPUT);
+            input_norm_output_base_l2 = input_norm_desc_base_l2(INPUT_NORM_SLOT_OUTPUT);
 
             patch_frontend_base(FRONT_SLOT_Q_FLAT, qkv_q_base);
             patch_frontend_base(FRONT_SLOT_K_FLAT, qkv_k_base);
@@ -1306,7 +2098,24 @@ module tb_qmap_one_token_layer_scheduler;
             patch_down_base(DOWN_SLOT_ACTIVATION, silu_hidden_base);
             patch_residual_base(RESIDUAL_SLOT_POST_ATTN, post_hidden_base);
             patch_residual_base(RESIDUAL_SLOT_DOWN, down_output_base);
-            patch_qkv_base_l1(QKV_SLOT_ACTIVATION, layer_output_base);
+            if ($test$plusargs("l1_only") ||
+                $test$plusargs("l1_input_norm_only") ||
+                $test$plusargs("l1_input_norm_full_only") ||
+                $test$plusargs("l2_input_norm_only") ||
+                $test$plusargs("l2_input_norm_full_only") ||
+                $test$plusargs("l2_tail_only") ||
+                $test$plusargs("l2_top_tail_only") ||
+                $test$plusargs("l1_l2_top_tail_only") ||
+                $test$plusargs("l1_l2_mmio_top_tail_only") ||
+                $test$plusargs("true2_input_norm") ||
+                $test$plusargs("true3_input_norm") ||
+                $test$plusargs("true3_top_tail_only") ||
+                $test$plusargs("true3_mmio_top_tail_only")) begin
+                patch_qkv_base_l1(QKV_SLOT_ACTIVATION, input_norm_output_base_l1);
+            end
+            else begin
+                patch_qkv_base_l1(QKV_SLOT_ACTIVATION, layer_output_base);
+            end
             patch_frontend_base_l1(FRONT_SLOT_Q_FLAT, qkv_q_base_l1);
             patch_frontend_base_l1(FRONT_SLOT_K_FLAT, qkv_k_base_l1);
             patch_frontend_base_l1(FRONT_SLOT_V_FLAT, qkv_v_base_l1);
@@ -1320,7 +2129,21 @@ module tb_qmap_one_token_layer_scheduler;
             patch_down_base_l1(DOWN_SLOT_ACTIVATION, silu_hidden_base_l1);
             patch_residual_base_l1(RESIDUAL_SLOT_POST_ATTN, post_hidden_base_l1);
             patch_residual_base_l1(RESIDUAL_SLOT_DOWN, down_output_base_l1);
-            patch_qkv_base_l2(QKV_SLOT_ACTIVATION, layer_output_base_l1);
+            if ($test$plusargs("l2_only") ||
+                $test$plusargs("l2_input_norm_only") ||
+                $test$plusargs("l2_input_norm_full_only") ||
+                $test$plusargs("l2_tail_only") ||
+                $test$plusargs("l2_top_tail_only") ||
+                $test$plusargs("l1_l2_top_tail_only") ||
+                $test$plusargs("l1_l2_mmio_top_tail_only") ||
+                $test$plusargs("true3_input_norm") ||
+                $test$plusargs("true3_top_tail_only") ||
+                $test$plusargs("true3_mmio_top_tail_only")) begin
+                patch_qkv_base_l2(QKV_SLOT_ACTIVATION, input_norm_output_base_l2);
+            end
+            else begin
+                patch_qkv_base_l2(QKV_SLOT_ACTIVATION, layer_output_base_l1);
+            end
             patch_frontend_base_l2(FRONT_SLOT_Q_FLAT, qkv_q_base_l2);
             patch_frontend_base_l2(FRONT_SLOT_K_FLAT, qkv_k_base_l2);
             patch_frontend_base_l2(FRONT_SLOT_V_FLAT, qkv_v_base_l2);
@@ -1334,6 +2157,23 @@ module tb_qmap_one_token_layer_scheduler;
             patch_down_base_l2(DOWN_SLOT_ACTIVATION, silu_hidden_base_l2);
             patch_residual_base_l2(RESIDUAL_SLOT_POST_ATTN, post_hidden_base_l2);
             patch_residual_base_l2(RESIDUAL_SLOT_DOWN, down_output_base_l2);
+
+`ifdef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+            tail_descriptor_final_hidden_base = tail_desc_base(TAIL_SLOT_FINAL_HIDDEN);
+`ifndef QMAP_ONE_TOKEN_TB_USE_TOP
+            patch_tail_base(TAIL_SLOT_FINAL_HIDDEN, layer_output_base_l2);
+`endif
+            tail_weight_base_addr = tail_weight_base_addr_mem[0];
+            tail_scale_base_addr = tail_scale_base_addr_mem[0];
+            tail_norm_output_base = tail_desc_base(TAIL_SLOT_NORM_OUTPUT);
+            tail_output_base = tail_desc_base(TAIL_SLOT_OUTPUT);
+`ifdef QMAP_ONE_TOKEN_TB_USE_TOP
+            tail_final_hidden_base = layer_output_base_l2;
+`else
+            tail_final_hidden_base = tail_desc_base(TAIL_SLOT_FINAL_HIDDEN);
+`endif
+            tail_final_gamma_base = tail_desc_base(TAIL_SLOT_FINAL_GAMMA);
+`endif
         end
     endtask
 
@@ -1403,9 +2243,28 @@ module tb_qmap_one_token_layer_scheduler;
         integer index;
         begin
             memory_word = 32'hBAD0_BAD0;
+`ifdef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+            if (use_tail_mem && in_range(addr, `QMAP_FINAL_TOKEN_BASE_ADDR, TAIL_QMAP_IMAGE_BYTES)) begin
+                index = (addr - `QMAP_FINAL_TOKEN_BASE_ADDR) >> 2;
+                memory_word = tail_qmap[index];
+            end
+            else if (use_tail_mem && in_range(addr, tail_weight_base_addr, TAIL_WEIGHT_WORDS * MEM_DATA_BYTES)) begin
+                index = (addr - tail_weight_base_addr) >> 2;
+                memory_word = tail_weight_mem[index];
+            end
+            else if (use_tail_mem && in_range(addr, tail_scale_base_addr, TAIL_SCALE_WORDS * MEM_DATA_BYTES)) begin
+                index = (addr - tail_scale_base_addr) >> 2;
+                memory_word = tail_scale_mem[index];
+            end
+            else
+`endif
             if (in_range(addr, `QMAP_QKV_BASE_ADDR, QKV_IMAGE_BYTES)) begin
                 index = (addr - `QMAP_QKV_BASE_ADDR) >> 2;
                 memory_word = qkv_qmap[index];
+            end
+            else if (in_range(addr, `QMAP_INPUT_NORM_BASE_ADDR, INPUT_NORM_IMAGE_BYTES)) begin
+                index = (addr - `QMAP_INPUT_NORM_BASE_ADDR) >> 2;
+                memory_word = input_norm_qmap[index];
             end
             else if (in_range(addr, `QMAP_ATTN_FRONTEND_BASE_ADDR, FRONT_IMAGE_BYTES)) begin
                 index = (addr - `QMAP_ATTN_FRONTEND_BASE_ADDR) >> 2;
@@ -1443,6 +2302,10 @@ module tb_qmap_one_token_layer_scheduler;
                 index = (addr - QMAP_LAYER1_QKV_BASE_ADDR) >> 2;
                 memory_word = qkv_qmap_l1[index];
             end
+            else if (in_range(addr, QMAP_LAYER1_INPUT_NORM_BASE_ADDR, INPUT_NORM_IMAGE_BYTES)) begin
+                index = (addr - QMAP_LAYER1_INPUT_NORM_BASE_ADDR) >> 2;
+                memory_word = input_norm_qmap_l1[index];
+            end
             else if (in_range(addr, QMAP_LAYER1_ATTN_FRONTEND_BASE_ADDR, FRONT_IMAGE_BYTES)) begin
                 index = (addr - QMAP_LAYER1_ATTN_FRONTEND_BASE_ADDR) >> 2;
                 memory_word = frontend_qmap_l1[index];
@@ -1478,6 +2341,10 @@ module tb_qmap_one_token_layer_scheduler;
             else if (in_range(addr, QMAP_LAYER2_QKV_BASE_ADDR, QKV_IMAGE_BYTES)) begin
                 index = (addr - QMAP_LAYER2_QKV_BASE_ADDR) >> 2;
                 memory_word = qkv_qmap_l2[index];
+            end
+            else if (in_range(addr, QMAP_LAYER2_INPUT_NORM_BASE_ADDR, INPUT_NORM_IMAGE_BYTES)) begin
+                index = (addr - QMAP_LAYER2_INPUT_NORM_BASE_ADDR) >> 2;
+                memory_word = input_norm_qmap_l2[index];
             end
             else if (in_range(addr, QMAP_LAYER2_ATTN_FRONTEND_BASE_ADDR, FRONT_IMAGE_BYTES)) begin
                 index = (addr - QMAP_LAYER2_ATTN_FRONTEND_BASE_ADDR) >> 2;
@@ -1610,6 +2477,20 @@ module tb_qmap_one_token_layer_scheduler;
                 index = (addr - QMAP_LAYER2_MLP_DOWN_SCALE_BASE_ADDR) >> 2;
                 memory_word = down_scale_mem_l2[index];
             end
+`ifdef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+            else if (in_range(addr, `QMAP_FINAL_TOKEN_BASE_ADDR, TAIL_QMAP_IMAGE_BYTES)) begin
+                index = (addr - `QMAP_FINAL_TOKEN_BASE_ADDR) >> 2;
+                memory_word = tail_qmap[index];
+            end
+            else if (in_range(addr, tail_weight_base_addr, TAIL_WEIGHT_WORDS * MEM_DATA_BYTES)) begin
+                index = (addr - tail_weight_base_addr) >> 2;
+                memory_word = tail_weight_mem[index];
+            end
+            else if (in_range(addr, tail_scale_base_addr, TAIL_SCALE_WORDS * MEM_DATA_BYTES)) begin
+                index = (addr - tail_scale_base_addr) >> 2;
+                memory_word = tail_scale_mem[index];
+            end
+`endif
             else begin
                 if (print_count < 64) begin
                     $display("FAIL: read from unknown address 0x%016h", addr);
@@ -1629,6 +2510,10 @@ module tb_qmap_one_token_layer_scheduler;
             if (in_range(addr, `QMAP_QKV_BASE_ADDR, QKV_IMAGE_BYTES)) begin
                 index = (addr - `QMAP_QKV_BASE_ADDR) >> 2;
                 qkv_qmap[index] = data;
+            end
+            else if (in_range(addr, `QMAP_INPUT_NORM_BASE_ADDR, INPUT_NORM_IMAGE_BYTES)) begin
+                index = (addr - `QMAP_INPUT_NORM_BASE_ADDR) >> 2;
+                input_norm_qmap[index] = data;
             end
             else if (in_range(addr, `QMAP_ATTN_FRONTEND_BASE_ADDR, FRONT_IMAGE_BYTES)) begin
                 index = (addr - `QMAP_ATTN_FRONTEND_BASE_ADDR) >> 2;
@@ -1666,6 +2551,10 @@ module tb_qmap_one_token_layer_scheduler;
                 index = (addr - QMAP_LAYER1_QKV_BASE_ADDR) >> 2;
                 qkv_qmap_l1[index] = data;
             end
+            else if (in_range(addr, QMAP_LAYER1_INPUT_NORM_BASE_ADDR, INPUT_NORM_IMAGE_BYTES)) begin
+                index = (addr - QMAP_LAYER1_INPUT_NORM_BASE_ADDR) >> 2;
+                input_norm_qmap_l1[index] = data;
+            end
             else if (in_range(addr, QMAP_LAYER1_ATTN_FRONTEND_BASE_ADDR, FRONT_IMAGE_BYTES)) begin
                 index = (addr - QMAP_LAYER1_ATTN_FRONTEND_BASE_ADDR) >> 2;
                 frontend_qmap_l1[index] = data;
@@ -1702,6 +2591,10 @@ module tb_qmap_one_token_layer_scheduler;
                 index = (addr - QMAP_LAYER2_QKV_BASE_ADDR) >> 2;
                 qkv_qmap_l2[index] = data;
             end
+            else if (in_range(addr, QMAP_LAYER2_INPUT_NORM_BASE_ADDR, INPUT_NORM_IMAGE_BYTES)) begin
+                index = (addr - QMAP_LAYER2_INPUT_NORM_BASE_ADDR) >> 2;
+                input_norm_qmap_l2[index] = data;
+            end
             else if (in_range(addr, QMAP_LAYER2_ATTN_FRONTEND_BASE_ADDR, FRONT_IMAGE_BYTES)) begin
                 index = (addr - QMAP_LAYER2_ATTN_FRONTEND_BASE_ADDR) >> 2;
                 frontend_qmap_l2[index] = data;
@@ -1734,6 +2627,12 @@ module tb_qmap_one_token_layer_scheduler;
                 index = (addr - QMAP_LAYER2_MLP_RESIDUAL_ADD_BASE_ADDR) >> 2;
                 residual_qmap_l2[index] = data;
             end
+`ifdef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+            else if (in_range(addr, `QMAP_FINAL_TOKEN_BASE_ADDR, TAIL_QMAP_IMAGE_BYTES)) begin
+                index = (addr - `QMAP_FINAL_TOKEN_BASE_ADDR) >> 2;
+                tail_qmap[index] = data;
+            end
+`endif
             else begin
                 fail_once("FAIL: write to unknown QMAP address");
             end
@@ -1819,7 +2718,10 @@ module tb_qmap_one_token_layer_scheduler;
     function automatic integer classify_write_addr(input logic [ADDR_WIDTH-1 : 0] addr);
         begin
             classify_write_addr = 0;
-            if (in_range(addr, qkv_q_base, VEC2048 * MEM_DATA_BYTES)) begin
+            if (in_range(addr, input_norm_output_base, VEC1024 * MEM_DATA_BYTES)) begin
+                classify_write_addr = WRITE_INPUT_NORM;
+            end
+            else if (in_range(addr, qkv_q_base, VEC2048 * MEM_DATA_BYTES)) begin
                 classify_write_addr = WRITE_QKV_Q;
             end
             else if (in_range(addr, qkv_k_base, VEC1024 * MEM_DATA_BYTES)) begin
@@ -1861,6 +2763,9 @@ module tb_qmap_one_token_layer_scheduler;
             else if (in_range(addr, layer_output_base, VEC1024 * MEM_DATA_BYTES)) begin
                 classify_write_addr = WRITE_LAYER;
             end
+            else if (in_range(addr, input_norm_output_base_l1, VEC1024 * MEM_DATA_BYTES)) begin
+                classify_write_addr = WRITE_INPUT_NORM;
+            end
             else if (in_range(addr, qkv_q_base_l1, VEC2048 * MEM_DATA_BYTES)) begin
                 classify_write_addr = WRITE_QKV_Q;
             end
@@ -1899,6 +2804,9 @@ module tb_qmap_one_token_layer_scheduler;
             end
             else if (in_range(addr, layer_output_base_l1, VEC1024 * MEM_DATA_BYTES)) begin
                 classify_write_addr = WRITE_LAYER;
+            end
+            else if (in_range(addr, input_norm_output_base_l2, VEC1024 * MEM_DATA_BYTES)) begin
+                classify_write_addr = WRITE_INPUT_NORM;
             end
             else if (in_range(addr, qkv_q_base_l2, VEC2048 * MEM_DATA_BYTES)) begin
                 classify_write_addr = WRITE_QKV_Q;
@@ -1968,7 +2876,8 @@ module tb_qmap_one_token_layer_scheduler;
                      in_range(addr, up_output_base_l1, VEC3072 * MEM_DATA_BYTES) ||
                      in_range(addr, silu_hidden_base_l1, VEC3072 * MEM_DATA_BYTES) ||
                      in_range(addr, down_output_base_l1, VEC1024 * MEM_DATA_BYTES) ||
-                     in_range(addr, layer_output_base_l1, VEC1024 * MEM_DATA_BYTES)) begin
+                     in_range(addr, layer_output_base_l1, VEC1024 * MEM_DATA_BYTES) ||
+                     in_range(addr, input_norm_output_base_l1, VEC1024 * MEM_DATA_BYTES)) begin
                 write_layer_for_addr = 1;
             end
             else if (in_range(addr, qkv_q_base_l2, VEC2048 * MEM_DATA_BYTES) ||
@@ -1983,7 +2892,8 @@ module tb_qmap_one_token_layer_scheduler;
                      in_range(addr, up_output_base_l2, VEC3072 * MEM_DATA_BYTES) ||
                      in_range(addr, silu_hidden_base_l2, VEC3072 * MEM_DATA_BYTES) ||
                      in_range(addr, down_output_base_l2, VEC1024 * MEM_DATA_BYTES) ||
-                     in_range(addr, layer_output_base_l2, VEC1024 * MEM_DATA_BYTES)) begin
+                     in_range(addr, layer_output_base_l2, VEC1024 * MEM_DATA_BYTES) ||
+                     in_range(addr, input_norm_output_base_l2, VEC1024 * MEM_DATA_BYTES)) begin
                 write_layer_for_addr = 2;
             end
         end
@@ -2009,6 +2919,7 @@ module tb_qmap_one_token_layer_scheduler;
                 WRITE_SILU_HIDDEN: expected_write_base = (layer == 0) ? silu_hidden_base : ((layer == 1) ? silu_hidden_base_l1 : silu_hidden_base_l2);
                 WRITE_DOWN: expected_write_base = (layer == 0) ? down_output_base : ((layer == 1) ? down_output_base_l1 : down_output_base_l2);
                 WRITE_LAYER: expected_write_base = (layer == 0) ? layer_output_base : ((layer == 1) ? layer_output_base_l1 : layer_output_base_l2);
+                WRITE_INPUT_NORM: expected_write_base = (layer == 0) ? input_norm_output_base : ((layer == 1) ? input_norm_output_base_l1 : input_norm_output_base_l2);
                 default: expected_write_base = '0;
             endcase
         end
@@ -2031,10 +2942,21 @@ module tb_qmap_one_token_layer_scheduler;
     function automatic logic [31 : 0] expected_qkv_word(input integer layer, input integer index);
         begin
             case (layer)
-                0: expected_qkv_word = expected_qkv[index];
+                0: expected_qkv_word = use_input_norm_qkv_expected ? expected_qkv_input_norm[index] : expected_qkv[index];
                 1: expected_qkv_word = expected_qkv_l1[index];
                 2: expected_qkv_word = expected_qkv_l2[index];
                 default: expected_qkv_word = 32'hDEAD_E000;
+            endcase
+        end
+    endfunction
+
+    function automatic logic [31 : 0] expected_input_norm_word(input integer layer, input integer index);
+        begin
+            case (layer)
+                0: expected_input_norm_word = expected_input_norm[index];
+                1: expected_input_norm_word = expected_input_norm_l1[index];
+                2: expected_input_norm_word = expected_input_norm_l2[index];
+                default: expected_input_norm_word = 32'hDEAD_E0D0;
             endcase
         end
     endfunction
@@ -2171,6 +3093,222 @@ module tb_qmap_one_token_layer_scheduler;
         end
     endfunction
 
+    task tail_fail(input string message);
+        begin
+            tail_mismatch_count = tail_mismatch_count + 1;
+            fail_once(message);
+        end
+    endtask
+
+    task calculate_tail_expected;
+        integer i;
+        begin
+            tail_expected_token = tail_scan_base_token_mem[0];
+            tail_expected_score_q26 = tail_expected_logits[0];
+            for (i = 1; i < TAIL_SCAN_ROWS; i = i + 1) begin
+                if ($signed(tail_expected_logits[i]) > tail_expected_score_q26) begin
+                    tail_expected_score_q26 = tail_expected_logits[i];
+                    tail_expected_token = tail_scan_base_token_mem[0] + i[31 : 0];
+                end
+            end
+        end
+    endtask
+
+    task clear_tail_scoreboard;
+        integer i;
+        integer norm_index;
+        integer output_index;
+        begin
+            tail_mismatch_count = 0;
+            tail_write_mismatch_count = 0;
+            tail_read_req_count = 0;
+            tail_hidden_req_count = 0;
+            tail_gamma_req_count = 0;
+            tail_norm_read_req_count = 0;
+            tail_weight_req_count = 0;
+            tail_scale_req_count = 0;
+            tail_lm_req_count = 0;
+            tail_norm_write_word_count = 0;
+            tail_output_write_word_count = 0;
+            tail_done_seen_count = 0;
+            tail_first_hidden_read_cycle = -1;
+            tail_first_weight_read_cycle = -1;
+            tail_first_output_write_cycle = -1;
+            tail_scheduler_done_cycle = -1;
+            tail_done_cycle = -1;
+            calculate_tail_expected();
+
+            norm_index = (tail_norm_output_base - `QMAP_FINAL_TOKEN_BASE_ADDR) >> 2;
+            output_index = (tail_output_base - `QMAP_FINAL_TOKEN_BASE_ADDR) >> 2;
+            for (i = 0; i < TAIL_INPUT_SIZE; i = i + 1) begin
+                tail_qmap[norm_index + i] = 32'hA5A5_0000 | i[15 : 0];
+            end
+            tail_qmap[output_index + 0] = 32'hFFFF_FFFF;
+            tail_qmap[output_index + 1] = 32'hFFFF_FFFF;
+            tail_qmap[output_index + 2] = 32'hFFFF_FFFF;
+
+            if (tail_final_hidden_base !== layer_output_base_l2) begin
+`ifdef QMAP_ONE_TOKEN_TB_USE_TOP
+                tail_fail("FAIL: top expected final hidden source does not point to Layer2 scheduler output");
+`else
+                tail_fail("FAIL: tail final hidden descriptor was not patched to Layer2 scheduler output");
+`endif
+            end
+            if (tail_desc_base(TAIL_SLOT_WEIGHT) !== tail_weight_base_addr) begin
+                tail_fail("FAIL: tail weight descriptor base does not match LM-head weight file base");
+            end
+            if (tail_desc_base(TAIL_SLOT_SCALE) !== tail_scale_base_addr) begin
+                tail_fail("FAIL: tail scale descriptor base does not match LM-head scale file base");
+            end
+        end
+    endtask
+
+    task check_tail_read_request;
+        input logic [ADDR_WIDTH-1 : 0] addr;
+        input integer len_bytes;
+        integer tile_id;
+        integer burst_id;
+        integer tile_token;
+        logic [ADDR_WIDTH-1 : 0] expected_addr;
+        integer expected_len;
+        begin
+            tail_read_req_count = tail_read_req_count + 1;
+            if (in_range(addr, tail_final_hidden_base, TAIL_INPUT_SIZE * MEM_DATA_BYTES)) begin
+                tail_hidden_req_count = tail_hidden_req_count + 1;
+                if (!layer_written) begin
+                    tail_fail("FAIL: final-token tail read Layer2 output before scheduler write completed");
+                end
+                if (tail_scheduler_done_cycle < 0) begin
+                    tail_fail("FAIL: final-token tail read hidden before scheduler done was recorded");
+                end
+                if (tail_first_hidden_read_cycle < 0) begin
+                    tail_first_hidden_read_cycle = cycle_count;
+                end
+            end
+            else if (in_range(addr, `QMAP_FINAL_TOKEN_BASE_ADDR, TAIL_QMAP_IMAGE_BYTES)) begin
+                if (in_range(addr, tail_final_gamma_base, TAIL_INPUT_SIZE * MEM_DATA_BYTES)) begin
+                    tail_gamma_req_count = tail_gamma_req_count + 1;
+                end
+                if (in_range(addr, tail_norm_output_base, TAIL_INPUT_SIZE * MEM_DATA_BYTES)) begin
+                    tail_norm_read_req_count = tail_norm_read_req_count + 1;
+                end
+            end
+            else if (in_range(addr, tail_weight_base_addr, TAIL_WEIGHT_WORDS * MEM_DATA_BYTES) ||
+                     in_range(addr, tail_scale_base_addr, TAIL_SCALE_WORDS * MEM_DATA_BYTES)) begin
+                tile_id = tail_lm_req_count / TAIL_BURSTS_PER_TILE;
+                burst_id = tail_lm_req_count % TAIL_BURSTS_PER_TILE;
+                tile_token = tail_scan_base_token_mem[0] + (tile_id * TAIL_TILE_ROWS);
+
+                if (tile_id >= TAIL_MAX_TILES) begin
+                    tail_fail("FAIL: final-token tail issued extra LM-head tile request");
+                end
+                if (burst_id < TAIL_WEIGHT_BURSTS_PER_TILE) begin
+                    expected_addr = tail_weight_base_addr + (tile_token * TAIL_WEIGHT_ROW_BYTES) +
+                                    (burst_id * `QMAP_FINAL_TOKEN_MAX_READ_BYTES);
+                    expected_len = `QMAP_FINAL_TOKEN_MAX_READ_BYTES;
+                    tail_weight_req_count = tail_weight_req_count + 1;
+                    if (tail_first_weight_read_cycle < 0) begin
+                        tail_first_weight_read_cycle = cycle_count;
+                    end
+                end
+                else begin
+                    expected_addr = tail_scale_base_addr + (tile_token * TAIL_SCALE_ROW_BYTES);
+                    expected_len = TAIL_TILE_SCALE_BYTES;
+                    tail_scale_req_count = tail_scale_req_count + 1;
+                end
+
+                if ((addr !== expected_addr) || (len_bytes != expected_len)) begin
+                    tail_fail("FAIL: final-token tail LM-head read request mismatch");
+                end
+                tail_lm_req_count = tail_lm_req_count + 1;
+            end
+            else begin
+                tail_fail("FAIL: final-token tail read outside known regions");
+            end
+        end
+    endtask
+
+    function automatic integer classify_tail_write_addr(input logic [ADDR_WIDTH-1 : 0] addr);
+        begin
+            classify_tail_write_addr = TAIL_WRITE_NONE;
+            if (in_range(addr, tail_norm_output_base, TAIL_INPUT_SIZE * MEM_DATA_BYTES)) begin
+                classify_tail_write_addr = TAIL_WRITE_NORM;
+            end
+            else if (in_range(addr, tail_output_base, 3 * MEM_DATA_BYTES)) begin
+                classify_tail_write_addr = TAIL_WRITE_OUTPUT;
+            end
+        end
+    endfunction
+
+    task check_tail_write_request;
+        input integer kind;
+        input logic [ADDR_WIDTH-1 : 0] addr;
+        input integer words;
+        begin
+            case (kind)
+                TAIL_WRITE_NORM: begin
+                    if ((addr !== tail_norm_output_base) || (words != TAIL_INPUT_SIZE)) begin
+                        tail_fail("FAIL: final-token tail norm write request mismatch");
+                    end
+                end
+                TAIL_WRITE_OUTPUT: begin
+                    if ((addr !== tail_output_base) || (words != 3)) begin
+                        tail_fail("FAIL: final-token tail output write request mismatch");
+                    end
+                    if (tail_first_output_write_cycle < 0) begin
+                        tail_first_output_write_cycle = cycle_count;
+                    end
+                end
+                default: begin
+                    tail_fail("FAIL: final-token tail write request outside known targets");
+                end
+            endcase
+        end
+    endtask
+
+    task check_tail_write_word;
+        input integer kind;
+        input integer index;
+        input logic [ADDR_WIDTH-1 : 0] addr;
+        input logic [31 : 0] data;
+        input logic is_last;
+        logic [31 : 0] expected;
+        begin
+            expected = 32'h0;
+            case (kind)
+                TAIL_WRITE_NORM: begin
+                    expected = tail_norm_expected_word(index);
+                    if ((index >= TAIL_INPUT_SIZE) || (data !== expected)) begin
+                        tail_fail("FAIL: final-token tail norm write data mismatch");
+                        tail_write_mismatch_count = tail_write_mismatch_count + 1;
+                        write_mismatch_count = write_mismatch_count + 1;
+                    end
+                    if (is_last !== (index == (TAIL_INPUT_SIZE - 1))) begin
+                        tail_fail("FAIL: final-token tail norm write last mismatch");
+                    end
+                    write_qmap_word(addr, data);
+                    tail_norm_write_word_count = tail_norm_write_word_count + 1;
+                end
+                TAIL_WRITE_OUTPUT: begin
+                    expected = tail_expected_words[index];
+                    if ((index >= 3) || (data !== expected)) begin
+                        tail_fail("FAIL: final-token tail output write data mismatch");
+                        tail_write_mismatch_count = tail_write_mismatch_count + 1;
+                        write_mismatch_count = write_mismatch_count + 1;
+                    end
+                    if (is_last !== (index == 2)) begin
+                        tail_fail("FAIL: final-token tail output write last mismatch");
+                    end
+                    write_qmap_word(addr, data);
+                    tail_output_write_word_count = tail_output_write_word_count + 1;
+                end
+                default: begin
+                    tail_fail("FAIL: final-token tail write data for unknown target");
+                end
+            endcase
+        end
+    endtask
+
     task check_write_request;
         input integer kind;
         input logic [ADDR_WIDTH-1 : 0] addr;
@@ -2190,6 +3328,23 @@ module tb_qmap_one_token_layer_scheduler;
             write_layer = write_layer_for_addr(addr);
             active_write_layer = write_layer;
             case (kind)
+                WRITE_INPUT_NORM: begin
+                    base_addr = expected_write_base(kind, write_layer);
+                    if ((addr !== base_addr) || (words != VEC1024)) begin
+                        fail_once("FAIL: input RMSNorm output write request mismatch");
+                    end
+                    else begin
+                        if (write_layer == 0) begin
+                            input_norm_written = 1'b0;
+                        end
+                        else if (write_layer == 1) begin
+                            input_norm_written_l1 = 1'b0;
+                        end
+                        else begin
+                            input_norm_written_l2 = 1'b0;
+                        end
+                    end
+                end
                 WRITE_QKV_Q: begin
                     base_addr = expected_write_base(kind, write_layer);
                     if ((words != 1) ||
@@ -2352,6 +3507,27 @@ module tb_qmap_one_token_layer_scheduler;
             cache_index = cache_write_accept_count % TOTAL_CACHE_WRITES;
             write_layer = active_write_layer;
             case (kind)
+                WRITE_INPUT_NORM: begin
+                    expected = expected_input_norm_word(write_layer, index);
+                    if (data !== expected) begin
+                        fail_once("FAIL: input RMSNorm output write data mismatch");
+                        write_mismatch_count = write_mismatch_count + 1;
+                    end
+                    write_qmap_word(addr, data);
+                    track_diff(data, expected);
+                    input_norm_write_accept_count = input_norm_write_accept_count + 1;
+                    if (is_last) begin
+                        if (write_layer == 0) begin
+                            input_norm_written = 1'b1;
+                        end
+                        else if (write_layer == 1) begin
+                            input_norm_written_l1 = 1'b1;
+                        end
+                        else begin
+                            input_norm_written_l2 = 1'b1;
+                        end
+                    end
+                end
                 WRITE_QKV_Q: begin
                     if (!is_last) begin
                         fail_once("FAIL: QKV Q single-word write missing last");
@@ -2565,6 +3741,9 @@ module tb_qmap_one_token_layer_scheduler;
         input logic [ADDR_WIDTH-1 : 0] addr;
         input integer len_bytes;
         begin
+            if (in_range(addr, input_norm_output_base, VEC1024 * MEM_DATA_BYTES) && !input_norm_written) begin
+                fail_once("FAIL: input RMSNorm output read before producer write completed");
+            end
             if (in_range(addr, qkv_q_base, VEC2048 * MEM_DATA_BYTES) && !qkv_q_written) begin
                 fail_once("FAIL: QKV Q output read before producer write completed");
             end
@@ -2607,6 +3786,9 @@ module tb_qmap_one_token_layer_scheduler;
             if (in_range(addr, layer_output_base, VEC1024 * MEM_DATA_BYTES) && !layer_written) begin
                 fail_once("FAIL: layer output read before producer write completed");
             end
+            if (in_range(addr, input_norm_output_base_l1, VEC1024 * MEM_DATA_BYTES) && !input_norm_written_l1) begin
+                fail_once("FAIL: Layer 1 input RMSNorm output read before producer write completed");
+            end
             if (in_range(addr, qkv_q_base_l1, VEC2048 * MEM_DATA_BYTES) && !qkv_q_written) begin
                 fail_once("FAIL: Layer 1 QKV Q output read before producer write completed");
             end
@@ -2646,6 +3828,9 @@ module tb_qmap_one_token_layer_scheduler;
             if (in_range(addr, layer_output_base_l1, VEC1024 * MEM_DATA_BYTES) && !layer_written) begin
                 fail_once("FAIL: Layer 1 layer output read before producer write completed");
             end
+            if (in_range(addr, input_norm_output_base_l2, VEC1024 * MEM_DATA_BYTES) && !input_norm_written_l2) begin
+                fail_once("FAIL: Layer 2 input RMSNorm output read before producer write completed");
+            end
             if (in_range(addr, qkv_q_base_l2, VEC2048 * MEM_DATA_BYTES) && !qkv_q_written) begin
                 fail_once("FAIL: Layer 2 QKV Q output read before producer write completed");
             end
@@ -2682,6 +3867,9 @@ module tb_qmap_one_token_layer_scheduler;
             if (in_range(addr, down_output_base_l2, VEC1024 * MEM_DATA_BYTES) && !down_written) begin
                 fail_once("FAIL: Layer 2 down output read before producer write completed");
             end
+            if (in_range(addr, layer_output_base_l2, VEC1024 * MEM_DATA_BYTES) && !layer_written) begin
+                fail_once("FAIL: Layer 2 layer output read before producer write completed");
+            end
         end
     endtask
 
@@ -2709,6 +3897,7 @@ module tb_qmap_one_token_layer_scheduler;
             silu_write_accept_count = 0;
             down_write_accept_count = 0;
             layer_write_accept_count = 0;
+            input_norm_write_accept_count = 0;
             write_mismatch_count = 0;
             max_abs_diff = 0;
             read_active = 1'b0;
@@ -2725,6 +3914,8 @@ module tb_qmap_one_token_layer_scheduler;
             write_done_delay = 0;
             active_write_addr = '0;
             active_write_layer = 0;
+            use_tail_mem_manual = 1'b0;
+            tail_start = 1'b0;
             qkv_q_written = 1'b0;
             qkv_k_written = 1'b0;
             qkv_v_written = 1'b0;
@@ -2739,6 +3930,10 @@ module tb_qmap_one_token_layer_scheduler;
             silu_hidden_written = 1'b0;
             down_written = 1'b0;
             layer_written = 1'b0;
+            input_norm_written = 1'b0;
+            input_norm_written_l1 = 1'b0;
+            input_norm_written_l2 = 1'b0;
+            use_input_norm_qkv_expected = 1'b0;
             mem_rd_rsp_valid = 1'b0;
             mem_rd_rsp_data = 32'd0;
             mem_rd_rsp_last = 1'b0;
@@ -2749,6 +3944,23 @@ module tb_qmap_one_token_layer_scheduler;
             last_trace_wr_words = -1;
             scoreboard_layer_iterations = 1;
             fastmem = 1'b0;
+`ifdef QMAP_ONE_TOKEN_TB_USE_TOP
+            top_scheduler_done_seen_count = 0;
+            top_tail_start_seen_count = 0;
+`ifdef QMAP_ONE_TOKEN_TB_USE_AXIL_TOP
+            axil_awaddr = 12'd0;
+            axil_awprot = 3'b000;
+            axil_awvalid = 1'b0;
+            axil_wdata = 32'd0;
+            axil_wstrb = 4'hF;
+            axil_wvalid = 1'b0;
+            axil_bready = 1'b0;
+            axil_araddr = 12'd0;
+            axil_arprot = 3'b000;
+            axil_arvalid = 1'b0;
+            axil_rready = 1'b0;
+`endif
+`endif
         end
     endtask
 
@@ -2800,6 +4012,7 @@ module tb_qmap_one_token_layer_scheduler;
             output_hidden_base_addr = layer_output_base;
             kv_cache_base_addr = CACHE_BASE_ADDR;
             qkv_qmap_base_addr_table = '0;
+            input_norm_qmap_base_addr_table = '0;
             attn_frontend_qmap_base_addr_table = '0;
             attn_score_value_qmap_base_addr_table = '0;
             o_proj_qmap_base_addr_table = '0;
@@ -2809,6 +4022,24 @@ module tb_qmap_one_token_layer_scheduler;
             mlp_down_qmap_base_addr_table = '0;
             mlp_residual_add_qmap_base_addr_table = '0;
             set_layer_packet_bases(0);
+        end
+    endtask
+
+    task enable_layer_input_norm;
+        input integer layer_index;
+        begin
+            if (layer_index == 0) begin
+                input_norm_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH] = `QMAP_INPUT_NORM_BASE_ADDR;
+            end
+            else if (layer_index == 1) begin
+                input_norm_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH] = QMAP_LAYER1_INPUT_NORM_BASE_ADDR;
+            end
+            else if (layer_index == 2) begin
+                input_norm_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH] = QMAP_LAYER2_INPUT_NORM_BASE_ADDR;
+            end
+            else begin
+                input_norm_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH] = '0;
+            end
         end
     endtask
 
@@ -2847,6 +4078,373 @@ module tb_qmap_one_token_layer_scheduler;
         end
     endtask
 
+`ifdef QMAP_ONE_TOKEN_TB_USE_MMIO_CONTROL
+    task mmio_write_reg;
+        input logic [11 : 0] addr;
+        input logic [31 : 0] data;
+`ifdef QMAP_ONE_TOKEN_TB_USE_AXIL_TOP
+        integer wait_cycles;
+`endif
+        begin
+`ifdef QMAP_ONE_TOKEN_TB_USE_AXIL_TOP
+            wait_cycles = 0;
+            @(negedge clk);
+            axil_awaddr = addr;
+            axil_awvalid = 1'b1;
+            axil_wdata = data;
+            axil_wstrb = 4'hF;
+            axil_wvalid = 1'b1;
+            #1;
+            while (!(axil_awready && axil_wready)) begin
+                @(negedge clk);
+                #1;
+                wait_cycles = wait_cycles + 1;
+                if (wait_cycles > 1000) begin
+                    fail_once("FAIL: AXI-Lite MMIO write address/data handshake timeout");
+                    $finish(1);
+                end
+            end
+            @(posedge clk);
+            @(negedge clk);
+            axil_awvalid = 1'b0;
+            axil_wvalid = 1'b0;
+            axil_awaddr = 12'd0;
+            axil_wdata = 32'd0;
+            wait_cycles = 0;
+            while (!axil_bvalid) begin
+                @(posedge clk);
+                wait_cycles = wait_cycles + 1;
+                if (wait_cycles > 1000) begin
+                    fail_once("FAIL: AXI-Lite MMIO write response timeout");
+                    $finish(1);
+                end
+            end
+            if (axil_bresp != AXIL_RESP_OKAY) begin
+                fail_once("FAIL: AXI-Lite MMIO write returned non-OKAY BRESP");
+                $finish(1);
+            end
+            @(negedge clk);
+            axil_bready = 1'b1;
+            @(posedge clk);
+            @(negedge clk);
+            axil_bready = 1'b0;
+`else
+            @(negedge clk);
+            mmio_reg_addr = addr;
+            mmio_reg_wdata = data;
+            mmio_reg_wr_valid = 1'b1;
+            @(negedge clk);
+            mmio_reg_wr_valid = 1'b0;
+`endif
+        end
+    endtask
+
+    task mmio_read_reg;
+        input logic [11 : 0] addr;
+        output logic [31 : 0] data;
+`ifdef QMAP_ONE_TOKEN_TB_USE_AXIL_TOP
+        integer wait_cycles;
+`endif
+        begin
+`ifdef QMAP_ONE_TOKEN_TB_USE_AXIL_TOP
+            wait_cycles = 0;
+            @(negedge clk);
+            axil_araddr = addr;
+            axil_arvalid = 1'b1;
+            #1;
+            while (!axil_arready) begin
+                @(negedge clk);
+                #1;
+                wait_cycles = wait_cycles + 1;
+                if (wait_cycles > 1000) begin
+                    fail_once("FAIL: AXI-Lite MMIO read address handshake timeout");
+                    $finish(1);
+                end
+            end
+            @(posedge clk);
+            @(negedge clk);
+            axil_arvalid = 1'b0;
+            axil_araddr = 12'd0;
+            wait_cycles = 0;
+            while (!axil_rvalid) begin
+                @(posedge clk);
+                wait_cycles = wait_cycles + 1;
+                if (wait_cycles > 1000) begin
+                    fail_once("FAIL: AXI-Lite MMIO read response timeout");
+                    $finish(1);
+                end
+            end
+            data = axil_rdata;
+            if (axil_rresp != AXIL_RESP_OKAY) begin
+                fail_once("FAIL: AXI-Lite MMIO read returned non-OKAY RRESP");
+                $finish(1);
+            end
+            @(negedge clk);
+            axil_rready = 1'b1;
+            @(posedge clk);
+            @(negedge clk);
+            axil_rready = 1'b0;
+`else
+            @(negedge clk);
+            mmio_reg_addr = addr;
+            mmio_reg_rd_valid = 1'b1;
+            #1;
+            data = mmio_reg_rdata;
+            @(negedge clk);
+            mmio_reg_rd_valid = 1'b0;
+`endif
+        end
+    endtask
+
+    task mmio_write_addr64;
+        input logic [11 : 0] lo_addr;
+        input logic [11 : 0] hi_addr;
+        input logic [ADDR_WIDTH-1 : 0] value;
+        begin
+            mmio_write_reg(lo_addr, value[31 : 0]);
+            mmio_write_reg(hi_addr, value[63 : 32]);
+        end
+    endtask
+
+    task mmio_commit_table_addr;
+        input logic [7 : 0] table_id;
+        input integer layer_index;
+        input logic [ADDR_WIDTH-1 : 0] value;
+        begin
+            if (value != '0) begin
+                mmio_write_reg(MMIO_REG_TABLE_SELECT, {16'd0, layer_index[7 : 0], table_id});
+                mmio_write_addr64(MMIO_REG_TABLE_DATA_LO, MMIO_REG_TABLE_DATA_HI, value);
+                mmio_write_reg(MMIO_REG_TABLE_COMMIT, 32'd1);
+            end
+        end
+    endtask
+
+    task mmio_load_current_loop_contract;
+        integer li;
+        logic [ADDR_WIDTH-1 : 0] table_addr;
+        begin
+            mmio_write_reg(MMIO_REG_CTRL, 32'd2);
+            mmio_write_reg(MMIO_REG_LAYER_START, {{(32-LAYER_INDEX_WIDTH){1'b0}}, layer_start_index});
+            mmio_write_reg(MMIO_REG_LAYER_COUNT, {{(32-LAYER_COUNT_WIDTH){1'b0}}, layer_count});
+            mmio_write_reg(MMIO_REG_POSITION, {{(32-POSITION_WIDTH){1'b0}}, token_position});
+            mmio_write_reg(MMIO_REG_INPUT_TOKEN, 32'd0);
+            mmio_write_addr64(MMIO_REG_INPUT_HIDDEN_LO, MMIO_REG_INPUT_HIDDEN_HI, input_hidden_base_addr);
+            mmio_write_addr64(MMIO_REG_OUTPUT_HIDDEN_LO, MMIO_REG_OUTPUT_HIDDEN_HI, output_hidden_base_addr);
+            mmio_write_addr64(MMIO_REG_KV_CACHE_LO, MMIO_REG_KV_CACHE_HI, kv_cache_base_addr);
+            mmio_write_addr64(MMIO_REG_FINAL_TAIL_QMAP_LO, MMIO_REG_FINAL_TAIL_QMAP_HI, `QMAP_FINAL_TOKEN_BASE_ADDR);
+            mmio_write_reg(MMIO_REG_FINAL_OVERRIDE_CTRL, 32'd0);
+
+            for (li = 0; li < MAX_LAYERS; li = li + 1) begin
+                table_addr = qkv_qmap_base_addr_table[li*ADDR_WIDTH +: ADDR_WIDTH];
+                mmio_commit_table_addr(MMIO_TABLE_QKV, li, table_addr);
+                table_addr = input_norm_qmap_base_addr_table[li*ADDR_WIDTH +: ADDR_WIDTH];
+                mmio_commit_table_addr(MMIO_TABLE_INPUT_NORM, li, table_addr);
+                table_addr = attn_frontend_qmap_base_addr_table[li*ADDR_WIDTH +: ADDR_WIDTH];
+                mmio_commit_table_addr(MMIO_TABLE_ATTN_FRONTEND, li, table_addr);
+                table_addr = attn_score_value_qmap_base_addr_table[li*ADDR_WIDTH +: ADDR_WIDTH];
+                mmio_commit_table_addr(MMIO_TABLE_ATTN_SCORE, li, table_addr);
+                table_addr = o_proj_qmap_base_addr_table[li*ADDR_WIDTH +: ADDR_WIDTH];
+                mmio_commit_table_addr(MMIO_TABLE_O_PROJ, li, table_addr);
+                table_addr = post_attn_norm_qmap_base_addr_table[li*ADDR_WIDTH +: ADDR_WIDTH];
+                mmio_commit_table_addr(MMIO_TABLE_POST_ATTN_NORM, li, table_addr);
+                table_addr = mlp_gate_up_qmap_base_addr_table[li*ADDR_WIDTH +: ADDR_WIDTH];
+                mmio_commit_table_addr(MMIO_TABLE_MLP_GATE_UP, li, table_addr);
+                table_addr = mlp_silu_mul_qmap_base_addr_table[li*ADDR_WIDTH +: ADDR_WIDTH];
+                mmio_commit_table_addr(MMIO_TABLE_MLP_SILU_MUL, li, table_addr);
+                table_addr = mlp_down_qmap_base_addr_table[li*ADDR_WIDTH +: ADDR_WIDTH];
+                mmio_commit_table_addr(MMIO_TABLE_MLP_DOWN, li, table_addr);
+                table_addr = mlp_residual_add_qmap_base_addr_table[li*ADDR_WIDTH +: ADDR_WIDTH];
+                mmio_commit_table_addr(MMIO_TABLE_MLP_RESIDUAL, li, table_addr);
+            end
+        end
+    endtask
+
+    task mmio_expect_reg32;
+        input string reg_name;
+        input logic [11 : 0] addr;
+        input logic [31 : 0] expected;
+        logic [31 : 0] observed;
+        begin
+            mmio_read_reg(addr, observed);
+            if (observed !== expected) begin
+                $display("FAIL: qmap_one_token_top MMIO register mismatch reg=%s expected=0x%08h observed=0x%08h",
+                         reg_name, expected, observed);
+                fail_once("FAIL: qmap_one_token_top MMIO scalar register load mismatch before start");
+            end
+        end
+    endtask
+
+    task mmio_expect_addr64;
+        input string reg_name;
+        input logic [11 : 0] lo_addr;
+        input logic [11 : 0] hi_addr;
+        input logic [ADDR_WIDTH-1 : 0] expected;
+        logic [31 : 0] lo;
+        logic [31 : 0] hi;
+        logic [ADDR_WIDTH-1 : 0] observed;
+        begin
+            mmio_read_reg(lo_addr, lo);
+            mmio_read_reg(hi_addr, hi);
+            observed = {hi, lo};
+            if (observed !== expected) begin
+                $display("FAIL: qmap_one_token_top MMIO address register mismatch reg=%s expected=0x%016h observed=0x%016h",
+                         reg_name, expected, observed);
+                fail_once("FAIL: qmap_one_token_top MMIO scalar address load mismatch before start");
+            end
+        end
+    endtask
+
+    task mmio_check_scalar_registers;
+        begin
+            mmio_expect_reg32("layer_start", MMIO_REG_LAYER_START,
+                              {{(32-LAYER_INDEX_WIDTH){1'b0}}, layer_start_index});
+            mmio_expect_reg32("layer_count", MMIO_REG_LAYER_COUNT,
+                              {{(32-LAYER_COUNT_WIDTH){1'b0}}, layer_count});
+            mmio_expect_reg32("position", MMIO_REG_POSITION,
+                              {{(32-POSITION_WIDTH){1'b0}}, token_position});
+            mmio_expect_addr64("input_hidden", MMIO_REG_INPUT_HIDDEN_LO, MMIO_REG_INPUT_HIDDEN_HI,
+                               input_hidden_base_addr);
+            mmio_expect_addr64("output_hidden", MMIO_REG_OUTPUT_HIDDEN_LO, MMIO_REG_OUTPUT_HIDDEN_HI,
+                               output_hidden_base_addr);
+            mmio_expect_addr64("kv_cache", MMIO_REG_KV_CACHE_LO, MMIO_REG_KV_CACHE_HI,
+                               kv_cache_base_addr);
+            mmio_expect_addr64("final_tail_qmap", MMIO_REG_FINAL_TAIL_QMAP_LO, MMIO_REG_FINAL_TAIL_QMAP_HI,
+                               `QMAP_FINAL_TOKEN_BASE_ADDR);
+        end
+    endtask
+
+    task mmio_read_table_addr;
+        input logic [7 : 0] table_id;
+        input integer layer_index;
+        output logic [ADDR_WIDTH-1 : 0] value;
+        logic [31 : 0] lo;
+        logic [31 : 0] hi;
+        begin
+            mmio_write_reg(MMIO_REG_TABLE_SELECT, {16'd0, layer_index[7 : 0], table_id});
+            mmio_read_reg(MMIO_REG_TABLE_DATA_LO, lo);
+            mmio_read_reg(MMIO_REG_TABLE_DATA_HI, hi);
+            value = {hi, lo};
+        end
+    endtask
+
+    task mmio_expect_table_addr;
+        input string table_name;
+        input logic [7 : 0] table_id;
+        input integer layer_index;
+        input logic [ADDR_WIDTH-1 : 0] expected;
+        logic [ADDR_WIDTH-1 : 0] observed;
+        begin
+            mmio_read_table_addr(table_id, layer_index, observed);
+            if (observed !== expected) begin
+                $display("FAIL: qmap_one_token_top MMIO table mismatch table=%s layer=%0d expected=0x%016h observed=0x%016h",
+                         table_name, layer_index, expected, observed);
+                fail_once("FAIL: qmap_one_token_top MMIO table register load mismatch before start");
+            end
+        end
+    endtask
+
+    task mmio_check_layer_tables;
+        input integer layer_index;
+        begin
+            mmio_expect_table_addr("qkv", MMIO_TABLE_QKV, layer_index,
+                qkv_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH]);
+            mmio_expect_table_addr("input_norm", MMIO_TABLE_INPUT_NORM, layer_index,
+                input_norm_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH]);
+            mmio_expect_table_addr("attn_frontend", MMIO_TABLE_ATTN_FRONTEND, layer_index,
+                attn_frontend_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH]);
+            mmio_expect_table_addr("attn_score_value", MMIO_TABLE_ATTN_SCORE, layer_index,
+                attn_score_value_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH]);
+            mmio_expect_table_addr("o_proj", MMIO_TABLE_O_PROJ, layer_index,
+                o_proj_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH]);
+            mmio_expect_table_addr("post_attn_norm", MMIO_TABLE_POST_ATTN_NORM, layer_index,
+                post_attn_norm_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH]);
+            mmio_expect_table_addr("mlp_gate_up", MMIO_TABLE_MLP_GATE_UP, layer_index,
+                mlp_gate_up_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH]);
+            mmio_expect_table_addr("mlp_silu_mul", MMIO_TABLE_MLP_SILU_MUL, layer_index,
+                mlp_silu_mul_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH]);
+            mmio_expect_table_addr("mlp_down", MMIO_TABLE_MLP_DOWN, layer_index,
+                mlp_down_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH]);
+            mmio_expect_table_addr("mlp_residual_add", MMIO_TABLE_MLP_RESIDUAL, layer_index,
+                mlp_residual_add_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH]);
+        end
+    endtask
+
+    task mmio_run_until_done;
+        input integer timeout_cycles;
+        integer next_progress_cycle;
+        begin
+            next_progress_cycle = 1000000;
+            mmio_write_reg(MMIO_REG_CTRL, 32'd1);
+            while ((done != 1'b1) && (cycle_count < timeout_cycles)) begin
+                @(posedge clk);
+                if ($test$plusargs("progress") && (cycle_count >= next_progress_cycle)) begin
+                    $display(
+                        "MMIO_PROGRESS: cycle=%0d state=0x%0h phase=0x%0h active_layer=%0d started=%0d completed=%0d rd=%0d/%0d wr=%0d/%0d",
+                        cycle_count,
+                        state_debug,
+                        top_phase_debug,
+                        active_layer_index,
+                        layers_started,
+                        layers_completed,
+                        dut_read_burst_count,
+                        dut_read_word_count,
+                        dut_write_req_count,
+                        dut_write_word_count
+                    );
+                    $fflush();
+                    next_progress_cycle = next_progress_cycle + 1000000;
+                end
+            end
+            if (done != 1'b1) begin
+                $display("FAIL: timed out waiting for qmap_one_token_top MMIO-launched done");
+                $finish(1);
+            end
+            @(posedge clk);
+        end
+    endtask
+`endif
+
+`ifdef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+    task run_tail_until_done;
+        input integer timeout_cycles;
+        integer wait_cycles;
+        integer next_progress_cycle;
+        begin
+            wait_cycles = 0;
+            next_progress_cycle = 10000000;
+            tail_start <= 1'b1;
+            @(posedge clk);
+            tail_start <= 1'b0;
+            while ((tail_done != 1'b1) && (wait_cycles < timeout_cycles)) begin
+                @(posedge clk);
+                wait_cycles = wait_cycles + 1;
+                if ($test$plusargs("progress") && (wait_cycles >= next_progress_cycle)) begin
+                    $display(
+                        "TAIL_PROGRESS: wait=%0d cycle=%0d tiles=%0d/%0d rd=%0d/%0d wr_words=%0d best=%0d score=%0d",
+                        wait_cycles,
+                        cycle_count,
+                        tail_tiles_started,
+                        tail_tiles_completed,
+                        tail_mem_read_burst_count,
+                        tail_mem_read_word_count,
+                        tail_mem_write_word_count,
+                        tail_best_token_id,
+                        tail_best_score_q26
+                    );
+                    $fflush();
+                    next_progress_cycle = next_progress_cycle + 10000000;
+                end
+            end
+            if (tail_done != 1'b1) begin
+                $display("FAIL: timed out waiting for qmap_final_token_tail_compute_path done");
+                $finish(1);
+            end
+            tail_done_cycle = cycle_count;
+            @(posedge clk);
+        end
+    endtask
+`endif
+
     task corrupt_qkv_activation_dtype;
         integer dtype_word_index;
         begin
@@ -2864,6 +4462,18 @@ module tb_qmap_one_token_layer_scheduler;
                 (`QMAP_ATTN_FRONTEND_DESCRIPTOR_TABLE_ADDR - `QMAP_ATTN_FRONTEND_BASE_ADDR +
                  (64'd6 * 64'd128) + (DESC_DTYPE_WORD * 4)) >> 2;
             frontend_qmap[cos_dtype_word_index] = 32'd5;
+        end
+    endtask
+
+    task corrupt_frontend_cos_dtype_l1;
+        begin
+            frontend_qmap_l1[desc_idx(6, DESC_DTYPE_WORD)] = 32'd5;
+        end
+    endtask
+
+    task corrupt_frontend_cos_dtype_l2;
+        begin
+            frontend_qmap_l2[desc_idx(6, DESC_DTYPE_WORD)] = 32'd5;
         end
     endtask
 
@@ -2888,7 +4498,16 @@ module tb_qmap_one_token_layer_scheduler;
                 if ((mem_rd_req_addr[1 : 0] != 2'd0) || (mem_rd_req_len_bytes[1 : 0] != 2'd0)) begin
                     fail_once("FAIL: unaligned read request");
                 end
+`ifdef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+                if (use_tail_mem) begin
+                    check_tail_read_request(mem_rd_req_addr, mem_rd_req_len_bytes);
+                end
+                else begin
+                    check_chained_read_ready(mem_rd_req_addr, mem_rd_req_len_bytes);
+                end
+`else
                 check_chained_read_ready(mem_rd_req_addr, mem_rd_req_len_bytes);
+`endif
                 read_active <= 1'b1;
                 active_read_addr <= mem_rd_req_addr;
                 active_read_index <= 0;
@@ -2937,12 +4556,47 @@ module tb_qmap_one_token_layer_scheduler;
                 active_write_index <= 0;
                 active_write_words_left <= mem_wr_req_len_bytes / MEM_DATA_BYTES;
                 active_write_total_words <= mem_wr_req_len_bytes / MEM_DATA_BYTES;
+`ifdef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+                if (use_tail_mem) begin
+                    active_write_kind <= classify_tail_write_addr(mem_wr_req_addr);
+                    check_tail_write_request(
+                        classify_tail_write_addr(mem_wr_req_addr),
+                        mem_wr_req_addr,
+                        mem_wr_req_len_bytes / MEM_DATA_BYTES
+                    );
+                end
+                else begin
+                    active_write_kind <= classify_write_addr(mem_wr_req_addr);
+                    check_write_request(classify_write_addr(mem_wr_req_addr), mem_wr_req_addr, mem_wr_req_len_bytes / MEM_DATA_BYTES);
+                end
+`else
                 active_write_kind <= classify_write_addr(mem_wr_req_addr);
                 check_write_request(classify_write_addr(mem_wr_req_addr), mem_wr_req_addr, mem_wr_req_len_bytes / MEM_DATA_BYTES);
+`endif
                 wr_req_accept_count = wr_req_accept_count + 1;
             end
 
             if (write_active && mem_wr_data_valid && mem_wr_data_ready) begin
+`ifdef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+                if (use_tail_mem) begin
+                    check_tail_write_word(
+                        active_write_kind,
+                        active_write_index,
+                        active_write_addr + (active_write_index * MEM_DATA_BYTES),
+                        mem_wr_data,
+                        mem_wr_data_last
+                    );
+                end
+                else begin
+                    check_write_word(
+                        active_write_kind,
+                        active_write_index,
+                        active_write_addr + (active_write_index * MEM_DATA_BYTES),
+                        mem_wr_data,
+                        mem_wr_data_last
+                    );
+                end
+`else
                 check_write_word(
                     active_write_kind,
                     active_write_index,
@@ -2950,6 +4604,7 @@ module tb_qmap_one_token_layer_scheduler;
                     mem_wr_data,
                     mem_wr_data_last
                 );
+`endif
                 wr_data_accept_count = wr_data_accept_count + 1;
                 if (active_write_words_left == 1) begin
                     if (!mem_wr_data_last) begin
@@ -2978,6 +4633,29 @@ module tb_qmap_one_token_layer_scheduler;
             if (done) begin
                 done_seen_count = done_seen_count + 1;
             end
+`ifdef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+`ifdef QMAP_ONE_TOKEN_TB_USE_TOP
+            if (top_scheduler_done_pulse && (tail_scheduler_done_cycle < 0)) begin
+                tail_scheduler_done_cycle = cycle_count;
+            end
+            if (top_scheduler_done_pulse) begin
+                top_scheduler_done_seen_count = top_scheduler_done_seen_count + 1;
+            end
+            if (top_tail_start_pulse) begin
+                top_tail_start_seen_count = top_tail_start_seen_count + 1;
+            end
+            if (top_tail_done_pulse && (tail_done_cycle < 0)) begin
+                tail_done_cycle = cycle_count;
+            end
+            if (top_tail_done_pulse) begin
+                tail_done_seen_count = tail_done_seen_count + 1;
+            end
+`else
+            if (use_tail_mem && tail_done) begin
+                tail_done_seen_count = tail_done_seen_count + 1;
+            end
+`endif
+`endif
 
             if (trace_fd != 0) begin
                 if ((mem_rd_req_valid && mem_rd_req_ready) ||
@@ -3038,6 +4716,252 @@ module tb_qmap_one_token_layer_scheduler;
 
     initial begin
         tracefile = "FPGA_Project/sim/qmap_one_token_layer_scheduler_trace.csv";
+        if ($test$plusargs("l2_tail_only")) begin
+            tracefile = "FPGA_Project/sim/qmap_one_token_layer2_input_norm_to_final_tail_trace.csv";
+        end
+        if ($test$plusargs("l2_top_tail_only")) begin
+            tracefile = "FPGA_Project/sim/qmap_one_token_top_layer2_input_norm_to_final_tail_trace.csv";
+        end
+        /*
+        if ($test$plusargs("l1_l2_mmio_top_tail_only")) begin
+`ifndef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+            $display("FAIL: +l1_l2_mmio_top_tail_only requires compile define QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL");
+            $finish(1);
+`else
+`ifndef QMAP_ONE_TOKEN_TB_USE_TOP
+            $display("FAIL: +l1_l2_mmio_top_tail_only requires compile define QMAP_ONE_TOKEN_TB_USE_TOP");
+            $finish(1);
+`else
+`ifndef QMAP_ONE_TOKEN_TB_USE_MMIO_CONTROL
+            $display("FAIL: +l1_l2_mmio_top_tail_only requires compile define QMAP_ONE_TOKEN_TB_USE_MMIO_CONTROL");
+            $finish(1);
+`else
+            set_layer_packet_bases(1);
+            set_layer_packet_bases(2);
+            enable_layer_input_norm(1);
+            enable_layer_input_norm(2);
+            layer_start_index = 5'd1;
+            layer_count = 5'd2;
+            scoreboard_layer_iterations = 2;
+            prefill_layer0_output_for_l1_only();
+            clear_tail_scoreboard();
+            repeat (10) @(posedge clk);
+            rst_n = 1'b1;
+            repeat (4) @(posedge clk);
+            mmio_load_current_loop_contract();
+
+            $display("SCENARIO: qmap_one_token_top MMIO Layer1 -> Layer2 scheduler -> final-token tail start");
+            $display("  descriptor final hidden base = 0x%016h", tail_descriptor_final_hidden_base);
+            $display("  mmio expected hidden base    = 0x%016h", tail_final_hidden_base);
+            $display("  layer1 output base           = 0x%016h", layer_output_base_l1);
+            $display("  layer2 output base           = 0x%016h", layer_output_base_l2);
+            $fflush();
+            mmio_run_until_done(120000000);
+
+            if ((layers_started != 5'd2) ||
+                (layers_completed != 5'd2) ||
+                (layer_done_mask != 28'h0000006) ||
+                (layer_error_mask != 28'h0000000)) begin
+                fail_once("FAIL: qmap_one_token_top MMIO Layer1->Layer2 scheduler layer masks mismatch");
+            end
+            if ((top_scheduler_done_seen_count != 1) ||
+                (top_tail_start_seen_count != 1) ||
+                (tail_done_seen_count != 1) ||
+                (done_seen_count != 1)) begin
+                fail_once("FAIL: qmap_one_token_top MMIO Layer1->Layer2 control pulse count mismatch");
+            end
+            if (top_tail_effective_final_hidden_base !== layer_output_base_l2) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO Layer1->Layer2 tail effective hidden base mismatch");
+            end
+            if (scheduler_last_layer_output_base !== layer_output_base_l2) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO Layer1->Layer2 scheduler last layer output base mismatch");
+            end
+            if (scheduler_last_layer_output_base === layer_output_base_l1) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO Layer1->Layer2 selected the previous layer output");
+            end
+            if ((tail_descriptor_final_hidden_base === layer_output_base_l1) ||
+                (tail_descriptor_final_hidden_base === layer_output_base_l2)) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO Layer1->Layer2 test accidentally pre-patched the tail descriptor");
+            end
+            if ((input_norm_write_accept_count != (2 * VEC1024)) ||
+                (qkv_q_write_accept_count != (2 * VEC2048)) ||
+                (qkv_k_write_accept_count != (2 * VEC1024)) ||
+                (qkv_v_write_accept_count != (2 * VEC1024)) ||
+                (cache_write_accept_count != (2 * TOTAL_CACHE_WRITES)) ||
+                (q_rope_write_accept_count != (2 * VEC2048)) ||
+                (attn_out_write_accept_count != (2 * VEC2048)) ||
+                (o_proj_write_accept_count != (2 * VEC1024)) ||
+                (post_hidden_write_accept_count != (2 * VEC1024)) ||
+                (post_norm_write_accept_count != (2 * VEC1024)) ||
+                (gate_write_accept_count != (2 * VEC3072)) ||
+                (up_write_accept_count != (2 * VEC3072)) ||
+                (silu_write_accept_count != (2 * VEC3072)) ||
+                (down_write_accept_count != (2 * VEC1024)) ||
+                (layer_write_accept_count != (2 * VEC1024))) begin
+                fail_once("FAIL: qmap_one_token_top MMIO Layer1->Layer2 producer write counts mismatch");
+            end
+            if ((dut_read_burst_count != EXPECTED_INPUT_NORM_TWO_LAYER_FULL_RD_REQS) ||
+                (dut_read_word_count != EXPECTED_INPUT_NORM_TWO_LAYER_FULL_RD_WORDS) ||
+                (dut_write_req_count != EXPECTED_INPUT_NORM_TWO_LAYER_FULL_WR_REQS) ||
+                (dut_write_word_count != EXPECTED_INPUT_NORM_TWO_LAYER_FULL_WR_WORDS)) begin
+                fail_once("FAIL: qmap_one_token_top MMIO Layer1->Layer2 scheduler counters mismatch");
+            end
+            if ((tail_best_token_id !== tail_expected_token) ||
+                (tail_best_score_q26 !== tail_expected_score_q26)) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO Layer1->Layer2 token/score mismatch");
+            end
+            if ((tail_norm_write_word_count != TAIL_INPUT_SIZE) ||
+                (tail_output_write_word_count != 3)) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO Layer1->Layer2 final-token tail write word count mismatch");
+            end
+            if ((tail_scheduler_done_cycle < 0) ||
+                (tail_first_hidden_read_cycle <= tail_scheduler_done_cycle) ||
+                (tail_first_hidden_read_cycle < 0)) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO Layer1->Layer2 tail hidden read did not occur after scheduler done");
+            end
+            if ((tail_first_weight_read_cycle <= tail_first_hidden_read_cycle) ||
+                (tail_first_weight_read_cycle < 0)) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO Layer1->Layer2 tail LM-head read did not occur after hidden read");
+            end
+            if ((tail_first_output_write_cycle <= tail_first_weight_read_cycle) ||
+                (tail_first_output_write_cycle < 0)) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO Layer1->Layer2 tail output write did not occur after LM-head reads");
+            end
+            if ((top_mem_read_burst_count != (dut_read_burst_count + tail_mem_read_burst_count)) ||
+                (top_mem_read_word_count != (dut_read_word_count + tail_mem_read_word_count)) ||
+                (top_mem_write_req_count != (dut_write_req_count + 32'd2)) ||
+                (top_mem_write_word_count != (dut_write_word_count + tail_mem_write_word_count))) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO Layer1->Layer2 aggregate memory counters mismatch");
+            end
+
+            mmio_read_reg(MMIO_REG_STATUS, mmio_read_data);
+            if ((mmio_read_data[1] != 1'b1) || (mmio_read_data[2] != 1'b0) ||
+                (mmio_read_data[3] != 1'b0)) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO status register mismatch after done");
+            end
+            mmio_read_reg(MMIO_REG_OUT_TOKEN, mmio_read_data);
+            if (mmio_read_data != tail_expected_token) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO output token register mismatch");
+            end
+            mmio_read_reg(MMIO_REG_OUT_SCORE_LO, mmio_read_data);
+            if (mmio_read_data != tail_expected_score_q26[31 : 0]) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO output score low register mismatch");
+            end
+            mmio_read_reg(MMIO_REG_OUT_SCORE_HI, mmio_read_data);
+            if (mmio_read_data != 32'd0) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO output score high register mismatch");
+            end
+            mmio_read_reg(MMIO_REG_LAYERS, mmio_read_data);
+            if ((mmio_read_data[4 : 0] != 5'd2) || (mmio_read_data[20 : 16] != 5'd2)) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO layers register mismatch");
+            end
+            mmio_read_reg(MMIO_REG_LAYER_DONE_MASK, mmio_read_data);
+            if (mmio_read_data[27 : 0] != 28'h0000006) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO layer done mask register mismatch");
+            end
+            mmio_read_reg(MMIO_REG_LAST_OUTPUT_LO, mmio_read_data);
+            if (mmio_read_data != layer_output_base_l2[31 : 0]) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO last output base register mismatch");
+            end
+            mmio_read_reg(MMIO_REG_TAIL_HIDDEN_LO, mmio_read_data);
+            if (mmio_read_data != layer_output_base_l2[31 : 0]) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO tail hidden base register mismatch");
+            end
+            mmio_read_reg(MMIO_REG_MEM_RD_REQS, mmio_read_data);
+            if (mmio_read_data != top_mem_read_burst_count) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO read request counter register mismatch");
+            end
+            mmio_read_reg(MMIO_REG_MEM_RD_WORDS, mmio_read_data);
+            if (mmio_read_data != top_mem_read_word_count) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO read word counter register mismatch");
+            end
+            mmio_read_reg(MMIO_REG_MEM_WR_REQS, mmio_read_data);
+            if (mmio_read_data != top_mem_write_req_count) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO write request counter register mismatch");
+            end
+            mmio_read_reg(MMIO_REG_MEM_WR_WORDS, mmio_read_data);
+            if (mmio_read_data != top_mem_write_word_count) begin
+                tail_fail("FAIL: qmap_one_token_top MMIO write word counter register mismatch");
+            end
+
+            if ((mismatch_count != 0) || (write_mismatch_count != 0) ||
+                (tail_mismatch_count != 0) || (tail_write_mismatch_count != 0) ||
+                (max_abs_diff != 0) || error || (total_fail_count != 0)) begin
+                $display("FAIL: qmap_one_token_top MMIO Layer1->Layer2 found mismatch=%0d write_mismatch=%0d tail_mismatch=%0d tail_write_mismatch=%0d max_abs=%0d total_fail=%0d error=%0d",
+                         mismatch_count, write_mismatch_count, tail_mismatch_count,
+                         tail_write_mismatch_count, max_abs_diff, total_fail_count, error);
+                $finish(1);
+            end
+
+            $display("qmap_one_token_top MMIO Layer1 -> Layer2 input RMSNorm scheduler -> final-token tail test");
+            $display("  scheduler done cycle   = %0d", tail_scheduler_done_cycle);
+            $display("  tail done cycle        = %0d", tail_done_cycle);
+            $display("  first hidden read      = %0d", tail_first_hidden_read_cycle);
+            $display("  first LM-head read     = %0d", tail_first_weight_read_cycle);
+            $display("  first output write     = %0d", tail_first_output_write_cycle);
+            $display("  expected token/score   = %0d / %0d", tail_expected_token, tail_expected_score_q26);
+            $display("  observed token/score   = %0d / %0d", tail_best_token_id, tail_best_score_q26);
+            $display("  top pulses             = scheduler_done %0d tail_start %0d tail_done %0d top_done %0d",
+                     top_scheduler_done_seen_count, top_tail_start_seen_count, tail_done_seen_count, done_seen_count);
+            $display("  scheduler rd/wr        = %0d/%0d reads, %0d/%0d writes mask 0x%0h",
+                     dut_read_burst_count, dut_read_word_count,
+                     dut_write_req_count, dut_write_word_count,
+                     layer_done_mask);
+            $display("  top rd/wr counters     = %0d/%0d reads, %0d/%0d writes",
+                     top_mem_read_burst_count, top_mem_read_word_count,
+                     top_mem_write_req_count, top_mem_write_word_count);
+            $display("  trace                  = %s", tracefile);
+            if (trace_fd != 0) begin
+                $fclose(trace_fd);
+            end
+            $display("PASS: qmap_one_token_top MMIO registers launched Layer1 and Layer2 before final-token tail.");
+            $finish;
+`endif
+`endif
+`endif
+`endif
+        end
+
+        */
+        if ($test$plusargs("l1_l2_top_tail_only")) begin
+            tracefile = "FPGA_Project/sim/qmap_one_token_top_layer1_layer2_input_norm_to_final_tail_trace.csv";
+        end
+        if ($test$plusargs("l1_l2_mmio_top_tail_only")) begin
+`ifdef QMAP_ONE_TOKEN_TB_USE_AXIL_TOP
+            tracefile = "FPGA_Project/sim/qmap_one_token_axil_layer1_layer2_input_norm_to_final_tail_trace.csv";
+`else
+            tracefile = "FPGA_Project/sim/qmap_one_token_mmio_layer1_layer2_input_norm_to_final_tail_trace.csv";
+`endif
+        end
+        if ($test$plusargs("true3_top_tail_only")) begin
+            tracefile = "FPGA_Project/sim/qmap_one_token_top_true3_input_norm_to_final_tail_trace.csv";
+        end
+        if ($test$plusargs("true3_mmio_top_tail_only")) begin
+`ifdef QMAP_ONE_TOKEN_TB_USE_AXIL_TOP
+            tracefile = "FPGA_Project/sim/qmap_one_token_axil_true3_input_norm_to_final_tail_trace.csv";
+`else
+            tracefile = "FPGA_Project/sim/qmap_one_token_mmio_true3_input_norm_to_final_tail_trace.csv";
+`endif
+        end
+        if ($test$plusargs("input_norm_qkv_only")) begin
+`ifdef QMAP_ONE_TOKEN_TB_USE_TOP
+            tracefile = "FPGA_Project/sim/qmap_one_token_top_input_norm_to_qkv_trace.csv";
+`else
+            tracefile = "FPGA_Project/sim/qmap_one_token_input_norm_to_qkv_trace.csv";
+`endif
+        end
+        if ($test$plusargs("l1_input_norm_only")) begin
+            tracefile = "FPGA_Project/sim/qmap_one_token_layer1_input_norm_trace.csv";
+        end
+        if ($test$plusargs("l2_input_norm_only")) begin
+            tracefile = "FPGA_Project/sim/qmap_one_token_layer2_input_norm_trace.csv";
+        end
+        if ($test$plusargs("l1_only") || $test$plusargs("l1_input_norm_full_only")) begin
+            tracefile = "FPGA_Project/sim/qmap_one_token_layer1_input_norm_full_trace.csv";
+        end
+        if ($test$plusargs("l2_only") || $test$plusargs("l2_input_norm_full_only")) begin
+            tracefile = "FPGA_Project/sim/qmap_one_token_layer2_input_norm_full_trace.csv";
+        end
         if ($test$plusargs("fastmem")) begin
             fastmem = 1'b1;
         end
@@ -3058,12 +4982,533 @@ module tb_qmap_one_token_layer_scheduler;
 
         rst_n = 1'b0;
         start = 1'b0;
+`ifdef QMAP_ONE_TOKEN_TB_USE_MMIO_CONTROL
+        mmio_reg_wr_valid = 1'b0;
+        mmio_reg_rd_valid = 1'b0;
+        mmio_reg_addr = 12'd0;
+        mmio_reg_wdata = 32'd0;
+`endif
         total_fail_count = 0;
         load_vectors();
         clear_scoreboard();
         set_valid_loop_contract();
         if ($test$plusargs("fastmem")) begin
             fastmem = 1'b1;
+        end
+        if ($test$plusargs("l2_top_tail_only")) begin
+`ifndef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+            $display("FAIL: +l2_top_tail_only requires compile define QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL");
+            $finish(1);
+`else
+`ifndef QMAP_ONE_TOKEN_TB_USE_TOP
+            $display("FAIL: +l2_top_tail_only requires compile define QMAP_ONE_TOKEN_TB_USE_TOP");
+            $finish(1);
+`else
+            set_layer_packet_bases(2);
+            enable_layer_input_norm(2);
+            layer_start_index = 5'd2;
+            layer_count = 5'd1;
+            scoreboard_layer_iterations = 1;
+            prefill_layer1_output_for_l2_only();
+            clear_tail_scoreboard();
+            repeat (10) @(posedge clk);
+            rst_n = 1'b1;
+            repeat (4) @(posedge clk);
+
+            $display("SCENARIO: qmap_one_token_top focused Layer2 scheduler -> final-token tail start");
+            $display("  descriptor final hidden base = 0x%016h", tail_descriptor_final_hidden_base);
+            $display("  top selected hidden base     = 0x%016h", tail_final_hidden_base);
+            $display("  layer2 output base           = 0x%016h", layer_output_base_l2);
+            $fflush();
+            run_until_done(100000000);
+
+            if ((layers_started != 5'd1) ||
+                (layers_completed != 5'd1) ||
+                (layer_done_mask != 28'h0000004) ||
+                (layer_error_mask != 28'h0000000)) begin
+                fail_once("FAIL: qmap_one_token_top Layer2 scheduler layer masks mismatch");
+            end
+            if ((top_scheduler_done_seen_count != 1) ||
+                (top_tail_start_seen_count != 1) ||
+                (tail_done_seen_count != 1) ||
+                (done_seen_count != 1)) begin
+                fail_once("FAIL: qmap_one_token_top control pulse count mismatch");
+            end
+            if (top_tail_effective_final_hidden_base !== layer_output_base_l2) begin
+                tail_fail("FAIL: qmap_one_token_top tail effective hidden base mismatch");
+            end
+            if (scheduler_last_layer_output_base !== layer_output_base_l2) begin
+                tail_fail("FAIL: qmap_one_token_top scheduler last layer output base mismatch");
+            end
+            if (tail_descriptor_final_hidden_base === layer_output_base_l2) begin
+                tail_fail("FAIL: qmap_one_token_top test accidentally pre-patched the tail descriptor");
+            end
+            if ((mismatch_count != 0) || (write_mismatch_count != 0) ||
+                (max_abs_diff != 0) || error || (total_fail_count != 0)) begin
+                $display("FAIL: qmap_one_token_top source failed mismatch_count=%0d write_mismatches=%0d max_abs=%0d total_fail=%0d error=%0d",
+                         mismatch_count, write_mismatch_count, max_abs_diff, total_fail_count, error);
+                $finish(1);
+            end
+            if (!layer_written) begin
+                fail_once("FAIL: qmap_one_token_top scheduler did not mark final layer output written");
+            end
+            if ((input_norm_write_accept_count != VEC1024) ||
+                (dut_read_burst_count != EXPECTED_INPUT_NORM_FULL_RD_REQS) ||
+                (dut_read_word_count != EXPECTED_INPUT_NORM_FULL_RD_WORDS) ||
+                (dut_write_req_count != EXPECTED_INPUT_NORM_FULL_WR_REQS) ||
+                (dut_write_word_count != EXPECTED_INPUT_NORM_FULL_WR_WORDS)) begin
+                fail_once("FAIL: qmap_one_token_top Layer2 input RMSNorm scheduler counters mismatch");
+            end
+            if (tail_error) begin
+                tail_fail("FAIL: qmap_one_token_top final-token tail asserted error");
+            end
+            if (tail_norm_saturation) begin
+                tail_fail("FAIL: qmap_one_token_top final-token tail asserted norm saturation");
+            end
+            if ((tail_best_token_id !== tail_expected_token) ||
+                (tail_best_score_q26 !== tail_expected_score_q26)) begin
+                tail_fail("FAIL: qmap_one_token_top final-token tail token/score mismatch");
+            end
+            if ((tail_tiles_started != TAIL_MAX_TILES) ||
+                (tail_tiles_completed != TAIL_MAX_TILES)) begin
+                tail_fail("FAIL: qmap_one_token_top final-token tail tile count mismatch");
+            end
+            if ((tail_hidden_req_count != 4) ||
+                (tail_gamma_req_count != 4) ||
+                (tail_norm_read_req_count != 4)) begin
+                tail_fail("FAIL: qmap_one_token_top final-token tail hidden/gamma/norm read count mismatch");
+            end
+            if ((tail_weight_req_count != (TAIL_MAX_TILES * TAIL_WEIGHT_BURSTS_PER_TILE)) ||
+                (tail_scale_req_count != (TAIL_MAX_TILES * TAIL_SCALE_BURSTS_PER_TILE))) begin
+                tail_fail("FAIL: qmap_one_token_top final-token tail LM-head weight/scale request count mismatch");
+            end
+            if ((tail_norm_write_word_count != TAIL_INPUT_SIZE) ||
+                (tail_output_write_word_count != 3)) begin
+                tail_fail("FAIL: qmap_one_token_top final-token tail write word count mismatch");
+            end
+            if ((tail_scheduler_done_cycle < 0) ||
+                (tail_first_hidden_read_cycle <= tail_scheduler_done_cycle) ||
+                (tail_first_hidden_read_cycle < 0)) begin
+                tail_fail("FAIL: qmap_one_token_top tail hidden read did not occur after scheduler done");
+            end
+            if ((tail_first_weight_read_cycle <= tail_first_hidden_read_cycle) ||
+                (tail_first_weight_read_cycle < 0)) begin
+                tail_fail("FAIL: qmap_one_token_top tail LM-head read did not occur after hidden read");
+            end
+            if ((tail_first_output_write_cycle <= tail_first_weight_read_cycle) ||
+                (tail_first_output_write_cycle < 0)) begin
+                tail_fail("FAIL: qmap_one_token_top tail output write did not occur after LM-head reads");
+            end
+            if ((top_mem_read_burst_count != (dut_read_burst_count + tail_mem_read_burst_count)) ||
+                (top_mem_read_word_count != (dut_read_word_count + tail_mem_read_word_count)) ||
+                (top_mem_write_req_count != (dut_write_req_count + 32'd2)) ||
+                (top_mem_write_word_count != (dut_write_word_count + tail_mem_write_word_count))) begin
+                tail_fail("FAIL: qmap_one_token_top aggregate memory counters mismatch");
+            end
+
+            $display("qmap_one_token_top Layer2 input RMSNorm scheduler -> final-token tail test");
+            $display("  scheduler done cycle   = %0d", tail_scheduler_done_cycle);
+            $display("  tail done cycle        = %0d", tail_done_cycle);
+            $display("  first hidden read      = %0d", tail_first_hidden_read_cycle);
+            $display("  first LM-head read     = %0d", tail_first_weight_read_cycle);
+            $display("  first output write     = %0d", tail_first_output_write_cycle);
+            $display("  expected token/score   = %0d / %0d", tail_expected_token, tail_expected_score_q26);
+            $display("  observed token/score   = %0d / %0d", tail_best_token_id, tail_best_score_q26);
+            $display("  top pulses             = scheduler_done %0d tail_start %0d tail_done %0d top_done %0d",
+                     top_scheduler_done_seen_count, top_tail_start_seen_count, tail_done_seen_count, done_seen_count);
+            $display("  top rd/wr counters     = %0d/%0d reads, %0d/%0d writes",
+                     top_mem_read_burst_count, top_mem_read_word_count,
+                     top_mem_write_req_count, top_mem_write_word_count);
+            $display("  tail read reqs         = hidden %0d gamma %0d norm %0d weight %0d scale %0d total %0d",
+                     tail_hidden_req_count, tail_gamma_req_count, tail_norm_read_req_count,
+                     tail_weight_req_count, tail_scale_req_count, tail_read_req_count);
+            $display("  tail writes            = norm %0d output %0d write_mismatches %0d",
+                     tail_norm_write_word_count, tail_output_write_word_count, tail_write_mismatch_count);
+            $display("  trace                  = %s", tracefile);
+
+            if ((tail_mismatch_count != 0) || (tail_write_mismatch_count != 0) ||
+                (mismatch_count != 0) || (write_mismatch_count != 0) ||
+                (max_abs_diff != 0) || (total_fail_count != 0)) begin
+                $display("FAIL: qmap_one_token_top handoff found tail_mismatches=%0d tail_write_mismatches=%0d scheduler_mismatches=%0d scheduler_write_mismatches=%0d max_abs=%0d total_fail=%0d",
+                         tail_mismatch_count, tail_write_mismatch_count,
+                         mismatch_count, write_mismatch_count, max_abs_diff, total_fail_count);
+                $finish(1);
+            end
+            if (trace_fd != 0) begin
+                $fclose(trace_fd);
+            end
+            $display("PASS: qmap_one_token_top ran Layer2 scheduler output directly into final-token tail.");
+            $finish;
+`endif
+`endif
+        end
+        if ($test$plusargs("l1_l2_top_tail_only") ||
+            $test$plusargs("l1_l2_mmio_top_tail_only") ||
+            $test$plusargs("true3_top_tail_only") ||
+            $test$plusargs("true3_mmio_top_tail_only")) begin
+`ifndef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+            $display("FAIL: top-tail scenarios require compile define QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL");
+            $finish(1);
+`else
+`ifndef QMAP_ONE_TOKEN_TB_USE_TOP
+            $display("FAIL: top-tail scenarios require compile define QMAP_ONE_TOKEN_TB_USE_TOP");
+            $finish(1);
+`else
+`ifndef QMAP_ONE_TOKEN_TB_USE_MMIO_CONTROL
+            if ($test$plusargs("l1_l2_mmio_top_tail_only") ||
+                $test$plusargs("true3_mmio_top_tail_only")) begin
+                $display("FAIL: MMIO top-tail scenarios require compile define QMAP_ONE_TOKEN_TB_USE_MMIO_CONTROL");
+                $finish(1);
+            end
+`endif
+            set_layer_packet_bases(1);
+            set_layer_packet_bases(2);
+            enable_layer_input_norm(1);
+            enable_layer_input_norm(2);
+
+            if ($test$plusargs("true3_top_tail_only") ||
+                $test$plusargs("true3_mmio_top_tail_only")) begin
+                // Layer 0 still uses the existing QKV-first full-layer golden
+                // chain. Layer 0 input-RMSNorm full-chain artifacts are not
+                // generated yet; Layer 1/2 use the input-RMSNorm-enabled chain.
+                patch_qkv_base_l1(QKV_SLOT_ACTIVATION, input_norm_output_base_l1);
+                patch_qkv_base_l2(QKV_SLOT_ACTIVATION, input_norm_output_base_l2);
+                layer_start_index = 5'd0;
+                layer_count = 5'd3;
+                scoreboard_layer_iterations = 3;
+            end
+            else begin
+                layer_start_index = 5'd1;
+                layer_count = 5'd2;
+                scoreboard_layer_iterations = 2;
+                prefill_layer0_output_for_l1_only();
+            end
+
+            clear_tail_scoreboard();
+            repeat (10) @(posedge clk);
+            rst_n = 1'b1;
+            repeat (4) @(posedge clk);
+
+            if ($test$plusargs("l1_l2_mmio_top_tail_only") ||
+                $test$plusargs("true3_mmio_top_tail_only")) begin
+`ifdef QMAP_ONE_TOKEN_TB_USE_MMIO_CONTROL
+                mmio_load_current_loop_contract();
+                mmio_check_scalar_registers();
+                if ($test$plusargs("true3_mmio_top_tail_only")) begin
+                    mmio_check_layer_tables(0);
+                end
+                mmio_check_layer_tables(1);
+                mmio_check_layer_tables(2);
+                if (total_fail_count != 0) begin
+                    $finish(1);
+                end
+                if ($test$plusargs("true3_mmio_top_tail_only")) begin
+                    $display("SCENARIO: qmap_one_token_top MMIO Layer0(QKV-first) -> Layer1 -> Layer2 input-RMSNorm scheduler -> final-token tail start");
+                end
+                else begin
+                    $display("SCENARIO: qmap_one_token_top MMIO Layer1 -> Layer2 scheduler -> final-token tail start");
+                end
+                $display("  descriptor final hidden base = 0x%016h", tail_descriptor_final_hidden_base);
+                $display("  mmio expected hidden base    = 0x%016h", tail_final_hidden_base);
+                $display("  layer0 output base           = 0x%016h", layer_output_base);
+                $display("  layer1 output base           = 0x%016h", layer_output_base_l1);
+                $display("  layer2 output base           = 0x%016h", layer_output_base_l2);
+                $fflush();
+                mmio_run_until_done(180000000);
+`endif
+            end
+            else begin
+                if ($test$plusargs("true3_top_tail_only")) begin
+                    $display("SCENARIO: qmap_one_token_top Layer0(QKV-first) -> Layer1 -> Layer2 input-RMSNorm scheduler -> final-token tail start");
+                end
+                else begin
+                    $display("SCENARIO: qmap_one_token_top Layer1 -> Layer2 scheduler -> final-token tail start");
+                end
+                $display("  descriptor final hidden base = 0x%016h", tail_descriptor_final_hidden_base);
+                $display("  top expected hidden base     = 0x%016h", tail_final_hidden_base);
+                $display("  layer0 output base           = 0x%016h", layer_output_base);
+                $display("  layer1 output base           = 0x%016h", layer_output_base_l1);
+                $display("  layer2 output base           = 0x%016h", layer_output_base_l2);
+                $fflush();
+                run_until_done(180000000);
+            end
+
+            if ($test$plusargs("l1_l2_mmio_top_tail_only") ||
+                $test$plusargs("true3_mmio_top_tail_only")) begin
+                $display("  mmio post-run debug: state=0x%0h phase=0x%0h error=%0d layers=%0d/%0d mask=0x%0h layer_error=0x%0h rd=%0d/%0d wr=%0d/%0d tail_hidden=0x%016h last_layer=0x%016h",
+                         state_debug, top_phase_debug, error, layers_started, layers_completed,
+                         layer_done_mask, layer_error_mask, dut_read_burst_count,
+                         dut_read_word_count, dut_write_req_count, dut_write_word_count,
+                         top_tail_effective_final_hidden_base, scheduler_last_layer_output_base);
+            end
+
+            if ((layers_started != layer_count) ||
+                (layers_completed != layer_count) ||
+                (layer_done_mask != ((28'h1 << layer_count) - 28'h1)) ||
+                (layer_error_mask != 28'h0000000)) begin
+                fail_once("FAIL: qmap_one_token_top true top-tail scheduler layer masks mismatch");
+            end
+            if ((stage_done_mask != 2'b11) ||
+                (stage_error_mask != 2'b00) ||
+                (layer0_full_stage_done_mask != 4'hf) ||
+                (layer0_full_stage_error_mask != 4'h0) ||
+                (body_stage_done_mask != 5'h1f) ||
+                (body_stage_error_mask != 5'h00)) begin
+                fail_once("FAIL: qmap_one_token_top true top-tail scheduler stage masks mismatch");
+            end
+            if ((top_scheduler_done_seen_count != 1) ||
+                (top_tail_start_seen_count != 1) ||
+                (tail_done_seen_count != 1) ||
+                (done_seen_count != 1)) begin
+                fail_once("FAIL: qmap_one_token_top true top-tail control pulse count mismatch");
+            end
+            if (top_tail_effective_final_hidden_base !== layer_output_base_l2) begin
+                tail_fail("FAIL: qmap_one_token_top true top-tail tail effective hidden base mismatch");
+            end
+            if (scheduler_last_layer_output_base !== layer_output_base_l2) begin
+                tail_fail("FAIL: qmap_one_token_top true top-tail scheduler last layer output base mismatch");
+            end
+            if (scheduler_last_layer_output_base === layer_output_base_l1) begin
+                tail_fail("FAIL: qmap_one_token_top true top-tail selected the previous layer output");
+            end
+            if ((tail_descriptor_final_hidden_base === layer_output_base_l1) ||
+                (tail_descriptor_final_hidden_base === layer_output_base_l2)) begin
+                tail_fail("FAIL: qmap_one_token_top true top-tail test accidentally pre-patched the tail descriptor");
+            end
+            if ((mismatch_count != 0) || (write_mismatch_count != 0) ||
+                (max_abs_diff != 0) || error || (total_fail_count != 0)) begin
+                $display("FAIL: qmap_one_token_top true top-tail source failed mismatch_count=%0d write_mismatches=%0d max_abs=%0d total_fail=%0d error=%0d",
+                         mismatch_count, write_mismatch_count, max_abs_diff, total_fail_count, error);
+                $finish(1);
+            end
+            if (!layer_written) begin
+                fail_once("FAIL: qmap_one_token_top true top-tail scheduler did not mark final layer output written");
+            end
+            if ((input_norm_write_accept_count != (((layer_count == 5'd3) ? 2 : layer_count) * VEC1024)) ||
+                (qkv_q_write_accept_count != (layer_count * VEC2048)) ||
+                (qkv_k_write_accept_count != (layer_count * VEC1024)) ||
+                (qkv_v_write_accept_count != (layer_count * VEC1024)) ||
+                (cache_write_accept_count != (layer_count * TOTAL_CACHE_WRITES)) ||
+                (q_rope_write_accept_count != (layer_count * VEC2048)) ||
+                (attn_out_write_accept_count != (layer_count * VEC2048)) ||
+                (o_proj_write_accept_count != (layer_count * VEC1024)) ||
+                (post_hidden_write_accept_count != (layer_count * VEC1024)) ||
+                (post_norm_write_accept_count != (layer_count * VEC1024)) ||
+                (gate_write_accept_count != (layer_count * VEC3072)) ||
+                (up_write_accept_count != (layer_count * VEC3072)) ||
+                (silu_write_accept_count != (layer_count * VEC3072)) ||
+                (down_write_accept_count != (layer_count * VEC1024)) ||
+                (layer_write_accept_count != (layer_count * VEC1024))) begin
+                fail_once("FAIL: qmap_one_token_top true top-tail producer write counts mismatch");
+            end
+            if (layer_count == 5'd3) begin
+                if ((dut_read_burst_count != EXPECTED_MIXED_THREE_LAYER_FULL_RD_REQS) ||
+                    (dut_read_word_count != EXPECTED_MIXED_THREE_LAYER_FULL_RD_WORDS) ||
+                    (dut_write_req_count != EXPECTED_MIXED_THREE_LAYER_FULL_WR_REQS) ||
+                    (dut_write_word_count != EXPECTED_MIXED_THREE_LAYER_FULL_WR_WORDS)) begin
+                    fail_once("FAIL: qmap_one_token_top mixed true three-layer scheduler counters mismatch");
+                end
+            end
+            else begin
+                if ((dut_read_burst_count != EXPECTED_INPUT_NORM_TWO_LAYER_FULL_RD_REQS) ||
+                    (dut_read_word_count != EXPECTED_INPUT_NORM_TWO_LAYER_FULL_RD_WORDS) ||
+                    (dut_write_req_count != EXPECTED_INPUT_NORM_TWO_LAYER_FULL_WR_REQS) ||
+                    (dut_write_word_count != EXPECTED_INPUT_NORM_TWO_LAYER_FULL_WR_WORDS)) begin
+                    fail_once("FAIL: qmap_one_token_top Layer1->Layer2 scheduler counters mismatch");
+                end
+            end
+            if (tail_error) begin
+                tail_fail("FAIL: qmap_one_token_top true top-tail final-token tail asserted error");
+            end
+            if (tail_norm_saturation) begin
+                tail_fail("FAIL: qmap_one_token_top true top-tail final-token tail asserted norm saturation");
+            end
+            if ((tail_best_token_id !== tail_expected_token) ||
+                (tail_best_score_q26 !== tail_expected_score_q26)) begin
+                tail_fail("FAIL: qmap_one_token_top true top-tail final-token tail token/score mismatch");
+            end
+            if ((tail_tiles_started != TAIL_MAX_TILES) ||
+                (tail_tiles_completed != TAIL_MAX_TILES)) begin
+                tail_fail("FAIL: qmap_one_token_top true top-tail final-token tail tile count mismatch");
+            end
+            if ((tail_hidden_req_count != 4) ||
+                (tail_gamma_req_count != 4) ||
+                (tail_norm_read_req_count != 4)) begin
+                tail_fail("FAIL: qmap_one_token_top true top-tail final-token tail hidden/gamma/norm read count mismatch");
+            end
+            if ((tail_weight_req_count != (TAIL_MAX_TILES * TAIL_WEIGHT_BURSTS_PER_TILE)) ||
+                (tail_scale_req_count != (TAIL_MAX_TILES * TAIL_SCALE_BURSTS_PER_TILE))) begin
+                tail_fail("FAIL: qmap_one_token_top true top-tail final-token tail LM-head weight/scale request count mismatch");
+            end
+            if ((tail_norm_write_word_count != TAIL_INPUT_SIZE) ||
+                (tail_output_write_word_count != 3)) begin
+                tail_fail("FAIL: qmap_one_token_top true top-tail final-token tail write word count mismatch");
+            end
+            if ((tail_scheduler_done_cycle < 0) ||
+                (tail_first_hidden_read_cycle <= tail_scheduler_done_cycle) ||
+                (tail_first_hidden_read_cycle < 0)) begin
+                tail_fail("FAIL: qmap_one_token_top true top-tail tail hidden read did not occur after scheduler done");
+            end
+            if ((tail_first_weight_read_cycle <= tail_first_hidden_read_cycle) ||
+                (tail_first_weight_read_cycle < 0)) begin
+                tail_fail("FAIL: qmap_one_token_top true top-tail tail LM-head read did not occur after hidden read");
+            end
+            if ((tail_first_output_write_cycle <= tail_first_weight_read_cycle) ||
+                (tail_first_output_write_cycle < 0)) begin
+                tail_fail("FAIL: qmap_one_token_top true top-tail tail output write did not occur after LM-head reads");
+            end
+            if ((top_mem_read_burst_count != (dut_read_burst_count + tail_mem_read_burst_count)) ||
+                (top_mem_read_word_count != (dut_read_word_count + tail_mem_read_word_count)) ||
+                (top_mem_write_req_count != (dut_write_req_count + 32'd2)) ||
+                (top_mem_write_word_count != (dut_write_word_count + tail_mem_write_word_count))) begin
+                tail_fail("FAIL: qmap_one_token_top true top-tail aggregate memory counters mismatch");
+            end
+
+            $display("qmap_one_token_top true input RMSNorm scheduler -> final-token tail test");
+            $display("  layer start/count      = %0d / %0d", layer_start_index, layer_count);
+            $display("  scheduler done cycle   = %0d", tail_scheduler_done_cycle);
+            $display("  tail done cycle        = %0d", tail_done_cycle);
+            $display("  first hidden read      = %0d", tail_first_hidden_read_cycle);
+            $display("  first LM-head read     = %0d", tail_first_weight_read_cycle);
+            $display("  first output write     = %0d", tail_first_output_write_cycle);
+            $display("  expected token/score   = %0d / %0d", tail_expected_token, tail_expected_score_q26);
+            $display("  observed token/score   = %0d / %0d", tail_best_token_id, tail_best_score_q26);
+            $display("  top pulses             = scheduler_done %0d tail_start %0d tail_done %0d top_done %0d",
+                     top_scheduler_done_seen_count, top_tail_start_seen_count, tail_done_seen_count, done_seen_count);
+            $display("  scheduler rd/wr        = %0d/%0d reads, %0d/%0d writes mask 0x%0h",
+                     dut_read_burst_count, dut_read_word_count,
+                     dut_write_req_count, dut_write_word_count,
+                     layer_done_mask);
+            $display("  top rd/wr counters     = %0d/%0d reads, %0d/%0d writes",
+                     top_mem_read_burst_count, top_mem_read_word_count,
+                     top_mem_write_req_count, top_mem_write_word_count);
+            $display("  tail read reqs         = hidden %0d gamma %0d norm %0d weight %0d scale %0d total %0d",
+                     tail_hidden_req_count, tail_gamma_req_count, tail_norm_read_req_count,
+                     tail_weight_req_count, tail_scale_req_count, tail_read_req_count);
+            $display("  tail writes            = norm %0d output %0d write_mismatches %0d",
+                     tail_norm_write_word_count, tail_output_write_word_count, tail_write_mismatch_count);
+            $display("  trace                  = %s", tracefile);
+
+            if ((tail_mismatch_count != 0) || (tail_write_mismatch_count != 0) ||
+                (mismatch_count != 0) || (write_mismatch_count != 0) ||
+                (max_abs_diff != 0) || (total_fail_count != 0)) begin
+                $display("FAIL: qmap_one_token_top true top-tail handoff found tail_mismatches=%0d tail_write_mismatches=%0d scheduler_mismatches=%0d scheduler_write_mismatches=%0d max_abs=%0d total_fail=%0d",
+                         tail_mismatch_count, tail_write_mismatch_count,
+                         mismatch_count, write_mismatch_count, max_abs_diff, total_fail_count);
+                $finish(1);
+            end
+            if (trace_fd != 0) begin
+                $fclose(trace_fd);
+            end
+            if (layer_count == 5'd3) begin
+                $display("PASS: qmap_one_token_top ran Layer0(QKV-first), Layer1, and Layer2 before automatically feeding Layer2 output into final-token tail.");
+            end
+            else begin
+                $display("PASS: qmap_one_token_top ran Layer1 and Layer2 before automatically feeding Layer2 output into final-token tail.");
+            end
+            $finish;
+`endif
+`endif
+        end
+        if ($test$plusargs("input_norm_qkv_only")) begin
+            enable_layer_input_norm(0);
+            use_input_norm_qkv_expected = 1'b1;
+            patch_qkv_base(QKV_SLOT_ACTIVATION, input_norm_output_base);
+            corrupt_frontend_cos_dtype();
+            repeat (10) @(posedge clk);
+            rst_n = 1'b1;
+            repeat (4) @(posedge clk);
+
+            $display("SCENARIO: focused input RMSNorm -> QKV precheck start");
+            $display("  input norm output base = 0x%016h", input_norm_output_base);
+            $fflush();
+            run_until_done(12000000);
+            input_norm_qkv_done_cycle = cycle_count;
+            input_norm_qkv_read_bursts = dut_read_burst_count;
+            input_norm_qkv_read_words = dut_read_word_count;
+            input_norm_qkv_write_reqs = dut_write_req_count;
+            input_norm_qkv_write_words = dut_write_word_count;
+            input_norm_qkv_stage_done_mask = stage_done_mask;
+            input_norm_qkv_stage_error_mask = stage_error_mask;
+            input_norm_qkv_layer0_full_stage_done_mask = layer0_full_stage_done_mask;
+            input_norm_qkv_layer0_full_stage_error_mask = layer0_full_stage_error_mask;
+            input_norm_qkv_error = error;
+
+            if (!input_norm_qkv_error) begin
+                fail_once("FAIL: input RMSNorm -> QKV precheck did not stop at invalid frontend descriptor");
+            end
+            if ((input_norm_qkv_stage_done_mask != 2'b01) ||
+                (input_norm_qkv_stage_error_mask != 2'b10) ||
+                (input_norm_qkv_layer0_full_stage_done_mask != 4'h0) ||
+                (input_norm_qkv_layer0_full_stage_error_mask != 4'h1)) begin
+                fail_once("FAIL: input RMSNorm -> QKV precheck stage masks mismatch");
+            end
+            if ((input_norm_write_accept_count != VEC1024) ||
+                (qkv_q_write_accept_count != VEC2048) ||
+                (qkv_k_write_accept_count != VEC1024) ||
+                (qkv_v_write_accept_count != VEC1024) ||
+                (cache_write_accept_count != 0) ||
+                (q_rope_write_accept_count != 0) ||
+                (attn_out_write_accept_count != 0) ||
+                (o_proj_write_accept_count != 0) ||
+                (post_hidden_write_accept_count != 0) ||
+                (post_norm_write_accept_count != 0) ||
+                (gate_write_accept_count != 0) ||
+                (up_write_accept_count != 0) ||
+                (silu_write_accept_count != 0) ||
+                (down_write_accept_count != 0) ||
+                (layer_write_accept_count != 0)) begin
+                fail_once("FAIL: input RMSNorm -> QKV precheck producer write counts mismatch");
+            end
+            if ((input_norm_qkv_write_reqs != EXPECTED_INPUT_NORM_QKV_WR_REQS) ||
+                (input_norm_qkv_write_words != EXPECTED_INPUT_NORM_QKV_WR_WORDS) ||
+                (input_norm_qkv_read_bursts != EXPECTED_INPUT_NORM_QKV_RD_REQS) ||
+                (input_norm_qkv_read_words != EXPECTED_INPUT_NORM_QKV_RD_WORDS)) begin
+                fail_once("FAIL: input RMSNorm -> QKV precheck memory counters mismatch");
+            end
+`ifdef QMAP_ONE_TOKEN_TB_USE_TOP
+            if ((top_tail_start_seen_count != 0) ||
+                (tail_done_seen_count != 0)) begin
+                fail_once("FAIL: input RMSNorm -> QKV precheck unexpectedly started final tail");
+            end
+`endif
+            if ((mismatch_count != 0) ||
+                (write_mismatch_count != 0) ||
+                (max_abs_diff != 0) ||
+                (total_fail_count != 0)) begin
+                $display("FAIL: input RMSNorm -> QKV precheck found mismatch_count=%0d write_mismatches=%0d max_abs=%0d total_fail=%0d",
+                         mismatch_count, write_mismatch_count, max_abs_diff, total_fail_count);
+                $finish(1);
+            end
+
+            $display("qmap_one_token_layer_scheduler input RMSNorm -> QKV precheck");
+            $display("  done cycle        = %0d", input_norm_qkv_done_cycle);
+            $display("  input_norm writes = %0d", input_norm_write_accept_count);
+            $display("  qkv writes        = q %0d k %0d v %0d",
+                     qkv_q_write_accept_count,
+                     qkv_k_write_accept_count,
+                     qkv_v_write_accept_count);
+            $display("  rd/wr             = %0d/%0d reads, %0d/%0d writes",
+                     input_norm_qkv_read_bursts,
+                     input_norm_qkv_read_words,
+                     input_norm_qkv_write_reqs,
+                     input_norm_qkv_write_words);
+            $display("  stage masks       = done 0x%0h error 0x%0h layer0_full done 0x%0h error 0x%0h",
+                     input_norm_qkv_stage_done_mask,
+                     input_norm_qkv_stage_error_mask,
+                     input_norm_qkv_layer0_full_stage_done_mask,
+                     input_norm_qkv_layer0_full_stage_error_mask);
+            if (trace_fd == 0) begin
+                $display("  trace             = disabled by +notrace");
+            end
+            else begin
+                $display("  trace             = %s", tracefile);
+            end
+            if (trace_fd != 0) begin
+                $fclose(trace_fd);
+            end
+            $display("PASS: qmap_one_token_layer_scheduler chained input RMSNorm output into QKV.");
+            $finish;
         end
         if ($test$plusargs("true2_only")) begin
             set_layer_packet_bases(1);
@@ -3250,8 +5695,157 @@ module tb_qmap_one_token_layer_scheduler;
             $display("PASS: qmap_one_token_layer_scheduler ran a focused true Layer 0 -> Layer 1 -> Layer 2 QMAP loop with exact write-back.");
             $finish;
         end
-        if ($test$plusargs("l1_only")) begin
+        if ($test$plusargs("l1_input_norm_only")) begin
             set_layer_packet_bases(1);
+            enable_layer_input_norm(1);
+            layer_start_index = 5'd1;
+            layer_count = 5'd1;
+            scoreboard_layer_iterations = 1;
+            prefill_layer0_output_for_l1_only();
+            corrupt_frontend_cos_dtype_l1();
+            repeat (10) @(posedge clk);
+            rst_n = 1'b1;
+            repeat (4) @(posedge clk);
+
+            $display("SCENARIO: focused Layer1 input RMSNorm -> QKV precheck start");
+            $display("  input norm output base = 0x%016h", input_norm_output_base_l1);
+            $fflush();
+            run_until_done(12000000);
+
+            if (!error) begin
+                fail_once("FAIL: focused Layer1 input RMSNorm precheck did not stop at invalid frontend descriptor");
+            end
+            if ((stage_done_mask != 2'b01) ||
+                (stage_error_mask != 2'b10)) begin
+                fail_once("FAIL: focused Layer1 input RMSNorm precheck stage masks mismatch");
+            end
+            if ((dut_read_burst_count != EXPECTED_INPUT_NORM_QKV_RD_REQS) ||
+                (dut_read_word_count != EXPECTED_INPUT_NORM_QKV_RD_WORDS) ||
+                (dut_write_req_count != EXPECTED_INPUT_NORM_QKV_WR_REQS) ||
+                (dut_write_word_count != EXPECTED_INPUT_NORM_QKV_WR_WORDS)) begin
+                fail_once("FAIL: focused Layer1 input RMSNorm precheck memory counters mismatch");
+            end
+            if ((input_norm_write_accept_count != VEC1024) ||
+                (qkv_q_write_accept_count != VEC2048) ||
+                (qkv_k_write_accept_count != VEC1024) ||
+                (qkv_v_write_accept_count != VEC1024) ||
+                (cache_write_accept_count != 0) ||
+                (q_rope_write_accept_count != 0) ||
+                (attn_out_write_accept_count != 0) ||
+                (o_proj_write_accept_count != 0) ||
+                (post_hidden_write_accept_count != 0) ||
+                (post_norm_write_accept_count != 0) ||
+                (gate_write_accept_count != 0) ||
+                (up_write_accept_count != 0) ||
+                (silu_write_accept_count != 0) ||
+                (down_write_accept_count != 0) ||
+                (layer_write_accept_count != 0)) begin
+                fail_once("FAIL: focused Layer1 input RMSNorm producer write counts mismatch");
+            end
+            if ((mismatch_count != 0) || (write_mismatch_count != 0) ||
+                (max_abs_diff != 0) || (total_fail_count != 0)) begin
+                $display("FAIL: focused Layer1 input RMSNorm found mismatch_count=%0d write_mismatches=%0d max_abs=%0d total_fail=%0d error=%0d",
+                         mismatch_count, write_mismatch_count, max_abs_diff, total_fail_count, error);
+                $finish(1);
+            end
+
+            $display("qmap_one_token_layer_scheduler focused Layer1 input RMSNorm -> QKV precheck");
+            $display("  done cycle        = %0d", cycle_count);
+            $display("  input_norm writes = %0d", input_norm_write_accept_count);
+            $display("  qkv writes        = q %0d k %0d v %0d",
+                     qkv_q_write_accept_count,
+                     qkv_k_write_accept_count,
+                     qkv_v_write_accept_count);
+            $display("  rd/wr             = %0d/%0d reads, %0d/%0d writes",
+                     dut_read_burst_count, dut_read_word_count,
+                     dut_write_req_count, dut_write_word_count);
+            if (trace_fd != 0) begin
+                $display("  trace             = %s", tracefile);
+                $fclose(trace_fd);
+            end
+            else begin
+                $display("  trace             = disabled by +notrace");
+            end
+            $display("PASS: qmap_one_token_layer_scheduler ran Layer1 input RMSNorm output into Layer1 QKV.");
+            $finish;
+        end
+        if ($test$plusargs("l2_input_norm_only")) begin
+            set_layer_packet_bases(2);
+            enable_layer_input_norm(2);
+            layer_start_index = 5'd2;
+            layer_count = 5'd1;
+            scoreboard_layer_iterations = 1;
+            prefill_layer1_output_for_l2_only();
+            corrupt_frontend_cos_dtype_l2();
+            repeat (10) @(posedge clk);
+            rst_n = 1'b1;
+            repeat (4) @(posedge clk);
+
+            $display("SCENARIO: focused Layer2 input RMSNorm -> QKV precheck start");
+            $display("  input norm output base = 0x%016h", input_norm_output_base_l2);
+            $fflush();
+            run_until_done(12000000);
+
+            if (!error) begin
+                fail_once("FAIL: focused Layer2 input RMSNorm precheck did not stop at invalid frontend descriptor");
+            end
+            if ((stage_done_mask != 2'b01) ||
+                (stage_error_mask != 2'b10)) begin
+                fail_once("FAIL: focused Layer2 input RMSNorm precheck stage masks mismatch");
+            end
+            if ((dut_read_burst_count != EXPECTED_INPUT_NORM_QKV_RD_REQS) ||
+                (dut_read_word_count != EXPECTED_INPUT_NORM_QKV_RD_WORDS) ||
+                (dut_write_req_count != EXPECTED_INPUT_NORM_QKV_WR_REQS) ||
+                (dut_write_word_count != EXPECTED_INPUT_NORM_QKV_WR_WORDS)) begin
+                fail_once("FAIL: focused Layer2 input RMSNorm precheck memory counters mismatch");
+            end
+            if ((input_norm_write_accept_count != VEC1024) ||
+                (qkv_q_write_accept_count != VEC2048) ||
+                (qkv_k_write_accept_count != VEC1024) ||
+                (qkv_v_write_accept_count != VEC1024) ||
+                (cache_write_accept_count != 0) ||
+                (q_rope_write_accept_count != 0) ||
+                (attn_out_write_accept_count != 0) ||
+                (o_proj_write_accept_count != 0) ||
+                (post_hidden_write_accept_count != 0) ||
+                (post_norm_write_accept_count != 0) ||
+                (gate_write_accept_count != 0) ||
+                (up_write_accept_count != 0) ||
+                (silu_write_accept_count != 0) ||
+                (down_write_accept_count != 0) ||
+                (layer_write_accept_count != 0)) begin
+                fail_once("FAIL: focused Layer2 input RMSNorm producer write counts mismatch");
+            end
+            if ((mismatch_count != 0) || (write_mismatch_count != 0) ||
+                (max_abs_diff != 0) || (total_fail_count != 0)) begin
+                $display("FAIL: focused Layer2 input RMSNorm found mismatch_count=%0d write_mismatches=%0d max_abs=%0d total_fail=%0d error=%0d",
+                         mismatch_count, write_mismatch_count, max_abs_diff, total_fail_count, error);
+                $finish(1);
+            end
+
+            $display("qmap_one_token_layer_scheduler focused Layer2 input RMSNorm -> QKV precheck");
+            $display("  done cycle        = %0d", cycle_count);
+            $display("  input_norm writes = %0d", input_norm_write_accept_count);
+            $display("  qkv writes        = q %0d k %0d v %0d",
+                     qkv_q_write_accept_count,
+                     qkv_k_write_accept_count,
+                     qkv_v_write_accept_count);
+            $display("  rd/wr             = %0d/%0d reads, %0d/%0d writes",
+                     dut_read_burst_count, dut_read_word_count,
+                     dut_write_req_count, dut_write_word_count);
+            if (trace_fd != 0) begin
+                $display("  trace             = %s", tracefile);
+                $fclose(trace_fd);
+            end
+            else begin
+                $display("  trace             = disabled by +notrace");
+            end
+            $display("PASS: qmap_one_token_layer_scheduler ran Layer2 input RMSNorm output into Layer2 QKV.");
+            $finish;
+        end
+        if ($test$plusargs("l1_only") || $test$plusargs("l1_input_norm_full_only")) begin
+            set_layer_packet_bases(1);
+            enable_layer_input_norm(1);
             layer_start_index = 5'd1;
             layer_count = 5'd1;
             scoreboard_layer_iterations = 1;
@@ -3260,18 +5854,72 @@ module tb_qmap_one_token_layer_scheduler;
             rst_n = 1'b1;
             repeat (4) @(posedge clk);
 
-            $display("SCENARIO: focused Layer1-only chained start");
+            $display("SCENARIO: focused Layer1 input RMSNorm -> full layer start");
             $fflush();
             run_until_done(25000000);
-            $display("SCENARIO: focused Layer1-only done cycle=%0d mismatch_count=%0d write_mismatches=%0d max_abs=%0d",
-                     cycle_count, mismatch_count, write_mismatch_count, max_abs_diff);
-            if ((mismatch_count != 0) || (write_mismatch_count != 0) || (max_abs_diff != 0) || error) begin
+            if ((layers_started != 5'd1) ||
+                (layers_completed != 5'd1) ||
+                (layer_done_mask != 28'h0000002) ||
+                (layer_error_mask != 28'h0000000)) begin
+                fail_once("FAIL: focused Layer1 input RMSNorm full-layer masks mismatch");
+            end
+            if ((stage_done_mask != 2'b11) ||
+                (stage_error_mask != 2'b00) ||
+                (layer0_full_stage_done_mask != 4'hf) ||
+                (layer0_full_stage_error_mask != 4'h0) ||
+                (body_stage_done_mask != 5'h1f) ||
+                (body_stage_error_mask != 5'h00)) begin
+                fail_once("FAIL: focused Layer1 input RMSNorm full-layer stage masks mismatch");
+            end
+            if ((dut_read_burst_count != EXPECTED_INPUT_NORM_FULL_RD_REQS) ||
+                (dut_read_word_count != EXPECTED_INPUT_NORM_FULL_RD_WORDS) ||
+                (dut_write_req_count != EXPECTED_INPUT_NORM_FULL_WR_REQS) ||
+                (dut_write_word_count != EXPECTED_INPUT_NORM_FULL_WR_WORDS)) begin
+                fail_once("FAIL: focused Layer1 input RMSNorm full-layer memory counters mismatch");
+            end
+            if ((input_norm_write_accept_count != VEC1024) ||
+                (qkv_q_write_accept_count != VEC2048) ||
+                (qkv_k_write_accept_count != VEC1024) ||
+                (qkv_v_write_accept_count != VEC1024) ||
+                (cache_write_accept_count != TOTAL_CACHE_WRITES) ||
+                (q_rope_write_accept_count != VEC2048) ||
+                (attn_out_write_accept_count != VEC2048) ||
+                (o_proj_write_accept_count != VEC1024) ||
+                (post_hidden_write_accept_count != VEC1024) ||
+                (post_norm_write_accept_count != VEC1024) ||
+                (gate_write_accept_count != VEC3072) ||
+                (up_write_accept_count != VEC3072) ||
+                (silu_write_accept_count != VEC3072) ||
+                (down_write_accept_count != VEC1024) ||
+                (layer_write_accept_count != VEC1024)) begin
+                fail_once("FAIL: focused Layer1 input RMSNorm full-layer producer write counts mismatch");
+            end
+            if ((mismatch_count != 0) || (write_mismatch_count != 0) || (max_abs_diff != 0) ||
+                error || (total_fail_count != 0)) begin
+                $display("FAIL: focused Layer1 input RMSNorm full-layer found mismatch_count=%0d write_mismatches=%0d max_abs=%0d total_fail=%0d error=%0d",
+                         mismatch_count, write_mismatch_count, max_abs_diff, total_fail_count, error);
                 $finish(1);
             end
+            $display("qmap_one_token_layer_scheduler focused Layer1 input RMSNorm -> full layer test");
+            $display("  done cycle        = %0d", cycle_count);
+            $display("  input_norm writes = %0d", input_norm_write_accept_count);
+            $display("  rd/wr             = %0d/%0d reads, %0d/%0d writes",
+                     dut_read_burst_count, dut_read_word_count,
+                     dut_write_req_count, dut_write_word_count);
+            $display("  layer mask        = done 0x%0h error 0x%0h", layer_done_mask, layer_error_mask);
+            if (trace_fd != 0) begin
+                $display("  trace             = %s", tracefile);
+                $fclose(trace_fd);
+            end
+            else begin
+                $display("  trace             = disabled by +notrace");
+            end
+            $display("PASS: qmap_one_token_layer_scheduler ran Layer1 input RMSNorm through full layer write-back.");
             $finish;
         end
-        if ($test$plusargs("l2_only")) begin
+        if ($test$plusargs("l2_only") || $test$plusargs("l2_input_norm_full_only")) begin
             set_layer_packet_bases(2);
+            enable_layer_input_norm(2);
             layer_start_index = 5'd2;
             layer_count = 5'd1;
             scoreboard_layer_iterations = 1;
@@ -3280,21 +5928,199 @@ module tb_qmap_one_token_layer_scheduler;
             rst_n = 1'b1;
             repeat (4) @(posedge clk);
 
-            $display("SCENARIO: focused Layer2-only chained start");
+            $display("SCENARIO: focused Layer2 input RMSNorm -> full layer start");
             $fflush();
             run_until_done(25000000);
-            $display("SCENARIO: focused Layer2-only done cycle=%0d mismatch_count=%0d write_mismatches=%0d max_abs=%0d",
-                     cycle_count, mismatch_count, write_mismatch_count, max_abs_diff);
             if ((layers_started != 5'd1) ||
                 (layers_completed != 5'd1) ||
                 (layer_done_mask != 28'h0000004) ||
                 (layer_error_mask != 28'h0000000)) begin
-                fail_once("FAIL: focused Layer2-only layer masks mismatch");
+                fail_once("FAIL: focused Layer2 input RMSNorm full-layer masks mismatch");
             end
-            if ((mismatch_count != 0) || (write_mismatch_count != 0) || (max_abs_diff != 0) || error || (total_fail_count != 0)) begin
+            if ((stage_done_mask != 2'b11) ||
+                (stage_error_mask != 2'b00) ||
+                (layer0_full_stage_done_mask != 4'hf) ||
+                (layer0_full_stage_error_mask != 4'h0) ||
+                (body_stage_done_mask != 5'h1f) ||
+                (body_stage_error_mask != 5'h00)) begin
+                fail_once("FAIL: focused Layer2 input RMSNorm full-layer stage masks mismatch");
+            end
+            if ((dut_read_burst_count != EXPECTED_INPUT_NORM_FULL_RD_REQS) ||
+                (dut_read_word_count != EXPECTED_INPUT_NORM_FULL_RD_WORDS) ||
+                (dut_write_req_count != EXPECTED_INPUT_NORM_FULL_WR_REQS) ||
+                (dut_write_word_count != EXPECTED_INPUT_NORM_FULL_WR_WORDS)) begin
+                fail_once("FAIL: focused Layer2 input RMSNorm full-layer memory counters mismatch");
+            end
+            if ((input_norm_write_accept_count != VEC1024) ||
+                (qkv_q_write_accept_count != VEC2048) ||
+                (qkv_k_write_accept_count != VEC1024) ||
+                (qkv_v_write_accept_count != VEC1024) ||
+                (cache_write_accept_count != TOTAL_CACHE_WRITES) ||
+                (q_rope_write_accept_count != VEC2048) ||
+                (attn_out_write_accept_count != VEC2048) ||
+                (o_proj_write_accept_count != VEC1024) ||
+                (post_hidden_write_accept_count != VEC1024) ||
+                (post_norm_write_accept_count != VEC1024) ||
+                (gate_write_accept_count != VEC3072) ||
+                (up_write_accept_count != VEC3072) ||
+                (silu_write_accept_count != VEC3072) ||
+                (down_write_accept_count != VEC1024) ||
+                (layer_write_accept_count != VEC1024)) begin
+                fail_once("FAIL: focused Layer2 input RMSNorm full-layer producer write counts mismatch");
+            end
+            if ((mismatch_count != 0) || (write_mismatch_count != 0) || (max_abs_diff != 0) ||
+                error || (total_fail_count != 0)) begin
+                $display("FAIL: focused Layer2 input RMSNorm full-layer found mismatch_count=%0d write_mismatches=%0d max_abs=%0d total_fail=%0d error=%0d",
+                         mismatch_count, write_mismatch_count, max_abs_diff, total_fail_count, error);
                 $finish(1);
             end
+            $display("qmap_one_token_layer_scheduler focused Layer2 input RMSNorm -> full layer test");
+            $display("  done cycle        = %0d", cycle_count);
+            $display("  input_norm writes = %0d", input_norm_write_accept_count);
+            $display("  rd/wr             = %0d/%0d reads, %0d/%0d writes",
+                     dut_read_burst_count, dut_read_word_count,
+                     dut_write_req_count, dut_write_word_count);
+            $display("  layer mask        = done 0x%0h error 0x%0h", layer_done_mask, layer_error_mask);
+            if (trace_fd != 0) begin
+                $display("  trace             = %s", tracefile);
+                $fclose(trace_fd);
+            end
+            else begin
+                $display("  trace             = disabled by +notrace");
+            end
+            $display("PASS: qmap_one_token_layer_scheduler ran Layer2 input RMSNorm through full layer write-back.");
             $finish;
+        end
+        if ($test$plusargs("l2_tail_only")) begin
+`ifndef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+            $display("FAIL: +l2_tail_only requires compile define QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL");
+            $finish(1);
+`else
+            set_layer_packet_bases(2);
+            enable_layer_input_norm(2);
+            layer_start_index = 5'd2;
+            layer_count = 5'd1;
+            scoreboard_layer_iterations = 1;
+            prefill_layer1_output_for_l2_only();
+            repeat (10) @(posedge clk);
+            rst_n = 1'b1;
+            repeat (4) @(posedge clk);
+
+            $display("SCENARIO: focused Layer2 scheduler -> final-token tail start");
+            $display("  tail final hidden base = 0x%016h", tail_final_hidden_base);
+            $display("  layer2 output base     = 0x%016h", layer_output_base_l2);
+            $fflush();
+            run_until_done(25000000);
+            tail_scheduler_done_cycle = cycle_count;
+            if ((layers_started != 5'd1) ||
+                (layers_completed != 5'd1) ||
+                (layer_done_mask != 28'h0000004) ||
+                (layer_error_mask != 28'h0000000)) begin
+                fail_once("FAIL: Layer2 scheduler handoff layer masks mismatch");
+            end
+            if ((mismatch_count != 0) || (write_mismatch_count != 0) ||
+                (max_abs_diff != 0) || error || (total_fail_count != 0)) begin
+                $display("FAIL: Layer2 scheduler handoff source failed mismatch_count=%0d write_mismatches=%0d max_abs=%0d total_fail=%0d error=%0d",
+                         mismatch_count, write_mismatch_count, max_abs_diff, total_fail_count, error);
+                $finish(1);
+            end
+            if (!layer_written) begin
+                fail_once("FAIL: Layer2 scheduler did not mark final layer output written");
+            end
+            if (scheduler_last_layer_output_base !== layer_output_base_l2) begin
+                fail_once("FAIL: Layer2 scheduler last layer output base mismatch");
+            end
+            if ((input_norm_write_accept_count != VEC1024) ||
+                (dut_read_burst_count != EXPECTED_INPUT_NORM_FULL_RD_REQS) ||
+                (dut_read_word_count != EXPECTED_INPUT_NORM_FULL_RD_WORDS) ||
+                (dut_write_req_count != EXPECTED_INPUT_NORM_FULL_WR_REQS) ||
+                (dut_write_word_count != EXPECTED_INPUT_NORM_FULL_WR_WORDS)) begin
+                fail_once("FAIL: Layer2 input RMSNorm scheduler handoff counters mismatch");
+            end
+            if (read_active || write_active || mem_rd_rsp_valid) begin
+                fail_once("FAIL: memory model still had active traffic before tail handoff");
+            end
+            clear_tail_scoreboard();
+            tail_scheduler_done_cycle = cycle_count;
+            use_tail_mem_manual = 1'b1;
+            repeat (4) @(posedge clk);
+
+            $display("SCENARIO: final-token tail consuming scheduler-written Layer2 output");
+            $fflush();
+            run_tail_until_done(90000000);
+
+            if (tail_error) begin
+                tail_fail("FAIL: final-token tail asserted error");
+            end
+            if (tail_norm_saturation) begin
+                tail_fail("FAIL: final-token tail asserted norm saturation");
+            end
+            if ((tail_best_token_id !== tail_expected_token) ||
+                (tail_best_score_q26 !== tail_expected_score_q26)) begin
+                tail_fail("FAIL: final-token tail token/score mismatch");
+            end
+            if ((tail_tiles_started != TAIL_MAX_TILES) ||
+                (tail_tiles_completed != TAIL_MAX_TILES)) begin
+                tail_fail("FAIL: final-token tail tile count mismatch");
+            end
+            if ((tail_hidden_req_count != 4) ||
+                (tail_gamma_req_count != 4) ||
+                (tail_norm_read_req_count != 4)) begin
+                tail_fail("FAIL: final-token tail hidden/gamma/norm read count mismatch");
+            end
+            if ((tail_weight_req_count != (TAIL_MAX_TILES * TAIL_WEIGHT_BURSTS_PER_TILE)) ||
+                (tail_scale_req_count != (TAIL_MAX_TILES * TAIL_SCALE_BURSTS_PER_TILE))) begin
+                tail_fail("FAIL: final-token tail LM-head weight/scale request count mismatch");
+            end
+            if ((tail_norm_write_word_count != TAIL_INPUT_SIZE) ||
+                (tail_output_write_word_count != 3)) begin
+                tail_fail("FAIL: final-token tail write word count mismatch");
+            end
+            if ((tail_first_hidden_read_cycle <= tail_scheduler_done_cycle) ||
+                (tail_first_hidden_read_cycle < 0)) begin
+                tail_fail("FAIL: final-token tail hidden read did not occur after scheduler done");
+            end
+            if ((tail_first_weight_read_cycle <= tail_first_hidden_read_cycle) ||
+                (tail_first_weight_read_cycle < 0)) begin
+                tail_fail("FAIL: final-token tail LM-head read did not occur after hidden read");
+            end
+            if ((tail_first_output_write_cycle <= tail_first_weight_read_cycle) ||
+                (tail_first_output_write_cycle < 0)) begin
+                tail_fail("FAIL: final-token tail output write did not occur after LM-head reads");
+            end
+            if (tail_done_seen_count != 1) begin
+                tail_fail("FAIL: final-token tail done pulse count mismatch");
+            end
+
+            $display("qmap_one_token_layer_scheduler Layer2 input RMSNorm -> qmap_final_token_tail_compute_path handoff test");
+            $display("  scheduler done cycle   = %0d", tail_scheduler_done_cycle);
+            $display("  tail done cycle        = %0d", tail_done_cycle);
+            $display("  first hidden read      = %0d", tail_first_hidden_read_cycle);
+            $display("  first LM-head read     = %0d", tail_first_weight_read_cycle);
+            $display("  first output write     = %0d", tail_first_output_write_cycle);
+            $display("  expected token/score   = %0d / %0d", tail_expected_token, tail_expected_score_q26);
+            $display("  observed token/score   = %0d / %0d", tail_best_token_id, tail_best_score_q26);
+            $display("  tail read reqs         = hidden %0d gamma %0d norm %0d weight %0d scale %0d total %0d",
+                     tail_hidden_req_count, tail_gamma_req_count, tail_norm_read_req_count,
+                     tail_weight_req_count, tail_scale_req_count, tail_read_req_count);
+            $display("  tail writes            = norm %0d output %0d write_mismatches %0d",
+                     tail_norm_write_word_count, tail_output_write_word_count, tail_write_mismatch_count);
+            $display("  trace                  = %s", tracefile);
+
+            if ((tail_mismatch_count != 0) || (tail_write_mismatch_count != 0) ||
+                (mismatch_count != 0) || (write_mismatch_count != 0) ||
+                (max_abs_diff != 0) || (total_fail_count != 0)) begin
+                $display("FAIL: scheduler-to-tail handoff found tail_mismatch=%0d tail_write_mismatch=%0d mismatch=%0d write_mismatch=%0d max_abs=%0d total_fail=%0d",
+                         tail_mismatch_count, tail_write_mismatch_count, mismatch_count,
+                         write_mismatch_count, max_abs_diff, total_fail_count);
+                $finish(1);
+            end
+            if (trace_fd != 0) begin
+                $fclose(trace_fd);
+            end
+            $display("PASS: Layer2 scheduler output was consumed directly by final-token tail in one shared-memory RTL simulation.");
+            $finish;
+`endif
         end
         repeat (10) @(posedge clk);
         rst_n = 1'b1;

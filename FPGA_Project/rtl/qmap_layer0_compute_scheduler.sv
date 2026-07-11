@@ -35,6 +35,7 @@ module qmap_layer0_compute_scheduler #(
     input  wire logic                         i_rst_n,
 
     input  wire logic                         i_start,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_input_norm_qmap_base_addr,
     input  wire logic [ADDR_WIDTH-1 : 0]      i_qkv_qmap_base_addr,
     input  wire logic [ADDR_WIDTH-1 : 0]      i_attn_frontend_qmap_base_addr,
     input  wire logic [ADDR_WIDTH-1 : 0]      i_attn_score_value_qmap_base_addr,
@@ -56,6 +57,10 @@ module qmap_layer0_compute_scheduler #(
     output logic [3 : 0]                      o_layer0_full_stage_error_mask,
     output logic [4 : 0]                      o_body_stage_done_mask,
     output logic [4 : 0]                      o_body_stage_error_mask,
+    output logic                              o_input_norm_done,
+    output logic                              o_input_norm_error,
+    output logic                              o_input_norm_saturation,
+    output logic [31 : 0]                     o_input_norm_write_word_count,
     output logic [31 : 0]                     o_qkv_rows_done,
     output logic signed [ROW_ACC_WIDTH-1 : 0] o_qkv_last_row_sum_q26,
     output logic signed [31 : 0]              o_qkv_last_output_q12_12,
@@ -87,8 +92,9 @@ module qmap_layer0_compute_scheduler #(
     input  wire logic                         i_mem_wr_error
 );
 
-    localparam logic [1 : 0] STAGE_QKV   = 2'd0;
-    localparam logic [1 : 0] STAGE_LAYER = 2'd1;
+    localparam logic [1 : 0] STAGE_INPUT_NORM = 2'd0;
+    localparam logic [1 : 0] STAGE_QKV        = 2'd1;
+    localparam logic [1 : 0] STAGE_LAYER      = 2'd2;
 
     typedef enum logic [1 : 0] {
         S_IDLE,
@@ -100,13 +106,37 @@ module qmap_layer0_compute_scheduler #(
     state_t state;
     logic [1 : 0] active_stage;
 
+    logic input_norm_start;
     logic qkv_start;
     logic layer_start;
 
+    logic input_norm_done;
+    logic input_norm_error;
+    logic input_norm_saturation;
+    logic [31 : 0] input_norm_write_word_count;
+    logic [31 : 0] input_norm_read_burst_count;
+    logic [31 : 0] input_norm_read_word_count;
+    logic [31 : 0] input_norm_write_req_count;
+    logic [31 : 0] input_norm_mem_write_word_count;
     logic qkv_done;
     logic qkv_error;
     logic layer_done;
     logic layer_error;
+
+    logic input_norm_rd_req_valid;
+    logic input_norm_rd_req_ready;
+    logic [ADDR_WIDTH-1 : 0] input_norm_rd_req_addr;
+    logic [15 : 0] input_norm_rd_req_len;
+    logic input_norm_rd_rsp_ready;
+
+    logic input_norm_wr_req_valid;
+    logic input_norm_wr_req_ready;
+    logic [ADDR_WIDTH-1 : 0] input_norm_wr_req_addr;
+    logic [15 : 0] input_norm_wr_req_len;
+    logic [31 : 0] input_norm_wr_data;
+    logic input_norm_wr_data_valid;
+    logic input_norm_wr_data_ready;
+    logic input_norm_wr_data_last;
 
     logic qkv_rd_req_valid;
     logic qkv_rd_req_ready;
@@ -147,23 +177,29 @@ module qmap_layer0_compute_scheduler #(
     logic [31 : 0] layer_write_req_count;
     logic [31 : 0] layer_write_word_count;
 
+    logic input_norm_active;
     logic qkv_active;
     logic layer_active;
     logic active_done;
     logic active_error;
 
+    assign input_norm_active = (state != S_IDLE) && (active_stage == STAGE_INPUT_NORM);
     assign qkv_active = (state != S_IDLE) && (active_stage == STAGE_QKV);
     assign layer_active = (state != S_IDLE) && (active_stage == STAGE_LAYER);
 
+    assign input_norm_start = (state == S_STAGE_START) && (active_stage == STAGE_INPUT_NORM);
     assign qkv_start = (state == S_STAGE_START) && (active_stage == STAGE_QKV);
     assign layer_start = (state == S_STAGE_START) && (active_stage == STAGE_LAYER);
 
+    assign input_norm_rd_req_ready = input_norm_active ? i_mem_rd_req_ready : 1'b0;
     assign qkv_rd_req_ready = qkv_active ? i_mem_rd_req_ready : 1'b0;
     assign layer_rd_req_ready = layer_active ? i_mem_rd_req_ready : 1'b0;
 
+    assign input_norm_wr_req_ready = input_norm_active ? i_mem_wr_req_ready : 1'b0;
     assign qkv_wr_req_ready = qkv_active ? i_mem_wr_req_ready : 1'b0;
     assign layer_wr_req_ready = layer_active ? i_mem_wr_req_ready : 1'b0;
 
+    assign input_norm_wr_data_ready = input_norm_active ? i_mem_wr_data_ready : 1'b0;
     assign qkv_wr_data_ready = qkv_active ? i_mem_wr_data_ready : 1'b0;
     assign layer_wr_data_ready = layer_active ? i_mem_wr_data_ready : 1'b0;
 
@@ -190,6 +226,21 @@ module qmap_layer0_compute_scheduler #(
         active_error = 1'b0;
 
         case (active_stage)
+            STAGE_INPUT_NORM: begin
+                o_mem_rd_req_valid = input_norm_rd_req_valid;
+                o_mem_rd_req_addr = input_norm_rd_req_addr;
+                o_mem_rd_req_len_bytes = input_norm_rd_req_len;
+                o_mem_rd_rsp_ready = input_norm_rd_rsp_ready;
+                o_mem_wr_req_valid = input_norm_wr_req_valid;
+                o_mem_wr_req_addr = input_norm_wr_req_addr;
+                o_mem_wr_req_len_bytes = input_norm_wr_req_len;
+                o_mem_wr_data = input_norm_wr_data;
+                o_mem_wr_data_valid = input_norm_wr_data_valid;
+                o_mem_wr_data_last = input_norm_wr_data_last;
+                active_done = input_norm_done;
+                active_error = input_norm_error;
+            end
+
             STAGE_QKV: begin
                 o_mem_rd_req_valid = qkv_rd_req_valid;
                 o_mem_rd_req_addr = qkv_rd_req_addr;
@@ -224,6 +275,52 @@ module qmap_layer0_compute_scheduler #(
             end
         endcase
     end
+
+    qmap_input_rmsnorm_compute_path #(
+        .ADDR_WIDTH(ADDR_WIDTH),
+        .DESCRIPTOR_SLOTS(`QMAP_INPUT_NORM_DESCRIPTOR_COUNT),
+        .INPUT_SIZE(INPUT_SIZE),
+        .MEM_DATA_WIDTH(MEM_DATA_WIDTH),
+        .MAX_READ_BYTES(`QMAP_INPUT_NORM_MAX_READ_BYTES)
+    ) input_rmsnorm (
+        .i_clk(i_clk),
+        .i_rst_n(i_rst_n),
+        .i_start(input_norm_start),
+        .i_qmap_base_addr(i_input_norm_qmap_base_addr),
+        .o_busy(),
+        .o_done(input_norm_done),
+        .o_error(input_norm_error),
+        .o_norm_saturation(input_norm_saturation),
+        .o_norm_cycle_count(),
+        .o_sum_squares(),
+        .o_mean_square(),
+        .o_inv_rms(),
+        .o_norm_write_word_count(input_norm_write_word_count),
+        .o_mem_read_burst_count(input_norm_read_burst_count),
+        .o_mem_read_word_count(input_norm_read_word_count),
+        .o_mem_write_req_count(input_norm_write_req_count),
+        .o_mem_write_word_count(input_norm_mem_write_word_count),
+        .o_state_debug(),
+        .o_read_slot_debug(),
+        .o_mem_rd_req_valid(input_norm_rd_req_valid),
+        .i_mem_rd_req_ready(input_norm_rd_req_ready),
+        .o_mem_rd_req_addr(input_norm_rd_req_addr),
+        .o_mem_rd_req_len_bytes(input_norm_rd_req_len),
+        .i_mem_rd_rsp_valid(input_norm_active ? i_mem_rd_rsp_valid : 1'b0),
+        .o_mem_rd_rsp_ready(input_norm_rd_rsp_ready),
+        .i_mem_rd_rsp_data(i_mem_rd_rsp_data),
+        .i_mem_rd_rsp_last(input_norm_active ? i_mem_rd_rsp_last : 1'b0),
+        .o_mem_wr_req_valid(input_norm_wr_req_valid),
+        .i_mem_wr_req_ready(input_norm_wr_req_ready),
+        .o_mem_wr_req_addr(input_norm_wr_req_addr),
+        .o_mem_wr_req_len_bytes(input_norm_wr_req_len),
+        .o_mem_wr_data(input_norm_wr_data),
+        .o_mem_wr_data_valid(input_norm_wr_data_valid),
+        .i_mem_wr_data_ready(input_norm_wr_data_ready),
+        .o_mem_wr_data_last(input_norm_wr_data_last),
+        .i_mem_wr_done(input_norm_active ? i_mem_wr_done : 1'b0),
+        .i_mem_wr_error(input_norm_active ? i_mem_wr_error : 1'b0)
+    );
 
     qmap_qkv_projection_compute_path #(
         .ADDR_WIDTH(ADDR_WIDTH),
@@ -324,6 +421,10 @@ module qmap_layer0_compute_scheduler #(
             active_stage <= STAGE_QKV;
             o_done <= 1'b0;
             o_error <= 1'b0;
+            o_input_norm_done <= 1'b0;
+            o_input_norm_error <= 1'b0;
+            o_input_norm_saturation <= 1'b0;
+            o_input_norm_write_word_count <= 32'd0;
             o_stage_done_mask <= 2'd0;
             o_stage_error_mask <= 2'd0;
             o_mem_read_burst_count <= 32'd0;
@@ -350,8 +451,12 @@ module qmap_layer0_compute_scheduler #(
             case (state)
                 S_IDLE: begin
                     if (i_start) begin
-                        active_stage <= STAGE_QKV;
+                        active_stage <= (i_input_norm_qmap_base_addr != '0) ? STAGE_INPUT_NORM : STAGE_QKV;
                         o_error <= 1'b0;
+                        o_input_norm_done <= 1'b0;
+                        o_input_norm_error <= 1'b0;
+                        o_input_norm_saturation <= 1'b0;
+                        o_input_norm_write_word_count <= 32'd0;
                         o_stage_done_mask <= 2'd0;
                         o_stage_error_mask <= 2'd0;
                         o_mem_read_burst_count <= 32'd0;
@@ -370,17 +475,33 @@ module qmap_layer0_compute_scheduler #(
                     if (active_done) begin
                         if (active_error) begin
                             o_error <= 1'b1;
-                            o_stage_error_mask[active_stage] <= 1'b1;
+                            if (active_stage == STAGE_INPUT_NORM) begin
+                                o_input_norm_error <= 1'b1;
+                            end
+                            else if (active_stage == STAGE_QKV) begin
+                                o_stage_error_mask[0] <= 1'b1;
+                            end
+                            else begin
+                                o_stage_error_mask[1] <= 1'b1;
+                            end
                             state <= S_DONE;
                         end
                         else begin
-                            o_stage_done_mask[active_stage] <= 1'b1;
-                            if (active_stage == STAGE_LAYER) begin
-                                state <= S_DONE;
+                            if (active_stage == STAGE_INPUT_NORM) begin
+                                o_input_norm_done <= 1'b1;
+                                o_input_norm_saturation <= input_norm_saturation;
+                                o_input_norm_write_word_count <= input_norm_write_word_count;
+                                active_stage <= STAGE_QKV;
+                                state <= S_STAGE_START;
                             end
-                            else begin
+                            else if (active_stage == STAGE_QKV) begin
+                                o_stage_done_mask[0] <= 1'b1;
                                 active_stage <= STAGE_LAYER;
                                 state <= S_STAGE_START;
+                            end
+                            else begin
+                                o_stage_done_mask[1] <= 1'b1;
+                                state <= S_DONE;
                             end
                         end
                     end

@@ -33,16 +33,16 @@
     "down_output_count": 0
   },
   "debug": {
-    "activation_q12_12_min": -3115,
-    "activation_q12_12_max": 2364,
-    "activation_q12_12_max_abs": 3115,
-    "down_q26_min": -40285971,
-    "down_q26_max": 162363747,
-    "down_q12_12_min": -2459,
-    "down_q12_12_max": 9909,
-    "down_q12_12_max_abs": 9909,
-    "fixed_down_vs_hf_max_abs_diff": 1.4673497676849365,
-    "fixed_down_vs_hf_mean_abs_diff": 0.07154120570680789
+    "activation_q12_12_min": -5600,
+    "activation_q12_12_max": 3076,
+    "activation_q12_12_max_abs": 5600,
+    "down_q26_min": -39480539,
+    "down_q26_max": 246939269,
+    "down_q12_12_min": -2410,
+    "down_q12_12_max": 15071,
+    "down_q12_12_max_abs": 15071,
+    "fixed_down_vs_hf_max_abs_diff": 0.20709586143493652,
+    "fixed_down_vs_hf_mean_abs_diff": 0.032961016615217886
   },
   "files": {
     "activation": "layer1_chained_mlp_down_proj_stage_real_activation.hex",

@@ -47,26 +47,26 @@
   "debug": {
     "q_projection_recompute_vs_artifact_max_abs_diff": null,
     "k_projection_recompute_vs_artifact_max_abs_diff": null,
-    "q_input_q12_12_max_abs": 2159,
-    "k_input_q12_12_max_abs": 2223,
-    "q_norm_q12_12_max_abs": 44216,
-    "k_norm_q12_12_max_abs": 569243,
-    "q_rope_q12_12_max_abs": 38261,
-    "k_rope_q12_12_max_abs": 569225,
+    "q_input_q12_12_max_abs": 8898,
+    "k_input_q12_12_max_abs": 7436,
+    "q_norm_q12_12_max_abs": 35808,
+    "k_norm_q12_12_max_abs": 650388,
+    "q_rope_q12_12_max_abs": 34154,
+    "k_rope_q12_12_max_abs": 650368,
     "q_norm_head0": {
-      "sum_squares": 6392422,
-      "mean_square": 49940,
-      "rms_q12_12": 223,
-      "inv_rms_uq8_16": 1203746
+      "sum_squares": 47497566,
+      "mean_square": 371074,
+      "rms_q12_12": 609,
+      "inv_rms_uq8_16": 440780
     },
     "k_norm_head0": {
-      "sum_squares": 13787973,
-      "mean_square": 107718,
-      "rms_q12_12": 328,
-      "inv_rms_uq8_16": 818400
+      "sum_squares": 146861337,
+      "mean_square": 1147354,
+      "rms_q12_12": 1071,
+      "inv_rms_uq8_16": 250640
     },
-    "q_rope_float_max_abs": 9.341064453125,
-    "k_rope_float_max_abs": 138.970947265625
+    "q_rope_float_max_abs": 8.33837890625,
+    "k_rope_float_max_abs": 158.78125
   },
   "files": {
     "q_input": "layer2_chained_qk_norm_rope_stage_128_real_q_input.hex",

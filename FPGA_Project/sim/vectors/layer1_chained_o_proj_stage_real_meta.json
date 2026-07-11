@@ -8,7 +8,7 @@
     "mode": "hex_override",
     "source_name": "qmap_layer1_chained_attention_score_value",
     "source_hex": "FPGA_Project/sim/vectors/qmap_layer1_chained_attention_score_value_attn_out_expected_words32.hex",
-    "override_max_abs_diff_vs_recomputed": 1494
+    "override_max_abs_diff_vs_recomputed": 144
   },
   "token_ids": [
     785,
@@ -44,15 +44,15 @@
     "o_proj_output_count": 0
   },
   "debug": {
-    "attn_input_q12_12_max_abs": 2253,
-    "row_sum_q26_min": -25096496,
-    "row_sum_q26_max": 32711987,
-    "expected_q12_12_max_abs": 1996,
-    "fixed_attn_input_vs_fp32_o_proj_input_max_abs_diff": 0.40448829531669617,
-    "fixed_o_proj_vs_fp32_from_fp32_attn_max_abs_diff": 0.5405476093292236,
-    "fixed_o_proj_vs_fp32_from_fp32_attn_mean_abs_diff": 0.06875068080125857,
-    "fixed_o_proj_vs_hf_o_proj_output_max_abs_diff": 0.5405474901199341,
-    "fixed_o_proj_vs_hf_o_proj_output_mean_abs_diff": 0.06875068409021878
+    "attn_input_q12_12_max_abs": 2290,
+    "row_sum_q26_min": -44711992,
+    "row_sum_q26_max": 31025176,
+    "expected_q12_12_max_abs": 2730,
+    "fixed_attn_input_vs_fp32_o_proj_input_max_abs_diff": 0.05472531542181969,
+    "fixed_o_proj_vs_fp32_from_fp32_attn_max_abs_diff": 0.08906397223472595,
+    "fixed_o_proj_vs_fp32_from_fp32_attn_mean_abs_diff": 0.013786728397008119,
+    "fixed_o_proj_vs_hf_o_proj_output_max_abs_diff": 0.08906394243240356,
+    "fixed_o_proj_vs_hf_o_proj_output_mean_abs_diff": 0.013786729043431478
   },
   "files": {
     "activation": "layer1_chained_o_proj_stage_real_activation.hex",
