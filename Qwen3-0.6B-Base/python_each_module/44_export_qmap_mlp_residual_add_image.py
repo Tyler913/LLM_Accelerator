@@ -9,9 +9,11 @@ from typing import Any
 
 import numpy as np
 
+from vector_workspace import resolve_sim_vector_dir
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
+SIM_VECTOR_DIR = resolve_sim_vector_dir(REPO_ROOT)
 QMAP_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_qmap_v1"
 
 PREFIX = "mlp_residual_add_stage_real"
@@ -205,6 +207,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--qmap-base", type=parse_int_auto, default=QMAP_BASE)
     parser.add_argument("--post-attn-qmap-prefix", default=DEFAULT_POST_ATTN_QMAP_PREFIX)
     parser.add_argument("--down-qmap-prefix", default=DEFAULT_DOWN_QMAP_PREFIX)
+    parser.add_argument("--post-attn-base-addr", type=parse_int_auto, default=None)
+    parser.add_argument("--down-base-addr", type=parse_int_auto, default=None)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
@@ -327,7 +331,11 @@ def main() -> None:
             element_bits=POST_ATTENTION_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("post_attn_hidden_q14_10"),
+            base_addr=(
+                args.post_attn_base_addr
+                if args.post_attn_base_addr is not None
+                else addr("post_attn_hidden_q14_10")
+            ),
             nbytes=vector_bytes,
             dims=(INPUT_SIZE, 0, 0, 0),
             strides=(4, 0, 0, 0),
@@ -342,7 +350,11 @@ def main() -> None:
             element_bits=DOWN_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("down_out_q12_12"),
+            base_addr=(
+                args.down_base_addr
+                if args.down_base_addr is not None
+                else addr("down_out_q12_12")
+            ),
             nbytes=vector_bytes,
             dims=(INPUT_SIZE, 0, 0, 0),
             strides=(4, 0, 0, 0),
@@ -420,8 +432,16 @@ def main() -> None:
             "down_to_out_shift": DOWN_TO_OUT_SHIFT,
         },
         "memory_layout": {
-            "post_attn_hidden_addr": addr("post_attn_hidden_q14_10"),
-            "down_out_addr": addr("down_out_q12_12"),
+            "post_attn_hidden_addr": (
+                args.post_attn_base_addr
+                if args.post_attn_base_addr is not None
+                else addr("post_attn_hidden_q14_10")
+            ),
+            "down_out_addr": (
+                args.down_base_addr
+                if args.down_base_addr is not None
+                else addr("down_out_q12_12")
+            ),
             "layer_out_addr": addr("layer_out_q14_10"),
             "expected_addr": addr("expected_layer_out_q14_10"),
             "vector_bytes": vector_bytes,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_DIR = Path(__file__).resolve().parent
+TEMP_ROOT = REPO_ROOT / "Temp"
 SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
 Q4_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_q4_v0"
 QMAP_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_qmap_v1"
@@ -19,9 +21,23 @@ QMAP_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_qmap_v1
 QKV_QMAP_BASE0 = 0x0000_0004_0008_0000
 BODY_QMAP_BASE0 = 0x0000_0004_0500_0000
 LAYER_QMAP_STRIDE = 0x0000_0000_1000_0000
+QKV_QMAP_STRIDE = LAYER_QMAP_STRIDE
+BODY_QMAP_STRIDE = LAYER_QMAP_STRIDE
 WEIGHT_WINDOW_BASE0 = 0x0000_0004_0600_0000
 WEIGHT_WINDOW_STRIDE = 0x0000_0000_0100_0000
+O_PROJ_WEIGHT_OFFSET = 0x0000_0000
+O_PROJ_SCALE_OFFSET = 0x0010_0000
+MLP_GATE_WEIGHT_OFFSET = 0x0020_0000
+MLP_GATE_SCALE_OFFSET = 0x0038_0000
+MLP_UP_WEIGHT_OFFSET = 0x0040_0000
+MLP_UP_SCALE_OFFSET = 0x0058_0000
+MLP_DOWN_WEIGHT_OFFSET = 0x0060_0000
+MLP_DOWN_SCALE_OFFSET = 0x0078_0000
 INPUT_RMSNORM_OUTPUT_OFFSET = 0x0000_2540
+DESCRIPTOR_TABLE_WORD_OFFSET = 0x0100 // 4
+DESCRIPTOR_WORDS = 32
+DESC_BASE_LO_WORD = 8
+DESC_BASE_HI_WORD = 9
 
 
 def parse_int_auto(text: str) -> int:
@@ -95,12 +111,13 @@ class LayerPrefixes:
 
 
 def layer_bases(layer_id: int) -> LayerBases:
-    qmap_offset = layer_id * LAYER_QMAP_STRIDE
+    qkv_offset = layer_id * QKV_QMAP_STRIDE
+    body_offset = layer_id * BODY_QMAP_STRIDE
     weight_base = WEIGHT_WINDOW_BASE0 + (layer_id * WEIGHT_WINDOW_STRIDE)
-    body_base = BODY_QMAP_BASE0 + qmap_offset
+    body_base = BODY_QMAP_BASE0 + body_offset
     return LayerBases(
         input_rmsnorm=body_base + 0x000A_0000,
-        qkv=QKV_QMAP_BASE0 + qmap_offset,
+        qkv=QKV_QMAP_BASE0 + qkv_offset,
         attn_frontend=body_base + 0x0002_0000,
         attn_score_value=body_base + 0x0003_0000,
         o_proj=body_base + 0x0004_0000,
@@ -109,22 +126,27 @@ def layer_bases(layer_id: int) -> LayerBases:
         mlp_silu_mul=body_base + 0x0007_0000,
         mlp_down=body_base + 0x0008_0000,
         mlp_residual_add=body_base + 0x0009_0000,
-        o_proj_weight=weight_base + 0x0000_0000,
-        o_proj_scale=weight_base + 0x0010_0000,
-        mlp_gate_weight=weight_base + 0x0020_0000,
-        mlp_gate_scale=weight_base + 0x0038_0000,
-        mlp_up_weight=weight_base + 0x0040_0000,
-        mlp_up_scale=weight_base + 0x0058_0000,
-        mlp_down_weight=weight_base + 0x0060_0000,
-        mlp_down_scale=weight_base + 0x0078_0000,
+        o_proj_weight=weight_base + O_PROJ_WEIGHT_OFFSET,
+        o_proj_scale=weight_base + O_PROJ_SCALE_OFFSET,
+        mlp_gate_weight=weight_base + MLP_GATE_WEIGHT_OFFSET,
+        mlp_gate_scale=weight_base + MLP_GATE_SCALE_OFFSET,
+        mlp_up_weight=weight_base + MLP_UP_WEIGHT_OFFSET,
+        mlp_up_scale=weight_base + MLP_UP_SCALE_OFFSET,
+        mlp_down_weight=weight_base + MLP_DOWN_WEIGHT_OFFSET,
+        mlp_down_scale=weight_base + MLP_DOWN_SCALE_OFFSET,
     )
 
 
 def layer_prefixes(layer_id: int) -> LayerPrefixes:
+    qkv_prefix = (
+        "layer0_qkv_from_embedding_rmsnorm_full"
+        if layer_id == 0
+        else f"layer{layer_id}_qkv_from_layer{layer_id - 1}_rtl_full"
+    )
     return LayerPrefixes(
         input_norm_prefix=f"layer{layer_id}_chained_input_rmsnorm_stage_real",
         input_norm_qmap_prefix=f"qmap_layer{layer_id}_chained_input_rmsnorm",
-        qkv_prefix=f"layer{layer_id}_qkv_from_layer{layer_id - 1}_rtl_full",
+        qkv_prefix=qkv_prefix,
         qk_prefix=f"layer{layer_id}_chained_qk_norm_rope_stage_128_real",
         kv_prefix=f"layer{layer_id}_chained_kv_cache_append_real",
         base_score_prefix=f"layer{layer_id}_attention_score_stage_real",
@@ -157,6 +179,8 @@ def default_previous_layer_hex(layer_id: int) -> Path:
 
 
 def default_previous_layer_label(layer_id: int) -> str:
+    if layer_id == 0:
+        return "external_layer0_input_hidden"
     if layer_id == 1:
         return "layer0_qmap_mlp_residual_add"
     return f"layer{layer_id - 1}_chained_mlp_residual_add"
@@ -194,6 +218,18 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         help="Output chain manifest JSON",
     )
     parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=None,
+        help="Optional Temp-contained root for all generated sim/QMAP files",
+    )
+    parser.add_argument(
+        "--input-hidden-base",
+        type=parse_int_auto,
+        default=None,
+        help="Optional producer-written hidden-buffer address for input RMSNorm",
+    )
+    parser.add_argument(
         "--qkv-npz",
         type=Path,
         default=None,
@@ -202,8 +238,28 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--qkv-qmap-base0", type=parse_int_auto, default=QKV_QMAP_BASE0)
     parser.add_argument("--body-qmap-base0", type=parse_int_auto, default=BODY_QMAP_BASE0)
     parser.add_argument("--layer-qmap-stride", type=parse_int_auto, default=LAYER_QMAP_STRIDE)
+    parser.add_argument(
+        "--qkv-qmap-stride",
+        type=parse_int_auto,
+        default=None,
+        help="Optional QKV packet stride; defaults to --layer-qmap-stride",
+    )
+    parser.add_argument(
+        "--body-qmap-stride",
+        type=parse_int_auto,
+        default=None,
+        help="Optional body packet stride; defaults to --layer-qmap-stride",
+    )
     parser.add_argument("--weight-window-base0", type=parse_int_auto, default=WEIGHT_WINDOW_BASE0)
     parser.add_argument("--weight-window-stride", type=parse_int_auto, default=WEIGHT_WINDOW_STRIDE)
+    parser.add_argument("--o-proj-weight-offset", type=parse_int_auto, default=O_PROJ_WEIGHT_OFFSET)
+    parser.add_argument("--o-proj-scale-offset", type=parse_int_auto, default=O_PROJ_SCALE_OFFSET)
+    parser.add_argument("--mlp-gate-weight-offset", type=parse_int_auto, default=MLP_GATE_WEIGHT_OFFSET)
+    parser.add_argument("--mlp-gate-scale-offset", type=parse_int_auto, default=MLP_GATE_SCALE_OFFSET)
+    parser.add_argument("--mlp-up-weight-offset", type=parse_int_auto, default=MLP_UP_WEIGHT_OFFSET)
+    parser.add_argument("--mlp-up-scale-offset", type=parse_int_auto, default=MLP_UP_SCALE_OFFSET)
+    parser.add_argument("--mlp-down-weight-offset", type=parse_int_auto, default=MLP_DOWN_WEIGHT_OFFSET)
+    parser.add_argument("--mlp-down-scale-offset", type=parse_int_auto, default=MLP_DOWN_SCALE_OFFSET)
 
 
 def parse_args() -> argparse.Namespace:
@@ -221,7 +277,9 @@ def run_command(cmd: list[str], *, dry_run: bool, commands: list[list[str]]) -> 
         print(f"DRY-RUN: {printable}")
         return
     print(f"RUN: {printable}", flush=True)
-    subprocess.run(cmd, cwd=REPO_ROOT, check=True)
+    env = os.environ.copy()
+    env["QMAP_SIM_VECTOR_DIR"] = str(SIM_VECTOR_DIR.resolve())
+    subprocess.run(cmd, cwd=REPO_ROOT, env=env, check=True)
 
 
 def script(name: str) -> str:
@@ -246,20 +304,77 @@ def sim_hex(name: str) -> Path:
     return SIM_VECTOR_DIR / f"{name}_words32.hex"
 
 
-def build_plan(args: argparse.Namespace) -> tuple[LayerBases, LayerPrefixes, dict[str, Any]]:
-    global QKV_QMAP_BASE0, BODY_QMAP_BASE0, LAYER_QMAP_STRIDE, WEIGHT_WINDOW_BASE0, WEIGHT_WINDOW_STRIDE
+def require_temp_path(path: Path) -> Path:
+    resolved = path.resolve()
+    try:
+        resolved.relative_to(TEMP_ROOT.resolve())
+    except ValueError as exc:
+        raise ValueError(f"output root must stay under {TEMP_ROOT.resolve()}") from exc
+    return resolved
 
-    if args.layer_id < 1:
-        raise ValueError("chained export requires --layer-id >= 1")
+
+def descriptor_base_from_hex(image_hex: Path, slot: int) -> int:
+    lo_index = DESCRIPTOR_TABLE_WORD_OFFSET + (slot * DESCRIPTOR_WORDS) + DESC_BASE_LO_WORD
+    hi_index = DESCRIPTOR_TABLE_WORD_OFFSET + (slot * DESCRIPTOR_WORDS) + DESC_BASE_HI_WORD
+    needed = hi_index + 1
+    words: list[int] = []
+    with image_hex.open("r", encoding="ascii") as file:
+        for line in file:
+            stripped = line.strip()
+            if stripped:
+                words.append(int(stripped, 16))
+                if len(words) >= needed:
+                    break
+    if len(words) < needed:
+        raise RuntimeError(f"descriptor table is truncated in {image_hex}")
+    return words[lo_index] | (words[hi_index] << 32)
+
+
+def build_plan(args: argparse.Namespace) -> tuple[LayerBases, LayerPrefixes, dict[str, Any]]:
+    global QKV_QMAP_BASE0, BODY_QMAP_BASE0, LAYER_QMAP_STRIDE
+    global QKV_QMAP_STRIDE, BODY_QMAP_STRIDE
+    global WEIGHT_WINDOW_BASE0, WEIGHT_WINDOW_STRIDE, SIM_VECTOR_DIR, QMAP_VECTOR_DIR
+    global O_PROJ_WEIGHT_OFFSET, O_PROJ_SCALE_OFFSET
+    global MLP_GATE_WEIGHT_OFFSET, MLP_GATE_SCALE_OFFSET
+    global MLP_UP_WEIGHT_OFFSET, MLP_UP_SCALE_OFFSET
+    global MLP_DOWN_WEIGHT_OFFSET, MLP_DOWN_SCALE_OFFSET
+
+    if args.layer_id < 0:
+        raise ValueError("chained export requires --layer-id >= 0")
+    if args.layer_id == 0 and args.previous_layer_output_hex is None:
+        raise ValueError("Layer 0 chained export requires --previous-layer-output-hex")
+
+    if args.output_root is not None:
+        output_root = require_temp_path(args.output_root)
+        SIM_VECTOR_DIR = output_root / "sim_vectors"
+        QMAP_VECTOR_DIR = output_root / "qmap"
+        if not args.dry_run:
+            SIM_VECTOR_DIR.mkdir(parents=True, exist_ok=True)
+            QMAP_VECTOR_DIR.mkdir(parents=True, exist_ok=True)
     QKV_QMAP_BASE0 = int(args.qkv_qmap_base0)
     BODY_QMAP_BASE0 = int(args.body_qmap_base0)
     LAYER_QMAP_STRIDE = int(args.layer_qmap_stride)
+    QKV_QMAP_STRIDE = int(args.qkv_qmap_stride or LAYER_QMAP_STRIDE)
+    BODY_QMAP_STRIDE = int(args.body_qmap_stride or LAYER_QMAP_STRIDE)
     WEIGHT_WINDOW_BASE0 = int(args.weight_window_base0)
     WEIGHT_WINDOW_STRIDE = int(args.weight_window_stride)
+    O_PROJ_WEIGHT_OFFSET = int(args.o_proj_weight_offset)
+    O_PROJ_SCALE_OFFSET = int(args.o_proj_scale_offset)
+    MLP_GATE_WEIGHT_OFFSET = int(args.mlp_gate_weight_offset)
+    MLP_GATE_SCALE_OFFSET = int(args.mlp_gate_scale_offset)
+    MLP_UP_WEIGHT_OFFSET = int(args.mlp_up_weight_offset)
+    MLP_UP_SCALE_OFFSET = int(args.mlp_up_scale_offset)
+    MLP_DOWN_WEIGHT_OFFSET = int(args.mlp_down_weight_offset)
+    MLP_DOWN_SCALE_OFFSET = int(args.mlp_down_scale_offset)
 
     bases = layer_bases(args.layer_id)
     prefixes = layer_prefixes(args.layer_id)
     qkv_npz = args.qkv_npz or (Q4_VECTOR_DIR / f"qkv_layer{args.layer_id}_last_token_q4.npz")
+    qkv_manifest = (
+        qkv_npz.with_name(f"qkv_layer{args.layer_id}_last_token_q4_manifest.json")
+        if args.qkv_npz is not None
+        else Q4_VECTOR_DIR / f"qkv_layer{args.layer_id}_last_token_q4_manifest.json"
+    )
     previous_hex = args.previous_layer_output_hex or default_previous_layer_hex(args.layer_id)
     previous_label = args.previous_layer_label or default_previous_layer_label(args.layer_id)
     manifest = args.manifest or (QMAP_VECTOR_DIR / f"layer{args.layer_id}_chained_layer_manifest.json")
@@ -267,8 +382,10 @@ def build_plan(args: argparse.Namespace) -> tuple[LayerBases, LayerPrefixes, dic
     paths: dict[str, Any] = {
         "manifest": manifest,
         "qkv_npz": qkv_npz,
+        "qkv_manifest": qkv_manifest,
         "previous_layer_output_hex": previous_hex,
         "previous_layer_label": previous_label,
+        "output_root": require_temp_path(args.output_root) if args.output_root is not None else None,
         "input_norm": {
             "binary": qmap_bin(f"layer{args.layer_id}_chained_input_rmsnorm_runtime"),
             "manifest": qmap_manifest(f"layer{args.layer_id}_chained_input_rmsnorm_runtime"),
@@ -363,7 +480,7 @@ def emit_commands(
             "--output",
             qkv_npz,
             "--manifest",
-            Q4_VECTOR_DIR / f"qkv_layer{args.layer_id}_last_token_q4_manifest.json",
+            paths["qkv_manifest"],
         )
         run_command(cmd, dry_run=args.dry_run, commands=commands)
     else:
@@ -383,28 +500,35 @@ def emit_commands(
             32,
             "--input-source-name",
             previous_label,
+            "--output-dir",
+            SIM_VECTOR_DIR,
         ),
         dry_run=args.dry_run,
         commands=commands,
     )
+    input_norm_cmd = py_cmd(
+        "48_export_qmap_input_rmsnorm_image.py",
+        "--prefix",
+        prefixes.input_norm_prefix,
+        "--vector-dir",
+        SIM_VECTOR_DIR,
+        "--layer-id",
+        args.layer_id,
+        "--qmap-base",
+        hex(bases.input_rmsnorm),
+        "--output",
+        input_norm["binary"],
+        "--manifest",
+        input_norm["manifest"],
+        "--sim-hex",
+        input_norm["sim_hex"],
+        "--expected-hex",
+        input_norm["expected_hex"],
+    )
+    if args.input_hidden_base is not None:
+        input_norm_cmd.extend(["--hidden-base-addr", hex(args.input_hidden_base)])
     run_command(
-        py_cmd(
-            "48_export_qmap_input_rmsnorm_image.py",
-            "--prefix",
-            prefixes.input_norm_prefix,
-            "--layer-id",
-            args.layer_id,
-            "--qmap-base",
-            hex(bases.input_rmsnorm),
-            "--output",
-            input_norm["binary"],
-            "--manifest",
-            input_norm["manifest"],
-            "--sim-hex",
-            input_norm["sim_hex"],
-            "--expected-hex",
-            input_norm["expected_hex"],
-        ),
+        input_norm_cmd,
         dry_run=args.dry_run,
         commands=commands,
     )
@@ -473,24 +597,36 @@ def emit_commands(
         commands=commands,
     )
     frontend = paths["frontend"]
+    frontend_cmd = py_cmd(
+        "37_export_qmap_attention_frontend_image.py",
+        "--qk-prefix",
+        prefixes.qk_prefix,
+        "--kv-prefix",
+        prefixes.kv_prefix,
+        "--qmap-base",
+        hex(bases.attn_frontend),
+        "--output",
+        frontend["binary"],
+        "--manifest",
+        frontend["manifest"],
+        "--sim-hex",
+        frontend["sim_hex"],
+        "--q-rope-expected-hex",
+        frontend["q_rope_expected_hex"],
+    )
+    if not args.dry_run:
+        frontend_cmd.extend(
+            [
+                "--q-base-addr",
+                hex(descriptor_base_from_hex(qkv["sim_hex"], 8)),
+                "--k-base-addr",
+                hex(descriptor_base_from_hex(qkv["sim_hex"], 9)),
+                "--v-base-addr",
+                hex(descriptor_base_from_hex(qkv["sim_hex"], 10)),
+            ]
+        )
     run_command(
-        py_cmd(
-            "37_export_qmap_attention_frontend_image.py",
-            "--qk-prefix",
-            prefixes.qk_prefix,
-            "--kv-prefix",
-            prefixes.kv_prefix,
-            "--qmap-base",
-            hex(bases.attn_frontend),
-            "--output",
-            frontend["binary"],
-            "--manifest",
-            frontend["manifest"],
-            "--sim-hex",
-            frontend["sim_hex"],
-            "--q-rope-expected-hex",
-            frontend["q_rope_expected_hex"],
-        ),
+        frontend_cmd,
         dry_run=args.dry_run,
         commands=commands,
     )
@@ -549,24 +685,32 @@ def emit_commands(
         commands=commands,
     )
     score_value = paths["score_value"]
+    score_value_cmd = py_cmd(
+        "38_export_qmap_attention_score_value_image.py",
+        "--score-prefix",
+        prefixes.score_prefix,
+        "--value-prefix",
+        prefixes.value_prefix,
+        "--qmap-base",
+        hex(bases.attn_score_value),
+        "--output",
+        score_value["binary"],
+        "--manifest",
+        score_value["manifest"],
+        "--sim-hex",
+        score_value["sim_hex"],
+        "--attn-out-expected-hex",
+        score_value["attn_out_expected_hex"],
+    )
+    if not args.dry_run:
+        score_value_cmd.extend(
+            [
+                "--q-rope-base-addr",
+                hex(descriptor_base_from_hex(frontend["sim_hex"], 9)),
+            ]
+        )
     run_command(
-        py_cmd(
-            "38_export_qmap_attention_score_value_image.py",
-            "--score-prefix",
-            prefixes.score_prefix,
-            "--value-prefix",
-            prefixes.value_prefix,
-            "--qmap-base",
-            hex(bases.attn_score_value),
-            "--output",
-            score_value["binary"],
-            "--manifest",
-            score_value["manifest"],
-            "--sim-hex",
-            score_value["sim_hex"],
-            "--attn-out-expected-hex",
-            score_value["attn_out_expected_hex"],
-        ),
+        score_value_cmd,
         dry_run=args.dry_run,
         commands=commands,
     )
@@ -589,28 +733,36 @@ def emit_commands(
         dry_run=args.dry_run,
         commands=commands,
     )
+    o_proj_cmd = py_cmd(
+        "39_export_qmap_o_proj_image.py",
+        "--prefix",
+        prefixes.o_proj_prefix,
+        "--layer-id",
+        args.layer_id,
+        "--qmap-base",
+        hex(bases.o_proj),
+        "--weight-base",
+        hex(bases.o_proj_weight),
+        "--scale-base",
+        hex(bases.o_proj_scale),
+        "--output",
+        o_proj["binary"],
+        "--manifest",
+        o_proj["manifest"],
+        "--sim-hex",
+        o_proj["sim_hex"],
+        "--expected-hex",
+        o_proj["expected_hex"],
+    )
+    if not args.dry_run:
+        o_proj_cmd.extend(
+            [
+                "--activation-base-addr",
+                hex(descriptor_base_from_hex(score_value["sim_hex"], 4)),
+            ]
+        )
     run_command(
-        py_cmd(
-            "39_export_qmap_o_proj_image.py",
-            "--prefix",
-            prefixes.o_proj_prefix,
-            "--layer-id",
-            args.layer_id,
-            "--qmap-base",
-            hex(bases.o_proj),
-            "--weight-base",
-            hex(bases.o_proj_weight),
-            "--scale-base",
-            hex(bases.o_proj_scale),
-            "--output",
-            o_proj["binary"],
-            "--manifest",
-            o_proj["manifest"],
-            "--sim-hex",
-            o_proj["sim_hex"],
-            "--expected-hex",
-            o_proj["expected_hex"],
-        ),
+        o_proj_cmd,
         dry_run=args.dry_run,
         commands=commands,
     )
@@ -633,26 +785,36 @@ def emit_commands(
         dry_run=args.dry_run,
         commands=commands,
     )
+    post_cmd = py_cmd(
+        "40_export_qmap_post_attention_residual_norm_image.py",
+        "--prefix",
+        prefixes.post_prefix,
+        "--layer-id",
+        args.layer_id,
+        "--qmap-base",
+        hex(bases.post_attn_norm),
+        "--output",
+        post["binary"],
+        "--manifest",
+        post["manifest"],
+        "--sim-hex",
+        post["sim_hex"],
+        "--expected-hidden-hex",
+        post["expected_hidden_hex"],
+        "--expected-norm-hex",
+        post["expected_norm_hex"],
+    )
+    if not args.dry_run:
+        post_cmd.extend(
+            [
+                "--o-proj-base-addr",
+                hex(descriptor_base_from_hex(o_proj["sim_hex"], 4)),
+            ]
+        )
+        if args.input_hidden_base is not None:
+            post_cmd.extend(["--residual-base-addr", hex(args.input_hidden_base)])
     run_command(
-        py_cmd(
-            "40_export_qmap_post_attention_residual_norm_image.py",
-            "--prefix",
-            prefixes.post_prefix,
-            "--layer-id",
-            args.layer_id,
-            "--qmap-base",
-            hex(bases.post_attn_norm),
-            "--output",
-            post["binary"],
-            "--manifest",
-            post["manifest"],
-            "--sim-hex",
-            post["sim_hex"],
-            "--expected-hidden-hex",
-            post["expected_hidden_hex"],
-            "--expected-norm-hex",
-            post["expected_norm_hex"],
-        ),
+        post_cmd,
         dry_run=args.dry_run,
         commands=commands,
     )
@@ -671,34 +833,42 @@ def emit_commands(
         dry_run=args.dry_run,
         commands=commands,
     )
+    gate_cmd = py_cmd(
+        "41_export_qmap_mlp_gate_up_image.py",
+        "--prefix",
+        prefixes.gate_prefix,
+        "--layer-id",
+        args.layer_id,
+        "--qmap-base",
+        hex(bases.mlp_gate_up),
+        "--gate-weight-base",
+        hex(bases.mlp_gate_weight),
+        "--gate-scale-base",
+        hex(bases.mlp_gate_scale),
+        "--up-weight-base",
+        hex(bases.mlp_up_weight),
+        "--up-scale-base",
+        hex(bases.mlp_up_scale),
+        "--output",
+        gate["binary"],
+        "--manifest",
+        gate["manifest"],
+        "--sim-hex",
+        gate["sim_hex"],
+        "--expected-gate-hex",
+        gate["expected_gate_hex"],
+        "--expected-up-hex",
+        gate["expected_up_hex"],
+    )
+    if not args.dry_run:
+        gate_cmd.extend(
+            [
+                "--activation-base-addr",
+                hex(descriptor_base_from_hex(post["sim_hex"], 5)),
+            ]
+        )
     run_command(
-        py_cmd(
-            "41_export_qmap_mlp_gate_up_image.py",
-            "--prefix",
-            prefixes.gate_prefix,
-            "--layer-id",
-            args.layer_id,
-            "--qmap-base",
-            hex(bases.mlp_gate_up),
-            "--gate-weight-base",
-            hex(bases.mlp_gate_weight),
-            "--gate-scale-base",
-            hex(bases.mlp_gate_scale),
-            "--up-weight-base",
-            hex(bases.mlp_up_weight),
-            "--up-scale-base",
-            hex(bases.mlp_up_scale),
-            "--output",
-            gate["binary"],
-            "--manifest",
-            gate["manifest"],
-            "--sim-hex",
-            gate["sim_hex"],
-            "--expected-gate-hex",
-            gate["expected_gate_hex"],
-            "--expected-up-hex",
-            gate["expected_up_hex"],
-        ),
+        gate_cmd,
         dry_run=args.dry_run,
         commands=commands,
     )
@@ -717,26 +887,36 @@ def emit_commands(
         dry_run=args.dry_run,
         commands=commands,
     )
+    silu_cmd = py_cmd(
+        "42_export_qmap_mlp_silu_mul_image.py",
+        "--prefix",
+        prefixes.silu_prefix,
+        "--layer-id",
+        args.layer_id,
+        "--qmap-base",
+        hex(bases.mlp_silu_mul),
+        "--gate-up-qmap-prefix",
+        prefixes.gate_qmap_prefix,
+        "--output",
+        silu["binary"],
+        "--manifest",
+        silu["manifest"],
+        "--sim-hex",
+        silu["sim_hex"],
+        "--expected-hex",
+        silu["expected_hex"],
+    )
+    if not args.dry_run:
+        silu_cmd.extend(
+            [
+                "--gate-base-addr",
+                hex(descriptor_base_from_hex(gate["sim_hex"], 6)),
+                "--up-base-addr",
+                hex(descriptor_base_from_hex(gate["sim_hex"], 7)),
+            ]
+        )
     run_command(
-        py_cmd(
-            "42_export_qmap_mlp_silu_mul_image.py",
-            "--prefix",
-            prefixes.silu_prefix,
-            "--layer-id",
-            args.layer_id,
-            "--qmap-base",
-            hex(bases.mlp_silu_mul),
-            "--gate-up-qmap-prefix",
-            prefixes.gate_qmap_prefix,
-            "--output",
-            silu["binary"],
-            "--manifest",
-            silu["manifest"],
-            "--sim-hex",
-            silu["sim_hex"],
-            "--expected-hex",
-            silu["expected_hex"],
-        ),
+        silu_cmd,
         dry_run=args.dry_run,
         commands=commands,
     )
@@ -755,30 +935,38 @@ def emit_commands(
         dry_run=args.dry_run,
         commands=commands,
     )
+    down_cmd = py_cmd(
+        "43_export_qmap_mlp_down_image.py",
+        "--prefix",
+        prefixes.down_prefix,
+        "--layer-id",
+        args.layer_id,
+        "--qmap-base",
+        hex(bases.mlp_down),
+        "--weight-base",
+        hex(bases.mlp_down_weight),
+        "--scale-base",
+        hex(bases.mlp_down_scale),
+        "--silu-qmap-prefix",
+        prefixes.silu_qmap_prefix,
+        "--output",
+        down["binary"],
+        "--manifest",
+        down["manifest"],
+        "--sim-hex",
+        down["sim_hex"],
+        "--expected-hex",
+        down["expected_hex"],
+    )
+    if not args.dry_run:
+        down_cmd.extend(
+            [
+                "--activation-base-addr",
+                hex(descriptor_base_from_hex(silu["sim_hex"], 4)),
+            ]
+        )
     run_command(
-        py_cmd(
-            "43_export_qmap_mlp_down_image.py",
-            "--prefix",
-            prefixes.down_prefix,
-            "--layer-id",
-            args.layer_id,
-            "--qmap-base",
-            hex(bases.mlp_down),
-            "--weight-base",
-            hex(bases.mlp_down_weight),
-            "--scale-base",
-            hex(bases.mlp_down_scale),
-            "--silu-qmap-prefix",
-            prefixes.silu_qmap_prefix,
-            "--output",
-            down["binary"],
-            "--manifest",
-            down["manifest"],
-            "--sim-hex",
-            down["sim_hex"],
-            "--expected-hex",
-            down["expected_hex"],
-        ),
+        down_cmd,
         dry_run=args.dry_run,
         commands=commands,
     )
@@ -799,28 +987,38 @@ def emit_commands(
         dry_run=args.dry_run,
         commands=commands,
     )
+    residual_cmd = py_cmd(
+        "44_export_qmap_mlp_residual_add_image.py",
+        "--prefix",
+        prefixes.residual_prefix,
+        "--layer-id",
+        args.layer_id,
+        "--qmap-base",
+        hex(bases.mlp_residual_add),
+        "--post-attn-qmap-prefix",
+        prefixes.post_qmap_prefix,
+        "--down-qmap-prefix",
+        prefixes.down_qmap_prefix,
+        "--output",
+        residual["binary"],
+        "--manifest",
+        residual["manifest"],
+        "--sim-hex",
+        residual["sim_hex"],
+        "--expected-hex",
+        residual["expected_hex"],
+    )
+    if not args.dry_run:
+        residual_cmd.extend(
+            [
+                "--post-attn-base-addr",
+                hex(descriptor_base_from_hex(post["sim_hex"], 4)),
+                "--down-base-addr",
+                hex(descriptor_base_from_hex(down["sim_hex"], 4)),
+            ]
+        )
     run_command(
-        py_cmd(
-            "44_export_qmap_mlp_residual_add_image.py",
-            "--prefix",
-            prefixes.residual_prefix,
-            "--layer-id",
-            args.layer_id,
-            "--qmap-base",
-            hex(bases.mlp_residual_add),
-            "--post-attn-qmap-prefix",
-            prefixes.post_qmap_prefix,
-            "--down-qmap-prefix",
-            prefixes.down_qmap_prefix,
-            "--output",
-            residual["binary"],
-            "--manifest",
-            residual["manifest"],
-            "--sim-hex",
-            residual["sim_hex"],
-            "--expected-hex",
-            residual["expected_hex"],
-        ),
+        residual_cmd,
         dry_run=args.dry_run,
         commands=commands,
     )
@@ -874,10 +1072,27 @@ def write_chain_manifest(
             "qkv_qmap_base0": format_addr(QKV_QMAP_BASE0),
             "body_qmap_base0": format_addr(BODY_QMAP_BASE0),
             "layer_qmap_stride": format_addr(LAYER_QMAP_STRIDE),
+            "qkv_qmap_stride": format_addr(QKV_QMAP_STRIDE),
+            "body_qmap_stride": format_addr(BODY_QMAP_STRIDE),
             "weight_window_base0": format_addr(WEIGHT_WINDOW_BASE0),
             "weight_window_stride": format_addr(WEIGHT_WINDOW_STRIDE),
+            "persistent_offsets": {
+                "o_proj_weight": format_addr(O_PROJ_WEIGHT_OFFSET),
+                "o_proj_scale": format_addr(O_PROJ_SCALE_OFFSET),
+                "mlp_gate_weight": format_addr(MLP_GATE_WEIGHT_OFFSET),
+                "mlp_gate_scale": format_addr(MLP_GATE_SCALE_OFFSET),
+                "mlp_up_weight": format_addr(MLP_UP_WEIGHT_OFFSET),
+                "mlp_up_scale": format_addr(MLP_UP_SCALE_OFFSET),
+                "mlp_down_weight": format_addr(MLP_DOWN_WEIGHT_OFFSET),
+                "mlp_down_scale": format_addr(MLP_DOWN_SCALE_OFFSET),
+            },
         },
         "qmap_bases": {
+            "input_hidden": (
+                format_addr(args.input_hidden_base)
+                if args.input_hidden_base is not None
+                else None
+            ),
             "input_rmsnorm": format_addr(bases.input_rmsnorm),
             "input_rmsnorm_output": format_addr(
                 bases.input_rmsnorm + INPUT_RMSNORM_OUTPUT_OFFSET

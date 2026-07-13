@@ -11,11 +11,12 @@ import numpy as np
 import torch
 
 from common import PROMPT, encode_prompt, load_model, manual_rope_cos_sin
+from vector_workspace import resolve_sim_vector_dir
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 Q4_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_q4_v0"
-SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
+SIM_VECTOR_DIR = resolve_sim_vector_dir(REPO_ROOT)
 QK_EXPORTER_PATH = Path(__file__).with_name("22_export_qk_norm_rope_fixed_vectors.py")
 
 PREFIX = "kv_cache_append_real"

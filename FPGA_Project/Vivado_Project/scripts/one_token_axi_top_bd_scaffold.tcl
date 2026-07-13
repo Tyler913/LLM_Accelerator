@@ -54,7 +54,9 @@ set required_rtl [list \
     axi4_read_master.sv \
     axi4_write_master.sv \
     axi4lite_to_mmio_regs.sv \
+    q4_embedding_lookup.sv \
     qmap_one_token_control_regs.sv \
+    qmap_one_token_top.sv \
     qmap_one_token_mmio_top.sv \
     qmap_one_token_axil_top.sv \
     qmap_one_token_axi_top.sv \

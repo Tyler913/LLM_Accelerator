@@ -698,6 +698,32 @@ Local validation:
   reads `0x4_250A_2540` with SHA256
   `4580c10509ba4bed9edab9c72fc2f4150c5812b83aac71a25c7ee76cdad080a1`.
 
+The full self-contained packet at the legacy `0x4_0008_0000` base extends
+through `0x4_002A_AFFF`. It overlaps the persistent tied embedding/LM-head
+weight region that starts at `0x4_0010_0000`, so the two layouts must not be
+loaded concurrently. The legacy base remains useful for isolated QKV
+regressions. The continuous token-driven frontend export places the same QMAP
+packet contract at non-overlapping test-vector staging base `0x4_1B40_0000`
+while keeping tied weights at `0x4_0010_0000`; the RTL consumes the runtime
+QMAP base and requires no format change. The fresh XSim regression and
+independent timing audit in
+`Temp/embedding_layer0_frontend_regression/20260713_131628` match embedding
+`1024`, RMSNorm `1024`, and Q/K/V `2048/1024/1024` words exactly under
+backpressure.
+
+The same descriptor contract now passes through the complete Layer 0 body.
+`51_export_embedding_layer0_full_chain.py` reuses the established per-stage
+exporters with a Temp-contained vector workspace, then the shared-memory
+testbench patches only consumer `base_addr` fields to the preceding producer
+buffers. The audited XSim run in
+`Temp/embedding_layer0_full_regression/20260713_135629` checks all 16 write
+kinds, exact cache addresses, exact words through final `layer_out[1024]`, and
+every producer-response-before-consumer-read boundary. Scheduler traffic is
+`46278/2140354` read requests/words and `6155/25600` write requests/words. The
+focused scenario intentionally invalidates the final-tail gamma descriptor
+after Layer 0 completes, so this result proves the complete layer but does not
+claim a new LM-head result.
+
 The current exporter can emit self-contained images for simulation and local
 bring-up. In the later persistent-manifest flow, the same descriptors should
 point to already-loaded weight, scale, activation, and output-buffer regions
@@ -1563,7 +1589,7 @@ Local validation:
   `178050/24947620` reads and `12312/52227` writes, tail writes `1024/3`, and
   `0` final write mismatches. QMAP packet/image layout is unchanged by this
   control adapter.
-- AXI-Lite bounded true three-layer top-to-tail result: the same productized
+- Historical mixed AXI-Lite bounded three-layer baseline: the same productized
   wrapper now launches Layer 0(QKV-first) -> Layer 1 -> Layer 2 -> final-tail
   through AXI-Lite register writes/reads under `+true3_mmio_top_tail_only` plus
   `+fastmem +notrace +progress`. It completes with scheduler done cycle
@@ -1571,10 +1597,42 @@ Local validation:
   mask `0x7`, scheduler counters `138820/6418838` reads and `18464/75776`
   writes, top counters `224314/27085750` reads and `18466/76803` writes, tail
   writes `1024/3`, and `0` final write mismatches. Layer 0 is intentionally
-  QKV-first until full-chain Layer 0 input-RMSNorm artifacts are generated.
+  QKV-first in this older baseline.
+- Continuous token-driven three-layer result: Layer 0 input-RMSNorm artifacts
+  now exist, and `52_export_embedding_true3_final_chain.py` propagates the tied
+  Q4 embedding output through complete Layers 0, 1, and 2 before regenerating
+  final RMSNorm and the full-vocabulary tail. The AXI-Lite regression
+  `Temp/embedding_true3_axil_tail_regression/20260713_145056` passes exact golden
+  comparison with token/score `537/838805253`, scheduler counters
+  `138834/6421062` reads and `18465/76800` writes, and aggregate top counters
+  `224330/27088110` reads and `18468/78851` writes. Its independent event audit
+  proves embedding response before Layer 0 reads, each layer output response
+  before the next layer reads, and Layer 2 response before scheduler-done,
+  tail-start, and final hidden reads. Layer 0 QKV is staged at `0x4_1B40_0000`
+  so the persistent tied table remains at `0x4_0010_0000` without overlap.
+- Continuous token-driven 28-layer result:
+  `53_export_embedding_full28_final_chain.py` applies the same QMAP contract to
+  every model layer and emits `full_chain_manifest.json` plus a physical address
+  audit. The integrated layout keeps tied weights/scales at
+  `0x4_0010_0000`/`0x4_04B3_0000`, uses layer block base `0x4_0500_0000` with
+  `0x0084_0000` stride, body-QMAP base `0x4_1790_0000` with 1 MiB stride,
+  per-layer KV cache from `0x4_1410_0000` with 2 MiB stride, and final-tail QMAP
+  base `0x4_1950_0000`. The `508` audited intervals occupy
+  `0x4_0010_0000..0x4_1950_3fff`, remain inside PL DDR, and do not overlap.
+- `run_embedding_full_chain_axil_tail_regression.ps1` converts that manifest into
+  a generated Temp-only SystemVerilog include, then runs the generic shared-memory
+  testbench through AXI-Lite. Session
+  `Temp/embedding_full28_axil_tail_regression/20260713_164001` passes all 28
+  complete layers and the full-vocabulary tail with exact layer mask
+  `0x0fffffff`, token/score `537/1155032971`, scheduler counters
+  `1295784/59929912` reads and `172340/716800` writes, and aggregate counters
+  `1381280/80596960` reads and `172343/718851` writes. The independent streamed
+  event audit observes all `281` QMAP packets, all 28 layer responses, exact
+  write-kind/address/data counts, and strict response-before-consumer ordering;
+  `top_done` occurs at cycle `231727944` with zero mismatch/error events.
 - PS-side register/runtime skeleton: `FPGA_Project/software/qmap_one_token_runtime/`
   now mirrors the control register offsets and table ids, including optional
-  input-RMSNorm table commits, so the current mixed Layer0/Layer1/Layer2 QMAP
+  input-RMSNorm table commits, so the continuous Layer0/Layer1/Layer2 QMAP
   contract can be represented by software before the Vivado BD base address is
   assigned. `qmap_one_token_axi_top.sv` now provides the first Vivado-facing
   shell for that software contract by adapting the existing local memory port to

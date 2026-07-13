@@ -16,10 +16,11 @@ from common import (
     require_output,
     tensor_to_float32,
 )
+from vector_workspace import resolve_sim_vector_dir
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
+SIM_VECTOR_DIR = resolve_sim_vector_dir(REPO_ROOT)
 FINAL_NORM_PREFIX = "final_rmsnorm_stage_real"
 DEFAULT_PREFIX = "lm_head_argmax_full_vocab_real"
 

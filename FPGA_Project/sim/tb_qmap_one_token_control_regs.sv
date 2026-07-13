@@ -28,6 +28,7 @@ module tb_qmap_one_token_control_regs;
     localparam logic [11 : 0] REG_FINAL_OVERRIDE_LO    = 12'h040;
     localparam logic [11 : 0] REG_FINAL_OVERRIDE_HI    = 12'h044;
     localparam logic [11 : 0] REG_FINAL_OVERRIDE_CTRL  = 12'h048;
+    localparam logic [11 : 0] REG_EMBEDDING_CTRL       = 12'h04C;
     localparam logic [11 : 0] REG_TABLE_SELECT         = 12'h050;
     localparam logic [11 : 0] REG_TABLE_DATA_LO        = 12'h054;
     localparam logic [11 : 0] REG_TABLE_DATA_HI        = 12'h058;
@@ -48,6 +49,10 @@ module tb_qmap_one_token_control_regs;
     localparam logic [11 : 0] REG_MEM_RD_WORDS         = 12'h094;
     localparam logic [11 : 0] REG_MEM_WR_REQS          = 12'h098;
     localparam logic [11 : 0] REG_MEM_WR_WORDS         = 12'h09C;
+    localparam logic [11 : 0] REG_EMBED_WEIGHT_LO      = 12'h0A0;
+    localparam logic [11 : 0] REG_EMBED_WEIGHT_HI      = 12'h0A4;
+    localparam logic [11 : 0] REG_EMBED_SCALE_LO       = 12'h0A8;
+    localparam logic [11 : 0] REG_EMBED_SCALE_HI       = 12'h0AC;
 
     localparam logic [7 : 0] TABLE_QKV = 8'd0;
     localparam logic [7 : 0] TABLE_INPUT_NORM = 8'd1;
@@ -67,6 +72,9 @@ module tb_qmap_one_token_control_regs;
 
     logic start_pulse;
     logic [31 : 0] input_token_id;
+    logic embedding_enable;
+    logic [ADDR_WIDTH-1 : 0] embedding_weight_base_addr;
+    logic [ADDR_WIDTH-1 : 0] embedding_scale_base_addr;
     logic [LAYER_INDEX_WIDTH-1 : 0] layer_start_index;
     logic [LAYER_COUNT_WIDTH-1 : 0] layer_count;
     logic [POSITION_WIDTH-1 : 0] position;
@@ -131,6 +139,9 @@ module tb_qmap_one_token_control_regs;
         .o_reg_error(reg_error),
         .o_start_pulse(start_pulse),
         .o_input_token_id(input_token_id),
+        .o_embedding_enable(embedding_enable),
+        .o_embedding_weight_base_addr(embedding_weight_base_addr),
+        .o_embedding_scale_base_addr(embedding_scale_base_addr),
         .o_layer_start_index(layer_start_index),
         .o_layer_count(layer_count),
         .o_position(position),
@@ -283,6 +294,9 @@ module tb_qmap_one_token_control_regs;
         write_addr64(REG_FINAL_TAIL_QMAP_LO, REG_FINAL_TAIL_QMAP_HI, 64'h0000_0004_0501_0000);
         write_addr64(REG_FINAL_OVERRIDE_LO, REG_FINAL_OVERRIDE_HI, 64'h0000_0004_2509_2540);
         mmio_write(REG_FINAL_OVERRIDE_CTRL, 32'd1);
+        mmio_write(REG_EMBEDDING_CTRL, 32'd1);
+        write_addr64(REG_EMBED_WEIGHT_LO, REG_EMBED_WEIGHT_HI, 64'h0000_0004_0010_0000);
+        write_addr64(REG_EMBED_SCALE_LO, REG_EMBED_SCALE_HI, 64'h0000_0004_04B3_0000);
 
         check(layer_start_index == 1, "layer_start_index writeback");
         check(layer_count == 2, "layer_count writeback");
@@ -294,6 +308,21 @@ module tb_qmap_one_token_control_regs;
         check(final_tail_qmap_base_addr == 64'h0000_0004_0501_0000, "tail qmap addr writeback");
         check(final_hidden_base_override_valid, "override valid writeback");
         check(final_hidden_base_override_addr == 64'h0000_0004_2509_2540, "override addr writeback");
+        check(embedding_enable, "embedding enable writeback");
+        check(embedding_weight_base_addr == 64'h0000_0004_0010_0000,
+              "embedding weight addr writeback");
+        check(embedding_scale_base_addr == 64'h0000_0004_04B3_0000,
+              "embedding scale addr writeback");
+        mmio_read(REG_EMBEDDING_CTRL, read_data);
+        check(read_data == 32'd1, "embedding enable register readback");
+        mmio_read(REG_EMBED_WEIGHT_LO, read_data);
+        check(read_data == 32'h0010_0000, "embedding weight lo register readback");
+        mmio_read(REG_EMBED_WEIGHT_HI, read_data);
+        check(read_data == 32'h0000_0004, "embedding weight hi register readback");
+        mmio_read(REG_EMBED_SCALE_LO, read_data);
+        check(read_data == 32'h04B3_0000, "embedding scale lo register readback");
+        mmio_read(REG_EMBED_SCALE_HI, read_data);
+        check(read_data == 32'h0000_0004, "embedding scale hi register readback");
 
         commit_table(TABLE_QKV, 8'd1, 64'h0000_0004_1008_0000);
         commit_table(TABLE_INPUT_NORM, 8'd1, 64'h0000_0004_150A_0000);
@@ -338,6 +367,11 @@ module tb_qmap_one_token_control_regs;
         top_busy = 1'b1;
         mmio_write(REG_LAYER_COUNT, 32'd7);
         check(layer_count == 2, "busy config write should not update layer_count");
+        mmio_write(REG_EMBEDDING_CTRL, 32'd0);
+        mmio_write(REG_EMBED_WEIGHT_LO, 32'hDEAD_BEEF);
+        check(embedding_enable, "busy write should not disable embedding");
+        check(embedding_weight_base_addr == 64'h0000_0004_0010_0000,
+              "busy write should not update embedding weight addr");
         mmio_write(REG_CTRL, 32'd1);
         @(posedge clk);
         check(!start_pulse, "busy start should not pulse");

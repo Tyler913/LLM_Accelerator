@@ -38,6 +38,7 @@ generated/
 weights/
 fpga_artifacts/
 build/
+Temp/
 .Xil/
 FPGA_Project/sim/lm_head_argmax_mem_stage_trace.csv
 FPGA_Project/sim/lm_head_argmax_tile_scheduler_trace.csv

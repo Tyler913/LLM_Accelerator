@@ -9,9 +9,11 @@ from typing import Any
 
 import numpy as np
 
+from vector_workspace import resolve_sim_vector_dir
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
+SIM_VECTOR_DIR = resolve_sim_vector_dir(REPO_ROOT)
 QMAP_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_qmap_v1"
 
 QK_PREFIX = "qk_norm_rope_stage_128_real"
@@ -217,6 +219,9 @@ def parse_args() -> argparse.Namespace:
         default=QMAP_BASE,
         help="Physical QMAP base address",
     )
+    parser.add_argument("--q-base-addr", type=lambda text: int(text.replace("_", ""), 0), default=None)
+    parser.add_argument("--k-base-addr", type=lambda text: int(text.replace("_", ""), 0), default=None)
+    parser.add_argument("--v-base-addr", type=lambda text: int(text.replace("_", ""), 0), default=None)
     return parser.parse_args()
 
 
@@ -328,7 +333,7 @@ def main() -> None:
             element_bits=IN_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("q_flat_q12_12"),
+            base_addr=args.q_base_addr if args.q_base_addr is not None else addr("q_flat_q12_12"),
             nbytes=size("q_flat_q12_12"),
             dims=(Q_COUNT, 0, 0, 0),
             strides=(q_stride, 0, 0, 0),
@@ -343,7 +348,7 @@ def main() -> None:
             element_bits=IN_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("k_flat_q12_12"),
+            base_addr=args.k_base_addr if args.k_base_addr is not None else addr("k_flat_q12_12"),
             nbytes=size("k_flat_q12_12"),
             dims=(KV_COUNT, 0, 0, 0),
             strides=(q_stride, 0, 0, 0),
@@ -358,7 +363,7 @@ def main() -> None:
             element_bits=IN_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("v_flat_q12_12"),
+            base_addr=args.v_base_addr if args.v_base_addr is not None else addr("v_flat_q12_12"),
             nbytes=size("v_flat_q12_12"),
             dims=(KV_COUNT, 0, 0, 0),
             strides=(q_stride, 0, 0, 0),
@@ -499,9 +504,9 @@ def main() -> None:
             "layer_id": layer_id,
         },
         "memory_layout": {
-            "q_flat_addr": addr("q_flat_q12_12"),
-            "k_flat_addr": addr("k_flat_q12_12"),
-            "v_flat_addr": addr("v_flat_q12_12"),
+            "q_flat_addr": args.q_base_addr if args.q_base_addr is not None else addr("q_flat_q12_12"),
+            "k_flat_addr": args.k_base_addr if args.k_base_addr is not None else addr("k_flat_q12_12"),
+            "v_flat_addr": args.v_base_addr if args.v_base_addr is not None else addr("v_flat_q12_12"),
             "q_gamma_addr": addr("q_gamma_q8_7"),
             "k_gamma_addr": addr("k_gamma_q8_7"),
             "cos_addr": addr("rope_cos_q1_15"),

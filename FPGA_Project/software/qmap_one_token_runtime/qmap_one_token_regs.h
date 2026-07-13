@@ -13,6 +13,7 @@
 #define QOT_MAX_LAYERS   28u
 #define QOT_MAX_CONTEXT  256u
 #define QOT_TABLE_COUNT  10u
+#define QOT_VOCAB_SIZE   151936u
 
 #define QOT_REG_CTRL                 0x000u
 #define QOT_REG_STATUS               0x004u
@@ -31,6 +32,7 @@
 #define QOT_REG_FINAL_OVERRIDE_LO    0x040u
 #define QOT_REG_FINAL_OVERRIDE_HI    0x044u
 #define QOT_REG_FINAL_OVERRIDE_CTRL  0x048u
+#define QOT_REG_EMBEDDING_CTRL       0x04Cu
 #define QOT_REG_TABLE_SELECT         0x050u
 #define QOT_REG_TABLE_DATA_LO        0x054u
 #define QOT_REG_TABLE_DATA_HI        0x058u
@@ -51,9 +53,14 @@
 #define QOT_REG_MEM_RD_WORDS         0x094u
 #define QOT_REG_MEM_WR_REQS          0x098u
 #define QOT_REG_MEM_WR_WORDS         0x09Cu
+#define QOT_REG_EMBED_WEIGHT_LO      0x0A0u
+#define QOT_REG_EMBED_WEIGHT_HI      0x0A4u
+#define QOT_REG_EMBED_SCALE_LO       0x0A8u
+#define QOT_REG_EMBED_SCALE_HI       0x0ACu
 
 #define QOT_CTRL_START_MASK          0x00000001u
 #define QOT_CTRL_CLEAR_STICKY_MASK   0x00000002u
+#define QOT_EMBEDDING_ENABLE_MASK    0x00000001u
 
 #define QOT_STATUS_BUSY_MASK         0x00000001u
 #define QOT_STATUS_DONE_STICKY_MASK  0x00000002u

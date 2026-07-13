@@ -16,10 +16,11 @@ from common import (
     load_model,
     require_input0,
 )
+from vector_workspace import resolve_sim_vector_dir
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
+SIM_VECTOR_DIR = resolve_sim_vector_dir(REPO_ROOT)
 DEFAULT_GATE_UP_PREFIX = "mlp_gate_up_proj_stage_real"
 DEFAULT_PREFIX = "mlp_silu_mul_stage_real"
 

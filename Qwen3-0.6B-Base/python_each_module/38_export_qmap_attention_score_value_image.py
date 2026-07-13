@@ -9,9 +9,11 @@ from typing import Any
 
 import numpy as np
 
+from vector_workspace import resolve_sim_vector_dir
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
+SIM_VECTOR_DIR = resolve_sim_vector_dir(REPO_ROOT)
 QMAP_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_qmap_v1"
 
 SCORE_PREFIX = "attention_score_stage_real"
@@ -216,6 +218,11 @@ def parse_args() -> argparse.Namespace:
         default=QMAP_BASE,
         help="Physical QMAP base address",
     )
+    parser.add_argument(
+        "--q-rope-base-addr",
+        type=lambda text: int(text.replace("_", ""), 0),
+        default=None,
+    )
     return parser.parse_args()
 
 
@@ -332,7 +339,11 @@ def main() -> None:
             element_bits=IN_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("q_rope_q12_12"),
+            base_addr=(
+                args.q_rope_base_addr
+                if args.q_rope_base_addr is not None
+                else addr("q_rope_q12_12")
+            ),
             nbytes=size("q_rope_q12_12"),
             dims=(Q_COUNT, 0, 0, 0),
             strides=(word_stride, 0, 0, 0),
@@ -434,7 +445,11 @@ def main() -> None:
             "exp_lut_dtype": "UQ0.20 padded to 32-bit words",
         },
         "memory_layout": {
-            "q_rope_addr": addr("q_rope_q12_12"),
+            "q_rope_addr": (
+                args.q_rope_base_addr
+                if args.q_rope_base_addr is not None
+                else addr("q_rope_q12_12")
+            ),
             "kv_cache_base_addr": CACHE_BASE_ADDR,
             "exp_lut_addr": addr("exp_lut_uq0_20"),
             "attn_out_addr": addr("attn_out_q12_12"),

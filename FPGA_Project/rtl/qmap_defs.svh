@@ -40,6 +40,8 @@
 `define QMAP_ROW1024_EXPECTED_BYTES        64'd8
 `define QMAP_ROW1024_MAX_FETCH_BYTES       16'd1024
 
+// Legacy self-contained regression default. Integrated flows may override the
+// runtime QMAP base so this packet does not overlap persistent model weights.
 `define QMAP_QKV_BASE_ADDR                 64'h0000_0004_0008_0000
 `define QMAP_QKV_DESCRIPTOR_TABLE_ADDR     64'h0000_0004_0008_0100
 `define QMAP_QKV_PAYLOAD_BASE_ADDR         64'h0000_0004_0008_1100

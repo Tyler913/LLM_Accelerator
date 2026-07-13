@@ -16,10 +16,11 @@ from common import (
     require_output,
     tensor_to_float32,
 )
+from vector_workspace import resolve_sim_vector_dir
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
+SIM_VECTOR_DIR = resolve_sim_vector_dir(REPO_ROOT)
 
 DEFAULT_MLP_HIDDEN_PREFIX = "mlp_silu_mul_stage_real"
 DEFAULT_PREFIX = "mlp_down_proj_stage_real"

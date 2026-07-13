@@ -9,9 +9,11 @@ from typing import Any
 
 import numpy as np
 
+from vector_workspace import resolve_sim_vector_dir
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
+SIM_VECTOR_DIR = resolve_sim_vector_dir(REPO_ROOT)
 QMAP_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_qmap_v1"
 
 FINAL_NORM_PREFIX = "final_rmsnorm_stage_real"
@@ -208,6 +210,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export a QMAP final-token tail packet for RTL simulation.")
     parser.add_argument("--lm-prefix", default=LM_HEAD_PREFIX)
     parser.add_argument("--final-norm-prefix", default=FINAL_NORM_PREFIX)
+    parser.add_argument("--qmap-base", type=lambda value: int(value.replace("_", ""), 0), default=QMAP_BASE)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
@@ -219,6 +222,7 @@ def main() -> None:
     args = parse_args()
     lm_prefix = str(args.lm_prefix)
     final_norm_prefix = str(args.final_norm_prefix)
+    qmap_base = int(args.qmap_base)
 
     final_hidden = read_hex_lines(SIM_VECTOR_DIR / f"{final_norm_prefix}_input.hex", HIDDEN_WIDTH, signed=True)
     final_gamma = read_hex_lines(SIM_VECTOR_DIR / f"{final_norm_prefix}_gamma.hex", GAMMA_WIDTH, signed=True)
@@ -289,7 +293,7 @@ def main() -> None:
     payload_by_name = {item["name"]: item for item in payloads}
 
     def addr(name: str) -> int:
-        return QMAP_BASE + int(payload_by_name[name]["offset"])
+        return qmap_base + int(payload_by_name[name]["offset"])
 
     def size(name: str) -> int:
         return len(payload_by_name[name]["payload"])
@@ -426,7 +430,7 @@ def main() -> None:
     ]
 
     image = bytearray(image_bytes)
-    image[0:HEADER_BYTES] = pack_header(QMAP_BASE, image_bytes)
+    image[0:HEADER_BYTES] = pack_header(qmap_base, image_bytes)
     for slot, descriptor in enumerate(descriptors):
         offset = DESCRIPTOR_TABLE_OFFSET + slot * DESCRIPTOR_BYTES
         image[offset : offset + DESCRIPTOR_BYTES] = descriptor
@@ -445,7 +449,7 @@ def main() -> None:
         "name": "qmap_final_token_tail_runtime",
         "lm_prefix": lm_prefix,
         "final_norm_prefix": final_norm_prefix,
-        "qmap_base": QMAP_BASE,
+        "qmap_base": qmap_base,
         "image_bytes": image_bytes,
         "sha256": sha256_file(args.output),
         "descriptor_count": DESCRIPTOR_COUNT,
@@ -488,7 +492,7 @@ def main() -> None:
     print("=" * 80)
     print(f"Final norm:    {final_norm_prefix}")
     print(f"LM prefix:     {lm_prefix}")
-    print(f"QMAP base:     0x{QMAP_BASE:016X}")
+    print(f"QMAP base:     0x{qmap_base:016X}")
     print(f"Image bytes:   0x{image_bytes:X}")
     print(f"Scan window:   [{scan_base}, {scan_base + scan_rows}) rows={scan_rows}, tiles={tile_count}")
     print(f"Expected:      token={best_token}, score_q26={best_score}")

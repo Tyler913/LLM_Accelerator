@@ -9,9 +9,11 @@ from typing import Any
 
 import numpy as np
 
+from vector_workspace import resolve_sim_vector_dir
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
+SIM_VECTOR_DIR = resolve_sim_vector_dir(REPO_ROOT)
 QMAP_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_qmap_v1"
 
 PREFIX = "mlp_gate_up_proj_stage_real"
@@ -222,6 +224,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gate-scale-base", type=parse_int_auto, default=MLP_GATE_SCALE_BASE_ADDR)
     parser.add_argument("--up-weight-base", type=parse_int_auto, default=MLP_UP_WEIGHT_BASE_ADDR)
     parser.add_argument("--up-scale-base", type=parse_int_auto, default=MLP_UP_SCALE_BASE_ADDR)
+    parser.add_argument("--activation-base-addr", type=parse_int_auto, default=None)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
@@ -341,7 +344,11 @@ def main() -> None:
             element_bits=ACT_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("post_norm_q12_12"),
+            base_addr=(
+                args.activation_base_addr
+                if args.activation_base_addr is not None
+                else addr("post_norm_q12_12")
+            ),
             nbytes=activation_bytes,
             dims=(INPUT_SIZE, 0, 0, 0),
             strides=(4, 0, 0, 0),
@@ -521,7 +528,11 @@ def main() -> None:
             "scale_row_bytes": scale_row_bytes,
             "weight_bytes_per_matrix": weight_bytes,
             "scale_bytes_per_matrix": scale_bytes,
-            "activation_addr": addr("post_norm_q12_12"),
+            "activation_addr": (
+                args.activation_base_addr
+                if args.activation_base_addr is not None
+                else addr("post_norm_q12_12")
+            ),
             "gate_output_addr": addr("gate_out_q12_12"),
             "up_output_addr": addr("up_out_q12_12"),
             "gate_expected_addr": addr("expected_gate_q12_12"),

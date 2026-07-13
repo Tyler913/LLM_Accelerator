@@ -9,9 +9,11 @@ from typing import Any
 
 import numpy as np
 
+from vector_workspace import resolve_sim_vector_dir
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
+SIM_VECTOR_DIR = resolve_sim_vector_dir(REPO_ROOT)
 QMAP_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_qmap_v1"
 
 PREFIX = "post_attention_residual_norm_stage_real"
@@ -203,6 +205,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prefix", default=PREFIX)
     parser.add_argument("--layer-id", type=int, default=LAYER_ID)
     parser.add_argument("--qmap-base", type=parse_int_auto, default=QMAP_BASE)
+    parser.add_argument("--residual-base-addr", type=parse_int_auto, default=None)
+    parser.add_argument("--o-proj-base-addr", type=parse_int_auto, default=None)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
@@ -331,7 +335,11 @@ def main() -> None:
             element_bits=RESIDUAL_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("residual_input_q14_10"),
+            base_addr=(
+                args.residual_base_addr
+                if args.residual_base_addr is not None
+                else addr("residual_input_q14_10")
+            ),
             nbytes=vector_bytes,
             dims=(INPUT_SIZE, 0, 0, 0),
             strides=(4, 0, 0, 0),
@@ -346,7 +354,11 @@ def main() -> None:
             element_bits=O_PROJ_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("o_proj_out_q12_12"),
+            base_addr=(
+                args.o_proj_base_addr
+                if args.o_proj_base_addr is not None
+                else addr("o_proj_out_q12_12")
+            ),
             nbytes=vector_bytes,
             dims=(INPUT_SIZE, 0, 0, 0),
             strides=(4, 0, 0, 0),
@@ -467,8 +479,16 @@ def main() -> None:
             "norm_width": NORM_WIDTH,
         },
         "memory_layout": {
-            "residual_input_addr": addr("residual_input_q14_10"),
-            "o_proj_out_addr": addr("o_proj_out_q12_12"),
+            "residual_input_addr": (
+                args.residual_base_addr
+                if args.residual_base_addr is not None
+                else addr("residual_input_q14_10")
+            ),
+            "o_proj_out_addr": (
+                args.o_proj_base_addr
+                if args.o_proj_base_addr is not None
+                else addr("o_proj_out_q12_12")
+            ),
             "gamma_addr": addr("post_attention_gamma_q8_7"),
             "post_attention_hidden_addr": addr("post_attention_hidden_q14_10"),
             "post_norm_addr": addr("post_norm_q12_12"),

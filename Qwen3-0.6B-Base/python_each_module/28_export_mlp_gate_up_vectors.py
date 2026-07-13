@@ -17,10 +17,11 @@ from common import (
     require_output,
     tensor_to_float32,
 )
+from vector_workspace import resolve_sim_vector_dir
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
+SIM_VECTOR_DIR = resolve_sim_vector_dir(REPO_ROOT)
 DEFAULT_POST_NORM_PREFIX = "post_attention_residual_norm_stage_real"
 DEFAULT_PREFIX = "mlp_gate_up_proj_stage_real"
 

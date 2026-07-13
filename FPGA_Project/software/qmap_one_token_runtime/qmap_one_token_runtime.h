@@ -22,7 +22,8 @@ enum {
     QOT_ERR_BAD_ADDR = -4,
     QOT_ERR_TIMEOUT = -5,
     QOT_ERR_STATUS = -6,
-    QOT_ERR_NULL = -7
+    QOT_ERR_NULL = -7,
+    QOT_ERR_BAD_TOKEN = -8
 };
 
 typedef struct qot_layer_qmap_bases {
@@ -43,6 +44,9 @@ typedef struct qot_run_config {
     uint32_t layer_count;
     uint32_t position;
     uint32_t input_token_id;
+    uint32_t embedding_enable;
+    uint64_t embedding_weight_base;
+    uint64_t embedding_scale_base;
     uint64_t input_hidden_base;
     uint64_t output_hidden_base;
     uint64_t kv_cache_base;
@@ -235,6 +239,13 @@ static inline int qot_configure_run(uintptr_t base, const qot_run_config_t *cfg)
         cfg->kv_cache_base == 0ull || cfg->final_tail_qmap_base == 0ull) {
         return QOT_ERR_BAD_ADDR;
     }
+    if (cfg->embedding_enable != 0u) {
+        if (cfg->input_token_id >= QOT_VOCAB_SIZE) return QOT_ERR_BAD_TOKEN;
+        if (cfg->embedding_weight_base == 0ull ||
+            cfg->embedding_scale_base == 0ull) {
+            return QOT_ERR_BAD_ADDR;
+        }
+    }
     if (qot_is_busy(base)) return QOT_ERR_BUSY;
 
     qot_clear_sticky(base);
@@ -242,6 +253,12 @@ static inline int qot_configure_run(uintptr_t base, const qot_run_config_t *cfg)
     qot_write32(base, QOT_REG_LAYER_COUNT, cfg->layer_count);
     qot_write32(base, QOT_REG_POSITION, cfg->position);
     qot_write32(base, QOT_REG_INPUT_TOKEN, cfg->input_token_id);
+    qot_write32(base, QOT_REG_EMBEDDING_CTRL,
+                cfg->embedding_enable ? QOT_EMBEDDING_ENABLE_MASK : 0u);
+    qot_write64(base, QOT_REG_EMBED_WEIGHT_LO, QOT_REG_EMBED_WEIGHT_HI,
+                cfg->embedding_weight_base);
+    qot_write64(base, QOT_REG_EMBED_SCALE_LO, QOT_REG_EMBED_SCALE_HI,
+                cfg->embedding_scale_base);
     qot_write64(base, QOT_REG_INPUT_HIDDEN_LO, QOT_REG_INPUT_HIDDEN_HI,
                 cfg->input_hidden_base);
     qot_write64(base, QOT_REG_OUTPUT_HIDDEN_LO, QOT_REG_OUTPUT_HIDDEN_HI,
@@ -330,6 +347,7 @@ static inline int qot_run_no_memory_validation_smoke(uintptr_t base,
     qot_write32(base, QOT_REG_LAYER_START, 0u);
     qot_write32(base, QOT_REG_LAYER_COUNT, 0u);
     qot_write32(base, QOT_REG_POSITION, 4u);
+    qot_write32(base, QOT_REG_EMBEDDING_CTRL, 0u);
     qot_write64(base, QOT_REG_INPUT_HIDDEN_LO, QOT_REG_INPUT_HIDDEN_HI,
                 0x0000000405092540ull);
     qot_write64(base, QOT_REG_OUTPUT_HIDDEN_LO, QOT_REG_OUTPUT_HIDDEN_HI,

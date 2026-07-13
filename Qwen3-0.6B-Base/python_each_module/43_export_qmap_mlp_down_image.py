@@ -9,9 +9,11 @@ from typing import Any
 
 import numpy as np
 
+from vector_workspace import resolve_sim_vector_dir
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
+SIM_VECTOR_DIR = resolve_sim_vector_dir(REPO_ROOT)
 QMAP_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_qmap_v1"
 
 PREFIX = "mlp_down_proj_stage_real"
@@ -214,6 +216,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weight-base", type=parse_int_auto, default=MLP_DOWN_WEIGHT_BASE_ADDR)
     parser.add_argument("--scale-base", type=parse_int_auto, default=MLP_DOWN_SCALE_BASE_ADDR)
     parser.add_argument("--silu-qmap-prefix", default=DEFAULT_SILU_QMAP_PREFIX)
+    parser.add_argument("--activation-base-addr", type=parse_int_auto, default=None)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
@@ -329,7 +332,11 @@ def main() -> None:
             element_bits=ACT_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("mlp_hidden_q12_12"),
+            base_addr=(
+                args.activation_base_addr
+                if args.activation_base_addr is not None
+                else addr("mlp_hidden_q12_12")
+            ),
             nbytes=activation_bytes,
             dims=(INPUT_SIZE, 0, 0, 0),
             strides=(4, 0, 0, 0),
@@ -445,7 +452,11 @@ def main() -> None:
             "scale_row_bytes": scale_row_bytes,
             "weight_bytes": weight_bytes,
             "scale_bytes": scale_bytes,
-            "activation_addr": addr("mlp_hidden_q12_12"),
+            "activation_addr": (
+                args.activation_base_addr
+                if args.activation_base_addr is not None
+                else addr("mlp_hidden_q12_12")
+            ),
             "output_addr": addr("down_out_q12_12"),
             "expected_addr": addr("expected_down_q12_12"),
         },

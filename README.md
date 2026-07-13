@@ -7,7 +7,19 @@ on board on 2026-06-23. Start with
 [Source/CURRENT_STATE.md](Source/CURRENT_STATE.md) for the current handoff and
 next step.
 
-Latest local RTL checkpoint: Layer 0 has passed through attention,
+Latest end-to-end local checkpoint (2026-07-13): one software-like AXI-Lite
+launch now runs token id `374` through tied-Q4 embedding, all 28 complete
+transformer layers, final RMSNorm, and the full `151936`-row tied LM head in one
+continuous XSim memory-model path. Every write matches the propagated Python
+golden lineage, the layer mask is `0x0fffffff`, all `9496` tail tiles complete,
+and the exact result is token `537`, score `1155032971`. The independent timing
+audit is at
+`Temp/embedding_full28_axil_tail_regression/20260713_164001/xsim/timing_audit.json`.
+The next implementation step is persistent multi-token decode with retained KV
+cache, token-position advance, and selected-token feedback; do not repeat smaller
+board, DDR, or row tests without a specific integration failure.
+
+Detailed local RTL history: Layer 0 has passed through attention,
 post-attention residual/RMSNorm, MLP gate/up projection, MLP SiLU/multiply,
 MLP down projection, and final MLP residual add in Icarus. The full-model
 current-token final RMSNorm stage, the tiled Q4 LM-head argmax core, the

@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-07-11
+Last updated: 2026-07-13
 
 This file is the concise working-state handoff. For durable project context,
 read `Source/PROJECT_CONTEXT.md` first. For detailed address planning, read
@@ -1179,9 +1179,10 @@ Previous useful checkpoint:
   then the final-token tail can consume that buffer directly without copying or
   regenerating any intermediate file.
 - The reusable one-token top/control boundary is now in RTL as
-  `qmap_one_token_top.sv`. It sequences
-  `qmap_one_token_layer_scheduler.sv -> qmap_final_token_tail_compute_path.sv`,
-  owns the shared-memory mux, exposes scheduler/tail control pulses, and
+  `qmap_one_token_top.sv`. It sequences optional
+  `q4_embedding_lookup.sv -> qmap_one_token_layer_scheduler.sv ->
+  qmap_final_token_tail_compute_path.sv`, owns the shared-memory mux, exposes
+  embedding/scheduler/tail control, and
   defaults the tail hidden source to the scheduler-reported final layer output
   while keeping the tail packet descriptor stable. A final-hidden override
   remains available only for focused debug. Vivado xsim
@@ -1287,11 +1288,156 @@ Previous useful checkpoint:
   `hidden=4`, `gamma=4`, `norm=4`, `weight=75968`, `scale=9496`, tail writes
   `norm=1024`, `output=3`, and `0` final write mismatches. Log:
   `FPGA_Project/sim/xsim_qmap_one_token_axil_true3_tail_mixed_run.log`.
+- The mixed true3 baseline has also passed a fresh full CSV timing audit. The
+  579785-row trace in
+  `Temp/one_token_xsim_regression/20260713_113550/true3/timing_trace.csv`
+  has monotonic cycles, no error events, exact scheduler/top/tail counters, and
+  exact producer-before-consumer ordering from Layer 2 output write-back through
+  final hidden/gamma/norm/LM-head reads and token/score write-back. The audit
+  records Layer 2 write completion at cycle `20095274`, scheduler completion at
+  `20095285`, final-norm write completion at `20103110`, first LM-head weight
+  read at `20105751`, token/score write completion at `64195685`, and top done at
+  `64195691`, with token/score `537` / `850086863`.
+- The BD-facing AXI write adapter now supports the real local memory contract.
+  `axi4_write_master.sv` splits one local request into AXI bursts of at most 256
+  32-bit beats and never crosses a 4 KiB AXI boundary. This fixes the integration
+  gap where scheduler/embedding 4096-byte writes exceeded the previous
+  single-burst limit. `tb_axi4_write_master.sv` covers a 4096-byte unaligned-to-
+  4-KiB-boundary request, five exact sub-bursts, AW/W backpressure, intermediate
+  BRESP errors, malformed request-level `last`, zero length, and unaligned input.
+- The first real `input_token -> input_hidden[1024]` PL datapath is now present.
+  `49_export_q4_embedding_vectors.py` verifies that `embed_tokens` and `lm_head`
+  rows are tied, quantizes one row with the existing signed-int4/group64/Q2.14
+  contract, and exports exact signed Q14.10 output. `q4_embedding_lookup.sv`
+  reads the 512-byte Q4 row plus 32-byte scale row, dequantizes 1024 values, and
+  emits one 4096-byte local write. `qmap_one_token_top.sv` can now run this stage
+  before the scheduler, controlled by new AXI-Lite embedding enable and
+  weight/scale base registers.
+- The embedding path passes at three local integration levels and in both
+  simulators. `tb_q4_embedding_lookup.sv` covers exact output, stalls, invalid
+  token, malformed read `last`, write error, and repeated start.
+  `tb_qmap_one_token_axil_embedding_top.sv` launches it through software-like
+  AXI-Lite writes and checks exact counters `2/136` reads and `1/1024` writes.
+  `tb_qmap_one_token_axi_embedding_top.sv` drives the final BD-facing shell,
+  checks the exact 1024 output words, two AXI read bursts, and five legal AXI
+  write bursts for the 4096-byte hidden vector. The complete
+  `run_q4_embedding_regression.ps1` session
+  `Temp/q4_embedding_regression/20260713_124011` passed vector export, all three
+  Icarus tests, and a fresh Vivado 2024.2 XSim compile/elaboration/run.
+- The first continuous token-driven frontend chain now passes locally:
+  `tied-Q4 embedding -> Layer 0 input RMSNorm -> full Layer 0 QKV`. The new
+  `50_export_embedding_layer0_frontend_chain.py` keeps every generated artifact
+  under `Temp`, makes the RMSNorm hidden descriptor consume the top-written
+  `0x4_0509_2540` buffer, and makes the QKV activation descriptor consume the
+  RMSNorm-written `0x4_050A_2540` buffer. The first run exposed a real layout
+  collision: token 374 embedding weights at `0x4_0012_EC00..0x4_0012_EDFF`
+  overlapped two rows inside the legacy self-contained QKV packet based at
+  `0x4_0008_0000`. That packet is now placed at staging base `0x4_1B40_0000`
+  for this integrated simulation; the persistent tied weight base remains
+  `0x4_0010_0000`.
+- `tb_qmap_one_token_embedding_layer0_frontend.sv` now proves the corrected
+  chain with read/write backpressure and exact word comparison: embedding
+  `1024`, RMSNorm `1024`, and Q/K/V `2048/1024/1024`. The reusable regression
+  `run_embedding_layer0_frontend_regression.ps1` passed from fresh export through
+  Vivado XSim and independent trace audit in
+  `Temp/embedding_layer0_frontend_regression/20260713_131628`. Exact scheduler
+  counters are `8234/561040` reads and `4097/5120` writes; aggregate top counters
+  including embedding are `8236/561176` reads and `4098/6144` writes. Timing is
+  embedding done/first hidden read `1460/1716`, RMSNorm done/first QKV read
+  `7669/8226`, and final QKV write/scheduler/top done
+  `1857932/1858412/1858414`.
+- The continuous token-driven path now also passes through the complete Layer 0
+  scheduler. `vector_workspace.py` lets the existing attention/MLP exporters
+  use a caller-selected work directory, and
+  `47_export_chained_layer_qmap_artifacts.py` now supports an explicit Layer 0
+  embedding input plus a Temp-contained output root without changing its legacy
+  Layer 1+ defaults. `51_export_embedding_layer0_full_chain.py` composes tied-Q4
+  embedding, input RMSNorm, staged full QKV, q/k norm + RoPE, KV append,
+  attention score/value, `o_proj`, post-attention residual/RMSNorm, gate/up,
+  SiLU/multiply, down projection, and final residual artifacts under one Temp
+  session.
+- `tb_qmap_one_token_embedding_layer0_frontend.sv +full_layer` runs those
+  artifacts through `qmap_one_token_top.sv` and one backpressured shared-memory
+  model. It compares every write exactly: embedding/input norm `1024/1024`,
+  Q/K/V `2048/1024/1024`, cache/Q-RoPE/attention `2048/2048/2048`,
+  `o_proj`/post-hidden/post-norm `1024/1024/1024`, gate/up/MLP-hidden
+  `3072/3072/3072`, and down/layer-out `1024/1024`. The focused test deliberately
+  corrupts the final-tail gamma descriptor only after Layer 0 succeeds, so it
+  proves the complete layer while avoiding an unrelated LM-head scan; the
+  expected top error is therefore a tail-stop condition, not a layer failure.
+- Fresh reusable regression
+  `Temp/embedding_layer0_full_regression/20260713_135629` passed vector export,
+  Vivado 2024.2 XSim, and independent trace audit. Layer 0 scheduler counters are
+  exactly `46278/2140354` reads and `6155/25600` writes. Aggregate top counters,
+  including embedding and the invalid-tail descriptor reads, are
+  `46289/2140762` reads and `6156/26624` writes. The final layer write response,
+  scheduler done, tail start, and top done occur at cycles
+  `5091425/5091436/5091437/5091822`; all 16 write kinds, all cache addresses, and
+  every producer-response-before-consumer-read boundary pass the streamed CSV
+  audit.
+- The previous mixed three-layer lineage has now been replaced by one continuous
+  token-driven AXI-Lite path. `52_export_embedding_true3_final_chain.py` generated
+  tied-Q4 embedding, complete Layer 0, true Layer 1 from the new Layer 0 output,
+  true Layer 2 from the new Layer 1 output, final RMSNorm, and the 151,936-row
+  tied LM-head/final-tail packet under
+  `Temp/embedding_true3_export_trial1/vectors`. Python predicts token `537` with
+  exact Q26 score `838805253` for this intentionally truncated three-layer model.
+  `run_embedding_true3_axil_tail_regression.ps1` then launched the same lineage
+  through software-like AXI-Lite writes into `qmap_one_token_axil_top.sv`.
+  Session `Temp/embedding_true3_axil_tail_regression/20260713_145056` passed XSim
+  and `check_embedding_true3_axil_tail_timing.py`: all three layers completed with
+  mask `0x7`, every RTL write matched its Python golden word, all `9496` tail
+  tiles completed, and the observed token/score was exactly `537/838805253`.
+  Scheduler counters are `138834/6421062` reads and `18465/76800` writes;
+  aggregate embedding+scheduler+tail counters are `224330/27088110` reads and
+  `18468/78851` writes. Embedding response/Layer0 first read occurred at cycles
+  `2540/2928`; Layer0, Layer1, and Layer2 final write responses occurred at
+  `6703116`, `13403696`, and `20104276`; scheduler done, tail start, first tail
+  hidden read, and top done occurred at `20104287`, `20104288`, `20104873`, and
+  `64204694`. The independent event audit verified all `224330` read completions,
+  all `18468` write responses, the staged Layer 0 QKV base `0x4_1B40_0000`, and
+  every cross-layer response-before-consumer boundary.
+- The continuous token-driven path now passes through all 28 model layers and
+  the full-vocabulary tail. `53_export_embedding_full28_final_chain.py` loops the
+  established layer exporter over Layers 0 through 27, feeds each exact
+  `layer_out[1024]` into the next layer, regenerates final RMSNorm/LM-head data
+  from Layer 27, emits a root manifest, and rejects any output outside `Temp/`.
+  Its collision-free physical layout uses a `0x0084_0000` per-layer persistent
+  block stride, 1 MiB body-QMAP stride, 2 MiB per-layer KV-cache window, and
+  final-tail QMAP base `0x4_1950_0000`; the independent address audit covers
+  `508` intervals from `0x4_0010_0000` through `0x4_1950_3fff` with no overlap.
+- Reusable regression
+  `Temp/embedding_full28_axil_tail_regression/20260713_164001` passed fresh
+  export, Vivado 2024.2 XSim, and the streamed independent event audit. Token
+  `374` reaches exact token/score `537/1155032971`, layer mask `0x0fffffff`,
+  scheduler counters `1295784/59929912` reads and `172340/716800` writes, and
+  aggregate counters `1381280/80596960` reads and `172343/718851` writes. The
+  embedding response, first/last layer responses, scheduler done, tail start,
+  first tail hidden read, and top done occur at cycles `11290`,
+  `6711866/187627526`, `187627537`, `187627538`, `187628123`, and `231727944`.
+  Every one of the `281` QMAP packets is observed, all request/completion/response
+  counts pair exactly, every write word matches, all 27 inter-layer handoffs wait
+  exactly `392` cycles after the producer response, and the final write response
+  precedes top done by `7` cycles. A no-`QMAP_ONE_TOKEN_TB_FULL_CHAIN` legacy
+  compile/elaboration check also passes under
+  `Temp/embedding_full_chain_compat_compile/20260713_185334`.
+- Local simulation products are now deliberately contained under `Temp/`.
+  `run_one_token_local_regression.ps1`, `run_one_token_xsim_regression.ps1`, and
+  `run_q4_embedding_regression.ps1` reject output roots outside `Temp`, create
+  timestamped sessions, and keep generated vectors, compiler products, logs,
+  traces, audits, and Python bytecode there. The focused one-token suite passed
+  all eight RTL tests, the 42-offset RTL/C register contract, and host GCC
+  syntax checking in `Temp/one_token_local_regression/20260713_132259`. The
+  latest embedding regression also passed Icarus and XSim in
+  `Temp/q4_embedding_regression/20260713_132315`, and the original focused
+  frontend chain was rerun successfully after the full-layer testbench extension
+  in `Temp/embedding_layer0_frontend_regression/20260713_134639`.
 - A first PS-side one-token runtime skeleton now exists at
   `FPGA_Project/software/qmap_one_token_runtime/`. It codifies the AXI-Lite byte
   offsets from `qmap_one_token_control_regs.sv`, table ids `0..9`, status/control
   masks, 64-bit base-address writes, per-layer QMAP table commits, full-run
-  configure/start/poll/result helpers, and a board bring-up no-memory validation
+  configure/start/poll/result helpers, optional embedding enable and tied
+  weight/scale base configuration, and a board bring-up no-memory validation
   smoke matching `tb_qmap_one_token_axil_top.sv`. It is syntax-checked with host
   GCC, but not yet built in Vitis because the Vivado BD has not assigned a
   one-token AXI-Lite base address.
@@ -1299,8 +1445,9 @@ Previous useful checkpoint:
   `FPGA_Project/rtl/qmap_one_token_axi_top.sv`. It wraps
   `qmap_one_token_axil_top.sv` with the existing `axi4_read_master.sv` and
   `axi4_write_master.sv`, exposing one `S_AXI` register slave and one `M_AXI`
-  32-bit PL-DDR master for module-reference/custom-IP integration. Syntax is
-  checked by compiling the wrapper as the Icarus top with all RTL sources. The
+  32-bit PL-DDR master for module-reference/custom-IP integration. In addition
+  to syntax/no-memory checks, its positive embedding path has passed Icarus and
+  Vivado XSim with exact AXI read/write bursts and output data. The
   focused Icarus testbench `tb_qmap_one_token_axi_top.sv` now also drives the
   same invalid `layer_count=0` no-memory validation smoke through the BD-facing
   `S_AXI` port, confirms done/error/layer0-error register readback, and proves no
@@ -1327,38 +1474,38 @@ Previous useful checkpoint:
 
 ## Immediate Next Step
 
-Use the passing `qmap_one_token_axil_top.sv` true three-layer top-to-tail xsim
-run as the model-facing control-boundary baseline, backed by the tiny-MMIO
-wrapper smoke, AXI-Lite adapter unit test, AXI-Lite Layer1 -> Layer2 -> tail
-positive run, and the direct-MMIO Layer1 -> Layer2 input-RMSNorm-enabled
-`qmap_one_token_top.sv` run. The project has now proven per-layer input
-normalization feeding QKV, full layer write-back across more than one scheduler
-layer, a top-controlled handoff into final RMSNorm plus full-vocabulary LM-head,
-software-like register launch, the productized tiny-MMIO wrapper seam, the first
-AXI4-Lite wrapper seam around that same register map, and a bounded true
-Layer0(QKV-first) -> Layer1 -> Layer2 -> final-tail path through AXI-Lite
-control. Do not spend the next step on more small DDR/AXI/row smoke tests unless
-a specific new integration bug demands one.
+The timing-audited continuous
+`token -> tied-Q4 embedding -> all 28 transformer layers -> final RMSNorm ->
+full-vocabulary LM head` AXI-Lite path is complete locally. Do not repeat the
+three-layer/full28 single-token runs, small DDR/PS/PL tests, or row-level smoke
+tests unless a later shared-RTL change or a specific failure requires them. The
+next real capability is persistent multi-token decode: reuse the completed
+one-token datapath without reset, retain all 28 layers' K/V cache contents,
+advance token position, and feed the selected token back into embedding.
 
 Recommended next slice:
 
-1. Run the safe dry-run first, then use `--apply --validate` only when ready:
-   `vivado -mode batch -source FPGA_Project/Vivado_Project/scripts/one_token_axi_top_bd_scaffold.tcl`
-   and then the same command with `-tclargs --apply --validate`. This should add
-   the one-token module-reference/custom-IP seam to Vivado, assign the `S_AXI`
-   register aperture, connect `M_AXI` to the proven PL-DDR path, validate BD, and
-   stop before synthesis/implementation.
-2. After the BD address map exists, build a Vitis no-memory validation app from
-   `FPGA_Project/software/qmap_one_token_runtime/main.c` by defining
-   `QOT_BASEADDR` from `xparameters.h`, then run that app before any model-memory
-   traffic. A pass should show done+error, layer0 error, and zero memory counters.
-3. Keep `tb_axi4lite_to_mmio_regs.sv`, `tb_qmap_one_token_axil_top.sv`,
-   `tb_qmap_one_token_axi_top.sv`, the AXI-Lite Layer1 -> Layer2 -> tail xsim,
-   the mixed true three-layer xsim, and the host syntax check for the PS runtime
-   headers as required regressions before any board-facing change. Generate Layer
-   0 input-RMSNorm full-chain
-   artifacts only if/when the project wants to remove the current QKV-first
-   Layer 0 baseline.
+1. Define a two-step decode manifest from the model reference. Step 0 must use
+   the current token/position and produce exact per-layer K/V appends plus the
+   selected token; Step 1 must consume that selected token at the next position,
+   preserve Step 0 cache entries, and emit its own exact layer/tail golden data.
+   Keep all generated vectors and Python workspaces under one `Temp/` session.
+2. Add a persistent decode-loop controller around `qmap_one_token_top.sv` (or the
+   smallest equivalent extension to that top): reuse the programmed 28-layer
+   QMAP tables and tied weights, update `input_token` from the prior argmax,
+   increment `token_position`, and launch the next one-token pass without clearing
+   PL memory or K/V cache. Expose current step, token, position, done, and error
+   through the existing AXI-Lite control boundary.
+3. Extend the manifest-driven shared-memory testbench for two consecutive full
+   28-layer tokens in one simulation. Require exact cache addresses/data for both
+   positions, prove Step 1 reads the retained Step 0 cache only after its writes
+   respond, compare every layer/tail write, and require both selected tokens and
+   scores to match Python. This is the necessary persistence proof, not another
+   reduced row or DDR smoke test.
+4. Once the two-token decode contract passes, parameterize the loop for a bounded
+   generation count and stop conditions, then add prompt prefill. Board
+   integration remains deferred until these local RTL paths are stable or a
+   board-specific issue must be diagnosed.
 
 ## Practical Notes
 

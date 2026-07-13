@@ -556,21 +556,23 @@ standalone descriptor-backed RTL/xsim stage and as an optional pre-stage inside
 golden words regenerated from the RTL RMSNorm output. Real Layer 1 and Layer 2
 chained artifacts include their own input RMSNorm runtime packets, and their
 QKV activation descriptors point to the corresponding RMSNorm output buffers.
-The stronger top-level local baseline now runs Layer 1, then Layer 2, then the
-final-token tail with token `537` / score `850086863`, and the MMIO-style
-control-register scenario `+l1_l2_mmio_top_tail_only` launches that same path
-through software-like register writes and table commits. The control boundary is
-now productized both as `qmap_one_token_mmio_top.sv` and as the first AXI4-Lite
-wrapper `qmap_one_token_axil_top.sv`; the generic `axi4lite_to_mmio_regs.sv`
-adapter has focused stall/error/order coverage, the AXI-Lite top wrapper passes
-the no-memory scheduler-validation exit through AXI-Lite reads/writes, and the
-same AXI-Lite wrapper now passes the positive Layer1 -> Layer2 -> final-tail
-xsim memory-model path with token `537` / score `850086863` and exact aggregate
-counters. The bounded true three-layer AXI-Lite top-to-tail xsim also now passes
-under the current mixed artifact contract: Layer 0 uses the existing QKV-first
-full-layer chain, Layers 1 and 2 use input-RMSNorm-enabled QKV, the layer mask is
-`0x7`, and final-tail returns token `537` / score `850086863` with exact
-aggregate counters. The first PS-side runtime skeleton now lives under
+The stronger top-level local baseline now runs through a software-like AXI-Lite
+control boundary productized as `qmap_one_token_mmio_top.sv` and
+`qmap_one_token_axil_top.sv`; the generic `axi4lite_to_mmio_regs.sv` adapter has
+focused stall/error/order coverage, and the wrapper preserves the no-memory
+validation behavior. The older mixed bounded-three-layer baseline was first
+superseded by one continuous token-driven three-layer lineage and is now
+superseded again by the complete model-depth local path:
+`53_export_embedding_full28_final_chain.py` propagates tied-Q4 embedding through
+all 28 input-RMSNorm-enabled transformer layers, then regenerates final RMSNorm
+and the full-vocabulary tied LM head from Layer 27. The continuous AXI-Lite XSim
+session
+`Temp/embedding_full28_axil_tail_regression/20260713_164001` passes with layer
+mask `0x0fffffff`, exact token/score `537/1155032971`, exact scheduler and top
+counters, all `281` QMAP packets observed, and every producer write response
+before its consumer read. Its `508` physical address intervals are collision-free
+inside the PL DDR aperture, and all simulation products remain under `Temp/`.
+The first PS-side runtime skeleton now lives under
 `FPGA_Project/software/qmap_one_token_runtime/`, mirroring the RTL register map
 and providing configure/start/poll/result helpers plus a no-memory AXI-Lite
 validation smoke. The first BD-facing shell `qmap_one_token_axi_top.sv` now
@@ -581,8 +583,11 @@ smoke test now proves the BD-facing shell can accept the no-memory validation
 request through `S_AXI` without issuing any `M_AXI` transaction. A safe-by-default
 Tcl scaffold, `FPGA_Project/Vivado_Project/scripts/one_token_axi_top_bd_scaffold.tcl`,
 now dry-runs the planned BD edits and requires `--apply` before modifying the
-current row1024 BD. The next model-facing direction is Vivado block-design/Vitis
-integration for that wrapper, not another small smoke test.
+current row1024 BD. The next model-facing direction is persistent multi-token
+decode: retain per-layer K/V cache across invocations, increment position, feed
+the selected token back into embedding, and then add prompt prefill. Vivado
+block-design/Vitis integration remains deferred unless a board-specific issue
+requires it.
 
 Keep the exact next action in `Source/CURRENT_STATE.md`; keep detailed address
 planning in `Source/FPGA_MEMORY_MAP.md`.

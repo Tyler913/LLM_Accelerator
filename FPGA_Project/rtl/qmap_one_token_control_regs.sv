@@ -29,6 +29,9 @@ module qmap_one_token_control_regs #(
 
     output logic                              o_start_pulse,
     output logic [31 : 0]                     o_input_token_id,
+    output logic                              o_embedding_enable,
+    output logic [ADDR_WIDTH-1 : 0]           o_embedding_weight_base_addr,
+    output logic [ADDR_WIDTH-1 : 0]           o_embedding_scale_base_addr,
     output logic [LAYER_INDEX_WIDTH-1 : 0]    o_layer_start_index,
     output logic [LAYER_COUNT_WIDTH-1 : 0]    o_layer_count,
     output logic [POSITION_WIDTH-1 : 0]       o_position,
@@ -103,6 +106,7 @@ module qmap_one_token_control_regs #(
     localparam logic [9 : 0] REG_FINAL_OVERRIDE_LO    = 10'h010;
     localparam logic [9 : 0] REG_FINAL_OVERRIDE_HI    = 10'h011;
     localparam logic [9 : 0] REG_FINAL_OVERRIDE_CTRL  = 10'h012;
+    localparam logic [9 : 0] REG_EMBEDDING_CTRL       = 10'h013;
     localparam logic [9 : 0] REG_TABLE_SELECT         = 10'h014;
     localparam logic [9 : 0] REG_TABLE_DATA_LO        = 10'h015;
     localparam logic [9 : 0] REG_TABLE_DATA_HI        = 10'h016;
@@ -123,6 +127,10 @@ module qmap_one_token_control_regs #(
     localparam logic [9 : 0] REG_MEM_RD_WORDS         = 10'h025;
     localparam logic [9 : 0] REG_MEM_WR_REQS          = 10'h026;
     localparam logic [9 : 0] REG_MEM_WR_WORDS         = 10'h027;
+    localparam logic [9 : 0] REG_EMBED_WEIGHT_LO      = 10'h028;
+    localparam logic [9 : 0] REG_EMBED_WEIGHT_HI      = 10'h029;
+    localparam logic [9 : 0] REG_EMBED_SCALE_LO       = 10'h02A;
+    localparam logic [9 : 0] REG_EMBED_SCALE_HI       = 10'h02B;
 
     wire logic [9 : 0] word_addr = i_reg_addr[11 : 2];
 
@@ -204,6 +212,7 @@ module qmap_one_token_control_regs #(
             REG_FINAL_OVERRIDE_LO,
             REG_FINAL_OVERRIDE_HI,
             REG_FINAL_OVERRIDE_CTRL,
+            REG_EMBEDDING_CTRL,
             REG_TABLE_SELECT,
             REG_TABLE_DATA_LO,
             REG_TABLE_DATA_HI,
@@ -223,7 +232,11 @@ module qmap_one_token_control_regs #(
             REG_MEM_RD_REQS,
             REG_MEM_RD_WORDS,
             REG_MEM_WR_REQS,
-            REG_MEM_WR_WORDS: o_reg_error = 1'b0;
+            REG_MEM_WR_WORDS,
+            REG_EMBED_WEIGHT_LO,
+            REG_EMBED_WEIGHT_HI,
+            REG_EMBED_SCALE_LO,
+            REG_EMBED_SCALE_HI: o_reg_error = 1'b0;
             default: o_reg_error = i_reg_wr_valid || i_reg_rd_valid;
         endcase
     end
@@ -257,6 +270,7 @@ module qmap_one_token_control_regs #(
             REG_FINAL_OVERRIDE_LO:    o_reg_rdata = o_final_hidden_base_override_addr[31 : 0];
             REG_FINAL_OVERRIDE_HI:    o_reg_rdata = o_final_hidden_base_override_addr[63 : 32];
             REG_FINAL_OVERRIDE_CTRL:  o_reg_rdata = {31'd0, o_final_hidden_base_override_valid};
+            REG_EMBEDDING_CTRL:       o_reg_rdata = {31'd0, o_embedding_enable};
             REG_TABLE_SELECT:         o_reg_rdata = {16'd0, table_select_layer, table_select_id};
             REG_TABLE_DATA_LO:        o_reg_rdata = selected_table_addr[31 : 0];
             REG_TABLE_DATA_HI:        o_reg_rdata = selected_table_addr[63 : 32];
@@ -276,6 +290,10 @@ module qmap_one_token_control_regs #(
             REG_MEM_RD_WORDS:         o_reg_rdata = i_mem_read_word_count;
             REG_MEM_WR_REQS:          o_reg_rdata = i_mem_write_req_count;
             REG_MEM_WR_WORDS:         o_reg_rdata = i_mem_write_word_count;
+            REG_EMBED_WEIGHT_LO:      o_reg_rdata = o_embedding_weight_base_addr[31 : 0];
+            REG_EMBED_WEIGHT_HI:      o_reg_rdata = o_embedding_weight_base_addr[63 : 32];
+            REG_EMBED_SCALE_LO:       o_reg_rdata = o_embedding_scale_base_addr[31 : 0];
+            REG_EMBED_SCALE_HI:       o_reg_rdata = o_embedding_scale_base_addr[63 : 32];
             default:                  o_reg_rdata = 32'd0;
         endcase
     end
@@ -284,6 +302,9 @@ module qmap_one_token_control_regs #(
         if (!i_rst_n) begin
             o_start_pulse <= 1'b0;
             o_input_token_id <= 32'd0;
+            o_embedding_enable <= 1'b0;
+            o_embedding_weight_base_addr <= '0;
+            o_embedding_scale_base_addr <= '0;
             o_layer_start_index <= '0;
             o_layer_count <= '0;
             o_position <= '0;
@@ -357,6 +378,26 @@ module qmap_one_token_control_regs #(
                     REG_INPUT_TOKEN: begin
                         if (i_top_busy) command_error_sticky <= 1'b1;
                         else o_input_token_id <= i_reg_wdata;
+                    end
+                    REG_EMBEDDING_CTRL: begin
+                        if (i_top_busy) command_error_sticky <= 1'b1;
+                        else o_embedding_enable <= i_reg_wdata[0];
+                    end
+                    REG_EMBED_WEIGHT_LO: begin
+                        if (i_top_busy) command_error_sticky <= 1'b1;
+                        else o_embedding_weight_base_addr[31 : 0] <= i_reg_wdata;
+                    end
+                    REG_EMBED_WEIGHT_HI: begin
+                        if (i_top_busy) command_error_sticky <= 1'b1;
+                        else o_embedding_weight_base_addr[63 : 32] <= i_reg_wdata;
+                    end
+                    REG_EMBED_SCALE_LO: begin
+                        if (i_top_busy) command_error_sticky <= 1'b1;
+                        else o_embedding_scale_base_addr[31 : 0] <= i_reg_wdata;
+                    end
+                    REG_EMBED_SCALE_HI: begin
+                        if (i_top_busy) command_error_sticky <= 1'b1;
+                        else o_embedding_scale_base_addr[63 : 32] <= i_reg_wdata;
                     end
                     REG_INPUT_HIDDEN_LO: begin
                         if (i_top_busy) command_error_sticky <= 1'b1;

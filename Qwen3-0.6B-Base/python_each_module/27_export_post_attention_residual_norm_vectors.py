@@ -21,10 +21,11 @@ from common import (
     require_output,
     tensor_to_float32,
 )
+from vector_workspace import resolve_sim_vector_dir
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
+SIM_VECTOR_DIR = resolve_sim_vector_dir(REPO_ROOT)
 RMSNORM_EXPORTER_PATH = Path(__file__).with_name("17_export_rmsnorm_fixed_vectors.py")
 
 DEFAULT_O_PROJ_PREFIX = "o_proj_stage_real"

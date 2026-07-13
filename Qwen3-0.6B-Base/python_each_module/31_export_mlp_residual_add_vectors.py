@@ -15,10 +15,11 @@ from common import (
     load_model,
     require_output,
 )
+from vector_workspace import resolve_sim_vector_dir
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
+SIM_VECTOR_DIR = resolve_sim_vector_dir(REPO_ROOT)
 DEFAULT_POST_ATTENTION_PREFIX = "post_attention_residual_norm_stage_real"
 DEFAULT_DOWN_PREFIX = "mlp_down_proj_stage_real"
 DEFAULT_PREFIX = "mlp_residual_add_stage_real"

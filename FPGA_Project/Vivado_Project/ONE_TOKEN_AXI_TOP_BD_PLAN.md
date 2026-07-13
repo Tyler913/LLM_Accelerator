@@ -1,8 +1,10 @@
 # One-token AXI-Lite / AXI4 Vivado integration plan
 
-Status: local RTL seam is ready for BD planning, but the checked-in Vivado block
-design still contains the row1024 smoke design. Do not replace the proven
-row1024 bitstream until the one-token seam passes the staged gates below.
+Status: the local RTL seam, tied-Q4 embedding path, AXI4-Lite control path, and
+BD-facing AXI memory path pass focused Icarus and Vivado XSim regressions. The
+checked-in Vivado block design still contains the row1024 smoke design. Current
+project direction is to finish the local inference RTL chain before applying BD
+changes; do not replace the proven row1024 bitstream yet.
 
 ## Current BD baseline
 
@@ -37,7 +39,9 @@ keeps `xparameters.h` simple.
 The wrapper is intentionally policy-free: register semantics stay in
 `qmap_one_token_control_regs.sv`, AXI4-Lite protocol handling stays in
 `axi4lite_to_mmio_regs.sv`, and compute sequencing stays in
-`qmap_one_token_top.sv`.
+`qmap_one_token_top.sv`. When enabled, `q4_embedding_lookup.sv` reads one tied
+Q4 embedding row and writes the Q14.10 input hidden vector before the layer
+scheduler starts.
 
 ## Scripted scaffold
 
@@ -102,6 +106,11 @@ before implementation or XSA export.
   xsim.
 - `tb_qmap_one_token_axi_top.sv` Icarus no-memory smoke for the BD-facing
   `S_AXI`/`M_AXI` shell.
+- `run_q4_embedding_regression.ps1`, including exact model-vector export,
+  standalone embedding, AXI-Lite composition, BD-facing AXI burst splitting,
+  and a fresh Vivado XSim compile/elaboration/run.
+- `tb_axi4_write_master.sv`, including local writes larger than one AXI burst,
+  256-beat splitting, and 4 KiB boundary splitting.
 - `one_token_axi_top_bd_scaffold.tcl` Vivado dry-run before any `--apply` run.
 - Host syntax check for `FPGA_Project/software/qmap_one_token_runtime/main.c`.
 - Header/RTL register-map consistency check for `qmap_one_token_regs.h`.
@@ -111,5 +120,7 @@ before implementation or XSA export.
 - Full model artifact manifest and PS loader for all 28 layer QMAP packet bases.
 - Cache coherency policy for PS writes into PL DDR and PL writes read back by PS.
 - Whether to keep direct PS memory-mapped 32-bit artifact copies or add DMA.
-- Layer 0 input-RMSNorm full-chain artifacts if the project wants to remove the
-  current QKV-first Layer 0 baseline.
+- Layer 0 input-RMSNorm full-chain artifacts regenerated from the exact Q4
+  embedding output. This is the immediate local-RTL task; the current mixed
+  true3 baseline still uses a QKV-first Layer 0 and therefore does not yet
+  consume the new embedding output in its full layer chain.

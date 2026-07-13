@@ -6,7 +6,7 @@
 //
 // This module owns the high-level sequence:
 //
-//   layer scheduler -> final-token tail
+//   optional tied-Q4 embedding -> layer scheduler -> final-token tail
 //
 // It deliberately keeps both existing compute wrappers intact and only adds the
 // control/memory-mux boundary that the eventual PS-visible run_one_token block
@@ -34,13 +34,18 @@ module qmap_one_token_top #(
     parameter int ROW_ACC_WIDTH     = SCALED_WIDTH + $clog2(GROUP_COUNT) + 2,
     parameter int TAIL_MAX_TILES    = 9496,
     parameter int TAIL_TILE_ROWS    = 16,
-    parameter int TOKEN_ID_WIDTH    = 32
+    parameter int TOKEN_ID_WIDTH    = 32,
+    parameter int VOCAB_SIZE        = 151936
 )
 (
     input  wire logic                         i_clk,
     input  wire logic                         i_rst_n,
 
     input  wire logic                         i_start,
+    input  wire logic                         i_embedding_enable,
+    input  wire logic [TOKEN_ID_WIDTH-1 : 0]  i_input_token_id,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_embedding_weight_base_addr,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_embedding_scale_base_addr,
     input  wire logic [LAYER_INDEX_WIDTH-1:0] i_layer_start_index,
     input  wire logic [LAYER_COUNT_WIDTH-1:0] i_layer_count,
     input  wire logic [POSITION_WIDTH-1:0]    i_position,
@@ -135,9 +140,11 @@ module qmap_one_token_top #(
     input  wire logic                         i_mem_wr_error
 );
 
-    typedef enum logic [2 : 0] {
+    typedef enum logic [3 : 0] {
         S_IDLE,
         S_VALIDATE,
+        S_EMBED_START,
+        S_EMBED_WAIT,
         S_LAYER_START,
         S_LAYER_WAIT,
         S_TAIL_START,
@@ -147,11 +154,35 @@ module qmap_one_token_top #(
 
     localparam logic [7 : 0] PHASE_IDLE   = 8'd0;
     localparam logic [7 : 0] PHASE_CONFIG = 8'd1;
+    localparam logic [7 : 0] PHASE_EMBED  = 8'd5;
     localparam logic [7 : 0] PHASE_LAYERS = 8'd2;
     localparam logic [7 : 0] PHASE_TAIL   = 8'd3;
     localparam logic [7 : 0] PHASE_DONE   = 8'd4;
 
     state_t state;
+
+    logic embedding_start;
+    logic embedding_active;
+    logic embedding_done;
+    logic embedding_error;
+    logic embed_mem_rd_req_valid;
+    logic embed_mem_rd_req_ready;
+    logic [ADDR_WIDTH-1 : 0] embed_mem_rd_req_addr;
+    logic [15 : 0] embed_mem_rd_req_len_bytes;
+    logic embed_mem_rd_rsp_valid;
+    logic embed_mem_rd_rsp_ready;
+    logic [MEM_DATA_WIDTH-1 : 0] embed_mem_rd_rsp_data;
+    logic embed_mem_rd_rsp_last;
+    logic embed_mem_wr_req_valid;
+    logic embed_mem_wr_req_ready;
+    logic [ADDR_WIDTH-1 : 0] embed_mem_wr_req_addr;
+    logic [15 : 0] embed_mem_wr_req_len_bytes;
+    logic [MEM_DATA_WIDTH-1 : 0] embed_mem_wr_data;
+    logic embed_mem_wr_data_valid;
+    logic embed_mem_wr_data_ready;
+    logic embed_mem_wr_data_last;
+    logic embed_mem_wr_done;
+    logic embed_mem_wr_error;
 
     logic scheduler_start;
     logic scheduler_busy;
@@ -207,6 +238,8 @@ module qmap_one_token_top #(
     logic top_validate_error;
     logic [ADDR_WIDTH-1 : 0] selected_final_hidden_base_addr;
 
+    assign embedding_start = (state == S_EMBED_START);
+    assign embedding_active = (state == S_EMBED_START) || (state == S_EMBED_WAIT);
     assign scheduler_start = (state == S_LAYER_START);
     assign tail_start = (state == S_TAIL_START);
     assign scheduler_active = (state == S_LAYER_START) || (state == S_LAYER_WAIT);
@@ -218,6 +251,11 @@ module qmap_one_token_top #(
     assign o_last_layer_output_base_addr = scheduler_last_layer_output_base_addr;
     assign top_validate_error =
         (i_final_tail_qmap_base_addr == '0) ||
+        (i_embedding_enable &&
+         ((i_input_token_id >= VOCAB_SIZE) ||
+          (i_embedding_weight_base_addr == '0) ||
+          (i_embedding_scale_base_addr == '0) ||
+          (i_input_hidden_base_addr == '0))) ||
         (i_final_hidden_base_override_valid && (i_final_hidden_base_override_addr == '0));
 
     assign o_busy = (state != S_IDLE) && (state != S_DONE);
@@ -230,6 +268,8 @@ module qmap_one_token_top #(
         case (state)
             S_IDLE:        o_phase_debug = PHASE_IDLE;
             S_VALIDATE:    o_phase_debug = PHASE_CONFIG;
+            S_EMBED_START: o_phase_debug = PHASE_EMBED;
+            S_EMBED_WAIT:  o_phase_debug = PHASE_EMBED;
             S_LAYER_START: o_phase_debug = PHASE_LAYERS;
             S_LAYER_WAIT:  o_phase_debug = PHASE_LAYERS;
             S_TAIL_START:  o_phase_debug = PHASE_TAIL;
@@ -240,64 +280,128 @@ module qmap_one_token_top #(
     end
 
     assign o_mem_rd_req_valid =
+        embedding_active ? embed_mem_rd_req_valid :
         scheduler_active ? sched_mem_rd_req_valid :
         o_tail_active    ? tail_mem_rd_req_valid :
         1'b0;
     assign o_mem_rd_req_addr =
+        embedding_active ? embed_mem_rd_req_addr :
         scheduler_active ? sched_mem_rd_req_addr :
         o_tail_active    ? tail_mem_rd_req_addr :
         '0;
     assign o_mem_rd_req_len_bytes =
+        embedding_active ? embed_mem_rd_req_len_bytes :
         scheduler_active ? sched_mem_rd_req_len_bytes :
         o_tail_active    ? tail_mem_rd_req_len_bytes :
         16'd0;
 
+    assign embed_mem_rd_req_ready = embedding_active ? i_mem_rd_req_ready : 1'b0;
     assign sched_mem_rd_req_ready = scheduler_active ? i_mem_rd_req_ready : 1'b0;
     assign tail_mem_rd_req_ready = o_tail_active ? i_mem_rd_req_ready : 1'b0;
+    assign embed_mem_rd_rsp_valid = embedding_active ? i_mem_rd_rsp_valid : 1'b0;
     assign sched_mem_rd_rsp_valid = scheduler_active ? i_mem_rd_rsp_valid : 1'b0;
     assign tail_mem_rd_rsp_valid = o_tail_active ? i_mem_rd_rsp_valid : 1'b0;
+    assign embed_mem_rd_rsp_data = i_mem_rd_rsp_data;
     assign sched_mem_rd_rsp_data = i_mem_rd_rsp_data;
     assign tail_mem_rd_rsp_data = i_mem_rd_rsp_data;
+    assign embed_mem_rd_rsp_last = embedding_active ? i_mem_rd_rsp_last : 1'b0;
     assign sched_mem_rd_rsp_last = scheduler_active ? i_mem_rd_rsp_last : 1'b0;
     assign tail_mem_rd_rsp_last = o_tail_active ? i_mem_rd_rsp_last : 1'b0;
     assign o_mem_rd_rsp_ready =
+        embedding_active ? embed_mem_rd_rsp_ready :
         scheduler_active ? sched_mem_rd_rsp_ready :
         o_tail_active    ? tail_mem_rd_rsp_ready :
         1'b0;
 
     assign o_mem_wr_req_valid =
+        embedding_active ? embed_mem_wr_req_valid :
         scheduler_active ? sched_mem_wr_req_valid :
         o_tail_active    ? tail_mem_wr_req_valid :
         1'b0;
     assign o_mem_wr_req_addr =
+        embedding_active ? embed_mem_wr_req_addr :
         scheduler_active ? sched_mem_wr_req_addr :
         o_tail_active    ? tail_mem_wr_req_addr :
         '0;
     assign o_mem_wr_req_len_bytes =
+        embedding_active ? embed_mem_wr_req_len_bytes :
         scheduler_active ? sched_mem_wr_req_len_bytes :
         o_tail_active    ? tail_mem_wr_req_len_bytes :
         16'd0;
     assign o_mem_wr_data =
+        embedding_active ? embed_mem_wr_data :
         scheduler_active ? sched_mem_wr_data :
         o_tail_active    ? tail_mem_wr_data :
         32'd0;
     assign o_mem_wr_data_valid =
+        embedding_active ? embed_mem_wr_data_valid :
         scheduler_active ? sched_mem_wr_data_valid :
         o_tail_active    ? tail_mem_wr_data_valid :
         1'b0;
     assign o_mem_wr_data_last =
+        embedding_active ? embed_mem_wr_data_last :
         scheduler_active ? sched_mem_wr_data_last :
         o_tail_active    ? tail_mem_wr_data_last :
         1'b0;
 
+    assign embed_mem_wr_req_ready = embedding_active ? i_mem_wr_req_ready : 1'b0;
     assign sched_mem_wr_req_ready = scheduler_active ? i_mem_wr_req_ready : 1'b0;
     assign tail_mem_wr_req_ready = o_tail_active ? i_mem_wr_req_ready : 1'b0;
+    assign embed_mem_wr_data_ready = embedding_active ? i_mem_wr_data_ready : 1'b0;
     assign sched_mem_wr_data_ready = scheduler_active ? i_mem_wr_data_ready : 1'b0;
     assign tail_mem_wr_data_ready = o_tail_active ? i_mem_wr_data_ready : 1'b0;
+    assign embed_mem_wr_done = embedding_active ? i_mem_wr_done : 1'b0;
     assign sched_mem_wr_done = scheduler_active ? i_mem_wr_done : 1'b0;
     assign tail_mem_wr_done = o_tail_active ? i_mem_wr_done : 1'b0;
+    assign embed_mem_wr_error = embedding_active ? i_mem_wr_error : 1'b0;
     assign sched_mem_wr_error = scheduler_active ? i_mem_wr_error : 1'b0;
     assign tail_mem_wr_error = o_tail_active ? i_mem_wr_error : 1'b0;
+
+    q4_embedding_lookup #(
+        .ADDR_WIDTH     (ADDR_WIDTH),
+        .MEM_DATA_WIDTH (MEM_DATA_WIDTH),
+        .VOCAB_SIZE     (VOCAB_SIZE),
+        .INPUT_SIZE     (INPUT_SIZE),
+        .GROUP_SIZE     (GROUP_SIZE),
+        .GROUP_COUNT    (GROUP_COUNT),
+        .WEIGHT_WIDTH   (WEIGHT_WIDTH),
+        .SCALE_WIDTH    (SCALE_WIDTH),
+        .SCALE_FRAC     (SCALE_FRAC),
+        .OUTPUT_FRAC    (10)
+    ) embedding (
+        .i_clk(i_clk),
+        .i_rst_n(i_rst_n),
+        .i_start(embedding_start),
+        .i_token_id(i_input_token_id),
+        .i_weight_base_addr(i_embedding_weight_base_addr),
+        .i_scale_base_addr(i_embedding_scale_base_addr),
+        .i_output_base_addr(i_input_hidden_base_addr),
+        .o_busy(),
+        .o_done(embedding_done),
+        .o_error(embedding_error),
+        .o_mem_rd_req_valid(embed_mem_rd_req_valid),
+        .i_mem_rd_req_ready(embed_mem_rd_req_ready),
+        .o_mem_rd_req_addr(embed_mem_rd_req_addr),
+        .o_mem_rd_req_len_bytes(embed_mem_rd_req_len_bytes),
+        .i_mem_rd_rsp_valid(embed_mem_rd_rsp_valid),
+        .o_mem_rd_rsp_ready(embed_mem_rd_rsp_ready),
+        .i_mem_rd_rsp_data(embed_mem_rd_rsp_data),
+        .i_mem_rd_rsp_last(embed_mem_rd_rsp_last),
+        .o_mem_wr_req_valid(embed_mem_wr_req_valid),
+        .i_mem_wr_req_ready(embed_mem_wr_req_ready),
+        .o_mem_wr_req_addr(embed_mem_wr_req_addr),
+        .o_mem_wr_req_len_bytes(embed_mem_wr_req_len_bytes),
+        .o_mem_wr_data(embed_mem_wr_data),
+        .o_mem_wr_data_valid(embed_mem_wr_data_valid),
+        .i_mem_wr_data_ready(embed_mem_wr_data_ready),
+        .o_mem_wr_data_last(embed_mem_wr_data_last),
+        .i_mem_wr_done(embed_mem_wr_done),
+        .i_mem_wr_error(embed_mem_wr_error),
+        .o_read_burst_count(),
+        .o_read_word_count(),
+        .o_write_req_count(),
+        .o_write_word_count()
+    );
 
     qmap_one_token_layer_scheduler #(
         .ADDR_WIDTH       (ADDR_WIDTH),
@@ -481,8 +585,26 @@ module qmap_one_token_top #(
                         o_error <= 1'b1;
                         state <= S_DONE;
                     end
+                    else if (i_embedding_enable) begin
+                        state <= S_EMBED_START;
+                    end
                     else begin
                         state <= S_LAYER_START;
+                    end
+                end
+
+                S_EMBED_START: begin
+                    state <= S_EMBED_WAIT;
+                end
+
+                S_EMBED_WAIT: begin
+                    if (embedding_done) begin
+                        if (embedding_error) begin
+                            o_error <= 1'b1;
+                            state <= S_DONE;
+                        end else begin
+                            state <= S_LAYER_START;
+                        end
                     end
                 end
 

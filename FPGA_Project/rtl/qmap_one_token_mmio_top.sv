@@ -112,6 +112,9 @@ module qmap_one_token_mmio_top #(
 
     logic start_pulse;
     logic [31 : 0] input_token_id;
+    logic embedding_enable;
+    logic [ADDR_WIDTH-1 : 0] embedding_weight_base_addr;
+    logic [ADDR_WIDTH-1 : 0] embedding_scale_base_addr;
     logic [LAYER_INDEX_WIDTH-1 : 0] layer_start_index;
     logic [LAYER_COUNT_WIDTH-1 : 0] layer_count;
     logic [POSITION_WIDTH-1 : 0] position;
@@ -155,6 +158,9 @@ module qmap_one_token_mmio_top #(
         .o_reg_error(o_reg_error),
         .o_start_pulse(start_pulse),
         .o_input_token_id(input_token_id),
+        .o_embedding_enable(embedding_enable),
+        .o_embedding_weight_base_addr(embedding_weight_base_addr),
+        .o_embedding_scale_base_addr(embedding_scale_base_addr),
         .o_layer_start_index(layer_start_index),
         .o_layer_count(layer_count),
         .o_position(position),
@@ -224,6 +230,10 @@ module qmap_one_token_mmio_top #(
         .i_clk(i_clk),
         .i_rst_n(i_rst_n),
         .i_start(start_pulse),
+        .i_embedding_enable(embedding_enable),
+        .i_input_token_id(input_token_id),
+        .i_embedding_weight_base_addr(embedding_weight_base_addr),
+        .i_embedding_scale_base_addr(embedding_scale_base_addr),
         .i_layer_start_index(layer_start_index),
         .i_layer_count(layer_count),
         .i_position(position),

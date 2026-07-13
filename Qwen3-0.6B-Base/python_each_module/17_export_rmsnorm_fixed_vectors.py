@@ -166,6 +166,12 @@ def as_float_array(x: torch.Tensor) -> np.ndarray:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export fixed-point input RMSNorm RTL vectors.")
     parser.add_argument("--prefix", default=PREFIX)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=SIM_VECTOR_DIR,
+        help="Directory for all generated vector and metadata files.",
+    )
     parser.add_argument("--layer-id", type=int, default=0, help="Decoder layer input RMSNorm to export")
     parser.add_argument(
         "--input-hex",
@@ -187,6 +193,8 @@ def main() -> None:
     args = parse_args()
     prefix = str(args.prefix)
     layer_id = int(args.layer_id)
+    output_dir = args.output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     tokenizer, model, backbone = load_model()
     input_ids = encode_prompt(tokenizer)
@@ -249,16 +257,16 @@ def main() -> None:
             np.max(np.abs(fixed_output_float - expected_float.astype(np.float64)))
         )
 
-    input_path = SIM_VECTOR_DIR / f"{prefix}_input.hex"
-    gamma_path = SIM_VECTOR_DIR / f"{prefix}_gamma.hex"
-    expected_path = SIM_VECTOR_DIR / f"{prefix}_expected.hex"
-    sum_path = SIM_VECTOR_DIR / f"{prefix}_sum_squares.hex"
-    mean_path = SIM_VECTOR_DIR / f"{prefix}_mean_square.hex"
-    radicand_path = SIM_VECTOR_DIR / f"{prefix}_sqrt_radicand.hex"
-    rms_path = SIM_VECTOR_DIR / f"{prefix}_rms.hex"
-    inv_rms_path = SIM_VECTOR_DIR / f"{prefix}_inv_rms.hex"
-    saturation_path = SIM_VECTOR_DIR / f"{prefix}_saturation.hex"
-    meta_path = SIM_VECTOR_DIR / f"{prefix}_meta.json"
+    input_path = output_dir / f"{prefix}_input.hex"
+    gamma_path = output_dir / f"{prefix}_gamma.hex"
+    expected_path = output_dir / f"{prefix}_expected.hex"
+    sum_path = output_dir / f"{prefix}_sum_squares.hex"
+    mean_path = output_dir / f"{prefix}_mean_square.hex"
+    radicand_path = output_dir / f"{prefix}_sqrt_radicand.hex"
+    rms_path = output_dir / f"{prefix}_rms.hex"
+    inv_rms_path = output_dir / f"{prefix}_inv_rms.hex"
+    saturation_path = output_dir / f"{prefix}_saturation.hex"
+    meta_path = output_dir / f"{prefix}_meta.json"
 
     write_hex_lines(
         input_path,

@@ -198,8 +198,20 @@ def parse_args() -> argparse.Namespace:
         description="Export a QMAP runtime packet for per-layer input RMSNorm simulation."
     )
     parser.add_argument("--prefix", default=PREFIX)
+    parser.add_argument(
+        "--vector-dir",
+        type=Path,
+        default=SIM_VECTOR_DIR,
+        help="Directory containing the fixed RMSNorm vectors named by --prefix.",
+    )
     parser.add_argument("--layer-id", type=int, default=LAYER_ID)
     parser.add_argument("--qmap-base", type=parse_int_auto, default=QMAP_BASE)
+    parser.add_argument(
+        "--hidden-base-addr",
+        type=parse_int_auto,
+        default=None,
+        help="Optional external hidden-buffer address used by the hidden descriptor.",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
@@ -212,10 +224,11 @@ def main() -> None:
     prefix = str(args.prefix)
     layer_id = int(args.layer_id)
     qmap_base = int(args.qmap_base)
+    vector_dir = args.vector_dir.resolve()
 
-    hidden = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_input.hex", HIDDEN_WIDTH, signed=True)
-    gamma = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_gamma.hex", GAMMA_WIDTH, signed=True)
-    expected_norm = read_hex_lines(SIM_VECTOR_DIR / f"{prefix}_expected.hex", NORM_WIDTH, signed=True)
+    hidden = read_hex_lines(vector_dir / f"{prefix}_input.hex", HIDDEN_WIDTH, signed=True)
+    gamma = read_hex_lines(vector_dir / f"{prefix}_gamma.hex", GAMMA_WIDTH, signed=True)
+    expected_norm = read_hex_lines(vector_dir / f"{prefix}_expected.hex", NORM_WIDTH, signed=True)
 
     for name, values in (
         ("hidden", hidden),
@@ -231,11 +244,11 @@ def main() -> None:
     vector_bytes = INPUT_SIZE * 4
 
     scalar_files = {
-        "sum_squares": SIM_VECTOR_DIR / f"{prefix}_sum_squares.hex",
-        "mean_square": SIM_VECTOR_DIR / f"{prefix}_mean_square.hex",
-        "rms": SIM_VECTOR_DIR / f"{prefix}_rms.hex",
-        "inv_rms": SIM_VECTOR_DIR / f"{prefix}_inv_rms.hex",
-        "saturation": SIM_VECTOR_DIR / f"{prefix}_saturation.hex",
+        "sum_squares": vector_dir / f"{prefix}_sum_squares.hex",
+        "mean_square": vector_dir / f"{prefix}_mean_square.hex",
+        "rms": vector_dir / f"{prefix}_rms.hex",
+        "inv_rms": vector_dir / f"{prefix}_inv_rms.hex",
+        "saturation": vector_dir / f"{prefix}_saturation.hex",
     }
     scalar_values = {
         name: int(read_hex_lines(path, 64 if name in ("sum_squares", "mean_square") else 32, signed=False)[0])
@@ -308,7 +321,9 @@ def main() -> None:
             element_bits=HIDDEN_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("hidden_q14_10"),
+            base_addr=args.hidden_base_addr
+            if args.hidden_base_addr is not None
+            else addr("hidden_q14_10"),
             nbytes=vector_bytes,
             dims=(INPUT_SIZE, 0, 0, 0),
             strides=(4, 0, 0, 0),
@@ -376,7 +391,7 @@ def main() -> None:
     write_hex_lines(args.sim_hex, image_to_words32(bytes(image)), 32)
     write_hex_lines(args.expected_hex, expected_i32, 32)
 
-    meta_path = SIM_VECTOR_DIR / f"{prefix}_meta.json"
+    meta_path = vector_dir / f"{prefix}_meta.json"
     focused_meta: dict[str, Any] = {}
     if meta_path.is_file():
         focused_meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -398,7 +413,10 @@ def main() -> None:
             "norm_width": NORM_WIDTH,
         },
         "memory_layout": {
-            "hidden_addr": addr("hidden_q14_10"),
+            "hidden_addr": args.hidden_base_addr
+            if args.hidden_base_addr is not None
+            else addr("hidden_q14_10"),
+            "hidden_is_external": args.hidden_base_addr is not None,
             "gamma_addr": addr("input_gamma_q8_7"),
             "input_norm_addr": addr("input_norm_q12_12"),
             "expected_norm_addr": addr("expected_input_norm_q12_12"),

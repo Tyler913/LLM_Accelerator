@@ -9,9 +9,11 @@ from typing import Any
 
 import numpy as np
 
+from vector_workspace import resolve_sim_vector_dir
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
+SIM_VECTOR_DIR = resolve_sim_vector_dir(REPO_ROOT)
 QMAP_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_qmap_v1"
 
 PREFIX = "mlp_silu_mul_stage_real"
@@ -206,6 +208,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--layer-id", type=int, default=LAYER_ID)
     parser.add_argument("--qmap-base", type=parse_int_auto, default=QMAP_BASE)
     parser.add_argument("--gate-up-qmap-prefix", default=GATE_UP_QMAP_PREFIX)
+    parser.add_argument("--gate-base-addr", type=parse_int_auto, default=None)
+    parser.add_argument("--up-base-addr", type=parse_int_auto, default=None)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--sim-hex", type=Path, default=DEFAULT_SIM_HEX)
@@ -318,7 +322,11 @@ def main() -> None:
             element_bits=IN_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("gate_q12_12"),
+            base_addr=(
+                args.gate_base_addr
+                if args.gate_base_addr is not None
+                else addr("gate_q12_12")
+            ),
             nbytes=vector_bytes,
             dims=(FEATURES, 0, 0, 0),
             strides=(4, 0, 0, 0),
@@ -333,7 +341,11 @@ def main() -> None:
             element_bits=IN_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("up_q12_12"),
+            base_addr=(
+                args.up_base_addr
+                if args.up_base_addr is not None
+                else addr("up_q12_12")
+            ),
             nbytes=vector_bytes,
             dims=(FEATURES, 0, 0, 0),
             strides=(4, 0, 0, 0),
@@ -423,8 +435,16 @@ def main() -> None:
             "sigmoid_lut_size": SIGMOID_LUT_SIZE,
         },
         "memory_layout": {
-            "gate_addr": addr("gate_q12_12"),
-            "up_addr": addr("up_q12_12"),
+            "gate_addr": (
+                args.gate_base_addr
+                if args.gate_base_addr is not None
+                else addr("gate_q12_12")
+            ),
+            "up_addr": (
+                args.up_base_addr
+                if args.up_base_addr is not None
+                else addr("up_q12_12")
+            ),
             "sigmoid_lut_addr": addr("sigmoid_lut_uq0_16_words32"),
             "hidden_addr": addr("hidden_q12_12"),
             "expected_hidden_addr": addr("expected_hidden_q12_12"),

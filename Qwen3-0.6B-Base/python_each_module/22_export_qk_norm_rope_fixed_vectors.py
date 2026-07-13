@@ -16,11 +16,12 @@ from common import (
     manual_rope_cos_sin,
     tensor_to_float32,
 )
+from vector_workspace import resolve_sim_vector_dir
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 Q4_VECTOR_DIR = REPO_ROOT / "artifacts" / "test_vectors" / "qwen3_0p6b_q4_v0"
-SIM_VECTOR_DIR = REPO_ROOT / "FPGA_Project" / "sim" / "vectors"
+SIM_VECTOR_DIR = resolve_sim_vector_dir(REPO_ROOT)
 
 PREFIX = "qk_norm_rope_stage_128_real"
 MODULE_NAME = "layer0.self_attn.qk_norm_rope_stage"
