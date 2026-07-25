@@ -577,7 +577,7 @@ Local validation:
 - Packet SHA256:
   `59c3243b6cc10856918c307934b9ced8651442c70492ae2fd422cb299b54f64c`.
 - RTL wrapper:
-  `FPGA_Project/rtl/qmap_input_rmsnorm_compute_path.sv`.
+  `FPGA_Project/rtl/qmap/compute/qmap_input_rmsnorm_compute_path.sv`.
 - Testbench:
   `FPGA_Project/sim/tb_qmap_input_rmsnorm_compute_path.sv`.
 - Current signed-gamma Icarus result: exact `1024` input-norm write words, `14` read
@@ -774,7 +774,7 @@ Local validation:
 - Exporter:
   `Qwen3-0.6B-Base/python_each_module/37_export_qmap_attention_frontend_image.py`.
 - RTL wrapper:
-  `FPGA_Project/rtl/qmap_attention_frontend_compute_path.sv`.
+  `FPGA_Project/rtl/qmap/compute/qmap_attention_frontend_compute_path.sv`.
 - Testbench:
   `FPGA_Project/sim/tb_qmap_attention_frontend_compute_path.sv`.
 - Icarus result: exact `2048` K/V cache write words and exact `2048`
@@ -830,7 +830,7 @@ Local validation:
 - Exporter:
   `Qwen3-0.6B-Base/python_each_module/38_export_qmap_attention_score_value_image.py`.
 - RTL wrapper:
-  `FPGA_Project/rtl/qmap_attention_score_value_compute_path.sv`.
+  `FPGA_Project/rtl/qmap/compute/qmap_attention_score_value_compute_path.sv`.
 - Testbench:
   `FPGA_Project/sim/tb_qmap_attention_score_value_compute_path.sv`.
 - Icarus result: exact `10240` K-cache reads, exact `10240` V-cache reads,
@@ -898,7 +898,7 @@ Local validation:
 - Exporter:
   `Qwen3-0.6B-Base/python_each_module/39_export_qmap_o_proj_image.py`.
 - RTL wrapper:
-  `FPGA_Project/rtl/qmap_o_proj_compute_path.sv`.
+  `FPGA_Project/rtl/qmap/compute/qmap_o_proj_compute_path.sv`.
 - Testbench:
   `FPGA_Project/sim/tb_qmap_o_proj_compute_path.sv`.
 - Icarus result: exact `1024` Q4 weight-row reads, exact `1024` scale-row
@@ -959,7 +959,7 @@ Local validation:
 - Exporter:
   `Qwen3-0.6B-Base/python_each_module/40_export_qmap_post_attention_residual_norm_image.py`.
 - RTL wrapper:
-  `FPGA_Project/rtl/qmap_post_attention_residual_norm_compute_path.sv`.
+  `FPGA_Project/rtl/qmap/compute/qmap_post_attention_residual_norm_compute_path.sv`.
 - Testbench:
   `FPGA_Project/sim/tb_qmap_post_attention_residual_norm_compute_path.sv`.
 - Icarus result: exact `1024` post-attention hidden write words, exact `1024`
@@ -1046,7 +1046,7 @@ Local validation:
 - Exporter:
   `Qwen3-0.6B-Base/python_each_module/41_export_qmap_mlp_gate_up_image.py`.
 - RTL wrapper:
-  `FPGA_Project/rtl/qmap_mlp_gate_up_compute_path.sv`.
+  `FPGA_Project/rtl/qmap/compute/qmap_mlp_gate_up_compute_path.sv`.
 - Testbench:
   `FPGA_Project/sim/tb_qmap_mlp_gate_up_compute_path.sv`.
 - Icarus result: exact `3072` gate write words, exact `3072` up write words,
@@ -1104,7 +1104,7 @@ Local validation:
 - Exporter:
   `Qwen3-0.6B-Base/python_each_module/42_export_qmap_mlp_silu_mul_image.py`.
 - RTL wrapper:
-  `FPGA_Project/rtl/qmap_mlp_silu_mul_compute_path.sv`.
+  `FPGA_Project/rtl/qmap/compute/qmap_mlp_silu_mul_compute_path.sv`.
 - Testbench:
   `FPGA_Project/sim/tb_qmap_mlp_silu_mul_compute_path.sv`.
 - Icarus result: exact `3072` stage input handshakes, exact `3072` stage
@@ -1178,7 +1178,7 @@ Local validation:
 - Exporter:
   `Qwen3-0.6B-Base/python_each_module/43_export_qmap_mlp_down_image.py`.
 - RTL wrapper:
-  `FPGA_Project/rtl/qmap_mlp_down_compute_path.sv`.
+  `FPGA_Project/rtl/qmap/compute/qmap_mlp_down_compute_path.sv`.
 - Testbench:
   `FPGA_Project/sim/tb_qmap_mlp_down_compute_path.sv`.
 - Icarus result: exact `1024` row completions, exact `1024` output write
@@ -1234,7 +1234,7 @@ Local validation:
 - Exporter:
   `Qwen3-0.6B-Base/python_each_module/44_export_qmap_mlp_residual_add_image.py`.
 - RTL wrapper:
-  `FPGA_Project/rtl/qmap_mlp_residual_add_compute_path.sv`.
+  `FPGA_Project/rtl/qmap/compute/qmap_mlp_residual_add_compute_path.sv`.
 - Testbench:
   `FPGA_Project/sim/tb_qmap_mlp_residual_add_compute_path.sv`.
 - Icarus result: exact `1024` output words, one `4096`-byte output write
@@ -1257,7 +1257,7 @@ Local validation:
 
 ### Layer 0 Body Scheduler Composition
 
-`FPGA_Project/rtl/qmap_layer0_body_scheduler.sv` is the first local composition
+`FPGA_Project/rtl/qmap/scheduler/qmap_layer0_body_scheduler.sv` is the first local composition
 boundary over multiple QMAP per-layer body packets. It does not introduce a new
 QMAP packet format. Instead, it sequentially starts the already passing QMAP
 wrappers and muxes their memory request/write interfaces onto one local memory
@@ -1287,7 +1287,7 @@ down_out output        -> final MLP residual down input
 Local validation:
 
 - RTL scheduler:
-  `FPGA_Project/rtl/qmap_layer0_body_scheduler.sv`.
+  `FPGA_Project/rtl/qmap/scheduler/qmap_layer0_body_scheduler.sv`.
 - Testbench:
   `FPGA_Project/sim/tb_qmap_layer0_body_scheduler.sv`.
 - Icarus result: the normal chained run completes all five stage bits
@@ -1303,7 +1303,7 @@ Local validation:
 
 ### Layer 0 Full Scheduler Composition
 
-`FPGA_Project/rtl/qmap_layer0_full_scheduler.sv` is the first local composition
+`FPGA_Project/rtl/qmap/scheduler/qmap_layer0_full_scheduler.sv` is the first local composition
 boundary over the attention-side QMAP wrappers plus the Layer 0 body scheduler.
 It still does not introduce a new QMAP packet format. It sequentially starts
 the already passing wrappers and muxes their memory request/write interfaces
@@ -1335,7 +1335,7 @@ down_out[1024]      -> final MLP residual down input
 Local validation:
 
 - RTL scheduler:
-  `FPGA_Project/rtl/qmap_layer0_full_scheduler.sv`.
+  `FPGA_Project/rtl/qmap/scheduler/qmap_layer0_full_scheduler.sv`.
 - Testbench:
   `FPGA_Project/sim/tb_qmap_layer0_full_scheduler.sv`.
 - Icarus result: the normal chained run completes all four top-level stage bits
@@ -1356,7 +1356,7 @@ Local validation:
 
 ### Layer 0 Compute Scheduler Composition
 
-`FPGA_Project/rtl/qmap_layer0_compute_scheduler.sv` is the first local
+`FPGA_Project/rtl/qmap/scheduler/qmap_layer0_compute_scheduler.sv` is the first local
 composition boundary that includes the full Layer 0 QKV projection stage. It
 does not introduce a new QMAP packet format. It sequentially starts the full
 QKV projection packet and the already passing Layer 0 full scheduler, then
@@ -1399,7 +1399,7 @@ down_out         -> final MLP residual input
 Local validation:
 
 - RTL scheduler:
-  `FPGA_Project/rtl/qmap_layer0_compute_scheduler.sv`.
+  `FPGA_Project/rtl/qmap/scheduler/qmap_layer0_compute_scheduler.sv`.
 - Testbench:
   `FPGA_Project/sim/tb_qmap_layer0_compute_scheduler.sv`.
 - Icarus result: the normal chained run completes both outer stage bits
@@ -1426,7 +1426,7 @@ Local validation:
 
 ### One-Token Layer Scheduler Boundary
 
-`FPGA_Project/rtl/qmap_one_token_layer_scheduler.sv` is the first local wrapper
+`FPGA_Project/rtl/qmap/scheduler/qmap_one_token_layer_scheduler.sv` is the first local wrapper
 around the eventual repeated decoder-layer loop. It does not introduce a new
 QMAP packet format. Instead, it exposes the loop-control contract that the
 future full one-token path needs:
@@ -1519,7 +1519,7 @@ proving the final tail selects Layer 2, not the previous layer.
 Local validation:
 
 - RTL scheduler:
-  `FPGA_Project/rtl/qmap_one_token_layer_scheduler.sv`.
+  `FPGA_Project/rtl/qmap/scheduler/qmap_one_token_layer_scheduler.sv`.
 - Testbench:
   `FPGA_Project/sim/tb_qmap_one_token_layer_scheduler.sv`.
 - Icarus result: the normal run completes one layer
@@ -1783,7 +1783,7 @@ Local validation:
 - Exporter:
   `Qwen3-0.6B-Base/python_each_module/36_export_qmap_final_token_tail_image.py`.
 - RTL wrapper:
-  `FPGA_Project/rtl/qmap_final_token_tail_compute_path.sv`.
+  `FPGA_Project/rtl/qmap/compute/qmap_final_token_tail_compute_path.sv`.
 - Testbench:
   `FPGA_Project/sim/tb_qmap_final_token_tail_compute_path.sv`.
 - Compact Icarus result: `64` LM-head tiles, token `264`, score

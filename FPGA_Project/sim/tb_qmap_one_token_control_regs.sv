@@ -53,6 +53,7 @@ module tb_qmap_one_token_control_regs;
     localparam logic [11 : 0] REG_EMBED_WEIGHT_HI      = 12'h0A4;
     localparam logic [11 : 0] REG_EMBED_SCALE_LO       = 12'h0A8;
     localparam logic [11 : 0] REG_EMBED_SCALE_HI       = 12'h0AC;
+    localparam logic [11 : 0] REG_RUNTIME_CTRL         = 12'h0B0;
 
     localparam logic [7 : 0] TABLE_QKV = 8'd0;
     localparam logic [7 : 0] TABLE_INPUT_NORM = 8'd1;
@@ -78,6 +79,7 @@ module tb_qmap_one_token_control_regs;
     logic [LAYER_INDEX_WIDTH-1 : 0] layer_start_index;
     logic [LAYER_COUNT_WIDTH-1 : 0] layer_count;
     logic [POSITION_WIDTH-1 : 0] position;
+    logic runtime_context_enable;
     logic [ADDR_WIDTH-1 : 0] input_hidden_base_addr;
     logic [ADDR_WIDTH-1 : 0] output_hidden_base_addr;
     logic [ADDR_WIDTH-1 : 0] kv_cache_base_addr;
@@ -145,6 +147,7 @@ module tb_qmap_one_token_control_regs;
         .o_layer_start_index(layer_start_index),
         .o_layer_count(layer_count),
         .o_position(position),
+        .o_runtime_context_enable(runtime_context_enable),
         .o_input_hidden_base_addr(input_hidden_base_addr),
         .o_output_hidden_base_addr(output_hidden_base_addr),
         .o_kv_cache_base_addr(kv_cache_base_addr),
@@ -283,10 +286,13 @@ module tb_qmap_one_token_control_regs;
 
         mmio_read(REG_STATUS, read_data);
         check(read_data[2 : 0] == 3'b000, "reset status should be idle/clean");
+        mmio_read(REG_RUNTIME_CTRL, read_data);
+        check(read_data == 32'd0, "runtime context should default disabled");
 
         mmio_write(REG_LAYER_START, 32'd1);
         mmio_write(REG_LAYER_COUNT, 32'd2);
         mmio_write(REG_POSITION, 32'd17);
+        mmio_write(REG_RUNTIME_CTRL, 32'd1);
         mmio_write(REG_INPUT_TOKEN, 32'd264);
         write_addr64(REG_INPUT_HIDDEN_LO, REG_INPUT_HIDDEN_HI, 64'h0000_0004_0509_2540);
         write_addr64(REG_OUTPUT_HIDDEN_LO, REG_OUTPUT_HIDDEN_HI, 64'h0000_0004_2509_2540);
@@ -301,6 +307,7 @@ module tb_qmap_one_token_control_regs;
         check(layer_start_index == 1, "layer_start_index writeback");
         check(layer_count == 2, "layer_count writeback");
         check(position == 17, "position writeback");
+        check(runtime_context_enable, "runtime context enable writeback");
         check(input_token_id == 264, "input token writeback");
         check(input_hidden_base_addr == 64'h0000_0004_0509_2540, "input hidden addr writeback");
         check(output_hidden_base_addr == 64'h0000_0004_2509_2540, "output hidden addr writeback");
@@ -315,6 +322,8 @@ module tb_qmap_one_token_control_regs;
               "embedding scale addr writeback");
         mmio_read(REG_EMBEDDING_CTRL, read_data);
         check(read_data == 32'd1, "embedding enable register readback");
+        mmio_read(REG_RUNTIME_CTRL, read_data);
+        check(read_data == 32'd1, "runtime context enable register readback");
         mmio_read(REG_EMBED_WEIGHT_LO, read_data);
         check(read_data == 32'h0010_0000, "embedding weight lo register readback");
         mmio_read(REG_EMBED_WEIGHT_HI, read_data);
@@ -368,8 +377,10 @@ module tb_qmap_one_token_control_regs;
         mmio_write(REG_LAYER_COUNT, 32'd7);
         check(layer_count == 2, "busy config write should not update layer_count");
         mmio_write(REG_EMBEDDING_CTRL, 32'd0);
+        mmio_write(REG_RUNTIME_CTRL, 32'd0);
         mmio_write(REG_EMBED_WEIGHT_LO, 32'hDEAD_BEEF);
         check(embedding_enable, "busy write should not disable embedding");
+        check(runtime_context_enable, "busy write should not disable runtime context");
         check(embedding_weight_base_addr == 64'h0000_0004_0010_0000,
               "busy write should not update embedding weight addr");
         mmio_write(REG_CTRL, 32'd1);

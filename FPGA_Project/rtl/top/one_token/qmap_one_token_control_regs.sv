@@ -35,6 +35,7 @@ module qmap_one_token_control_regs #(
     output logic [LAYER_INDEX_WIDTH-1 : 0]    o_layer_start_index,
     output logic [LAYER_COUNT_WIDTH-1 : 0]    o_layer_count,
     output logic [POSITION_WIDTH-1 : 0]       o_position,
+    output logic                              o_runtime_context_enable,
     output logic [ADDR_WIDTH-1 : 0]           o_input_hidden_base_addr,
     output logic [ADDR_WIDTH-1 : 0]           o_output_hidden_base_addr,
     output logic [ADDR_WIDTH-1 : 0]           o_kv_cache_base_addr,
@@ -131,6 +132,7 @@ module qmap_one_token_control_regs #(
     localparam logic [9 : 0] REG_EMBED_WEIGHT_HI      = 10'h029;
     localparam logic [9 : 0] REG_EMBED_SCALE_LO       = 10'h02A;
     localparam logic [9 : 0] REG_EMBED_SCALE_HI       = 10'h02B;
+    localparam logic [9 : 0] REG_RUNTIME_CTRL         = 10'h02C;
 
     wire logic [9 : 0] word_addr = i_reg_addr[11 : 2];
 
@@ -236,7 +238,8 @@ module qmap_one_token_control_regs #(
             REG_EMBED_WEIGHT_LO,
             REG_EMBED_WEIGHT_HI,
             REG_EMBED_SCALE_LO,
-            REG_EMBED_SCALE_HI: o_reg_error = 1'b0;
+            REG_EMBED_SCALE_HI,
+            REG_RUNTIME_CTRL: o_reg_error = 1'b0;
             default: o_reg_error = i_reg_wr_valid || i_reg_rd_valid;
         endcase
     end
@@ -294,6 +297,7 @@ module qmap_one_token_control_regs #(
             REG_EMBED_WEIGHT_HI:      o_reg_rdata = o_embedding_weight_base_addr[63 : 32];
             REG_EMBED_SCALE_LO:       o_reg_rdata = o_embedding_scale_base_addr[31 : 0];
             REG_EMBED_SCALE_HI:       o_reg_rdata = o_embedding_scale_base_addr[63 : 32];
+            REG_RUNTIME_CTRL:         o_reg_rdata = {31'd0, o_runtime_context_enable};
             default:                  o_reg_rdata = 32'd0;
         endcase
     end
@@ -308,6 +312,7 @@ module qmap_one_token_control_regs #(
             o_layer_start_index <= '0;
             o_layer_count <= '0;
             o_position <= '0;
+            o_runtime_context_enable <= 1'b0;
             o_input_hidden_base_addr <= '0;
             o_output_hidden_base_addr <= '0;
             o_kv_cache_base_addr <= '0;
@@ -374,6 +379,10 @@ module qmap_one_token_control_regs #(
                     REG_POSITION: begin
                         if (i_top_busy) command_error_sticky <= 1'b1;
                         else o_position <= i_reg_wdata[POSITION_WIDTH-1 : 0];
+                    end
+                    REG_RUNTIME_CTRL: begin
+                        if (i_top_busy) command_error_sticky <= 1'b1;
+                        else o_runtime_context_enable <= i_reg_wdata[0];
                     end
                     REG_INPUT_TOKEN: begin
                         if (i_top_busy) command_error_sticky <= 1'b1;

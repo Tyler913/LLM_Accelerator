@@ -1442,7 +1442,7 @@ Previous useful checkpoint:
   GCC, but not yet built in Vitis because the Vivado BD has not assigned a
   one-token AXI-Lite base address.
 - A first BD-facing one-token shell now exists at
-  `FPGA_Project/rtl/qmap_one_token_axi_top.sv`. It wraps
+  `FPGA_Project/rtl/top/one_token/qmap_one_token_axi_top.sv`. It wraps
   `qmap_one_token_axil_top.sv` with the existing `axi4_read_master.sv` and
   `axi4_write_master.sv`, exposing one `S_AXI` register slave and one `M_AXI`
   32-bit PL-DDR master for module-reference/custom-IP integration. In addition

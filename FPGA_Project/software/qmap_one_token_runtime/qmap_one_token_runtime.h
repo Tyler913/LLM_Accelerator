@@ -23,7 +23,9 @@ enum {
     QOT_ERR_TIMEOUT = -5,
     QOT_ERR_STATUS = -6,
     QOT_ERR_NULL = -7,
-    QOT_ERR_BAD_TOKEN = -8
+    QOT_ERR_BAD_TOKEN = -8,
+    QOT_ERR_CAPACITY = -9,
+    QOT_ERR_CONTEXT = -10
 };
 
 typedef struct qot_layer_qmap_bases {
@@ -43,6 +45,7 @@ typedef struct qot_run_config {
     uint32_t layer_start;
     uint32_t layer_count;
     uint32_t position;
+    uint32_t runtime_context_enable;
     uint32_t input_token_id;
     uint32_t embedding_enable;
     uint64_t embedding_weight_base;
@@ -145,6 +148,11 @@ static inline int qot_check_table_id(uint32_t table_id)
     return (table_id < QOT_TABLE_COUNT) ? QOT_OK : QOT_ERR_BAD_TABLE;
 }
 
+static inline int qot_addr_is_word_aligned(uint64_t addr)
+{
+    return addr != 0ull && (addr & 0x3ull) == 0ull;
+}
+
 static inline int qot_commit_table(uintptr_t base, uint32_t layer_id,
                                    uint32_t table_id, uint64_t qmap_base)
 {
@@ -154,6 +162,7 @@ static inline int qot_commit_table(uintptr_t base, uint32_t layer_id,
     if (rc != QOT_OK) return rc;
     rc = qot_check_table_id(table_id);
     if (rc != QOT_OK) return rc;
+    if (!qot_addr_is_word_aligned(qmap_base)) return QOT_ERR_BAD_ADDR;
     if (qot_is_busy(base)) return QOT_ERR_BUSY;
 
     qot_write32(base, QOT_REG_TABLE_SELECT,
@@ -185,6 +194,19 @@ static inline int qot_layer_tables_have_required(
         tables->mlp_silu_mul == 0ull ||
         tables->mlp_down == 0ull ||
         tables->mlp_residual_add == 0ull) {
+        return QOT_ERR_BAD_ADDR;
+    }
+    if (!qot_addr_is_word_aligned(tables->qkv) ||
+        (tables->input_norm != 0ull &&
+         !qot_addr_is_word_aligned(tables->input_norm)) ||
+        !qot_addr_is_word_aligned(tables->attn_frontend) ||
+        !qot_addr_is_word_aligned(tables->attn_score_value) ||
+        !qot_addr_is_word_aligned(tables->o_proj) ||
+        !qot_addr_is_word_aligned(tables->post_attn_norm) ||
+        !qot_addr_is_word_aligned(tables->mlp_gate_up) ||
+        !qot_addr_is_word_aligned(tables->mlp_silu_mul) ||
+        !qot_addr_is_word_aligned(tables->mlp_down) ||
+        !qot_addr_is_word_aligned(tables->mlp_residual_add)) {
         return QOT_ERR_BAD_ADDR;
     }
     return QOT_OK;
@@ -228,6 +250,7 @@ static inline int qot_configure_run(uintptr_t base, const qot_run_config_t *cfg)
     if (cfg->layer_count == 0u || cfg->layer_start >= QOT_MAX_LAYERS) {
         return QOT_ERR_BAD_LAYER;
     }
+    if (cfg->position >= QOT_MAX_CONTEXT) return QOT_ERR_CONTEXT;
     end_layer = cfg->layer_start + cfg->layer_count;
     if (end_layer > QOT_MAX_LAYERS || end_layer < cfg->layer_start) {
         return QOT_ERR_BAD_LAYER;
@@ -235,14 +258,22 @@ static inline int qot_configure_run(uintptr_t base, const qot_run_config_t *cfg)
     if (cfg->layer_qmap_bases == NULL || cfg->layer_qmap_base_count < end_layer) {
         return QOT_ERR_NULL;
     }
-    if (cfg->input_hidden_base == 0ull || cfg->output_hidden_base == 0ull ||
-        cfg->kv_cache_base == 0ull || cfg->final_tail_qmap_base == 0ull) {
+    if (!qot_addr_is_word_aligned(cfg->input_hidden_base) ||
+        !qot_addr_is_word_aligned(cfg->output_hidden_base) ||
+        !qot_addr_is_word_aligned(cfg->kv_cache_base) ||
+        !qot_addr_is_word_aligned(cfg->final_tail_qmap_base) ||
+        (cfg->final_hidden_override_valid != 0u &&
+         !qot_addr_is_word_aligned(cfg->final_hidden_override_base))) {
+        return QOT_ERR_BAD_ADDR;
+    }
+    if (cfg->runtime_context_enable != 0u &&
+        cfg->input_hidden_base == cfg->output_hidden_base) {
         return QOT_ERR_BAD_ADDR;
     }
     if (cfg->embedding_enable != 0u) {
         if (cfg->input_token_id >= QOT_VOCAB_SIZE) return QOT_ERR_BAD_TOKEN;
-        if (cfg->embedding_weight_base == 0ull ||
-            cfg->embedding_scale_base == 0ull) {
+        if (!qot_addr_is_word_aligned(cfg->embedding_weight_base) ||
+            !qot_addr_is_word_aligned(cfg->embedding_scale_base)) {
             return QOT_ERR_BAD_ADDR;
         }
     }
@@ -252,6 +283,9 @@ static inline int qot_configure_run(uintptr_t base, const qot_run_config_t *cfg)
     qot_write32(base, QOT_REG_LAYER_START, cfg->layer_start);
     qot_write32(base, QOT_REG_LAYER_COUNT, cfg->layer_count);
     qot_write32(base, QOT_REG_POSITION, cfg->position);
+    qot_write32(base, QOT_REG_RUNTIME_CTRL,
+                cfg->runtime_context_enable ?
+                QOT_RUNTIME_CONTEXT_ENABLE_MASK : 0u);
     qot_write32(base, QOT_REG_INPUT_TOKEN, cfg->input_token_id);
     qot_write32(base, QOT_REG_EMBEDDING_CTRL,
                 cfg->embedding_enable ? QOT_EMBEDDING_ENABLE_MASK : 0u);
@@ -273,6 +307,10 @@ static inline int qot_configure_run(uintptr_t base, const qot_run_config_t *cfg)
                 cfg->final_hidden_override_valid ? 1u : 0u);
 
     for (layer = cfg->layer_start; layer < end_layer; ++layer) {
+        if (cfg->runtime_context_enable != 0u &&
+            cfg->layer_qmap_bases[layer].input_norm == 0ull) {
+            return QOT_ERR_BAD_ADDR;
+        }
         rc = qot_commit_layer_tables(base, layer, &cfg->layer_qmap_bases[layer]);
         if (rc != QOT_OK) return rc;
     }
@@ -327,6 +365,122 @@ static inline int qot_read_result(uintptr_t base, qot_result_t *result)
     return QOT_OK;
 }
 
+/* Configure, launch, poll, and collect one autoregressive token step. */
+static inline int qot_run_token(uintptr_t base, const qot_run_config_t *cfg,
+                                uint32_t input_token_id, uint32_t position,
+                                uint32_t max_polls, qot_result_t *result)
+{
+    qot_run_config_t token_cfg;
+    int rc;
+
+    if (cfg == NULL || result == NULL) return QOT_ERR_NULL;
+    token_cfg = *cfg;
+    token_cfg.input_token_id = input_token_id;
+    token_cfg.position = position;
+
+    rc = qot_configure_run(base, &token_cfg);
+    if (rc != QOT_OK) return rc;
+    rc = qot_start(base);
+    if (rc != QOT_OK) return rc;
+    rc = qot_poll_done(base, max_polls, NULL);
+    if (rc != QOT_OK) {
+        (void)qot_read_result(base, result);
+        return rc;
+    }
+    return qot_read_result(base, result);
+}
+
+/*
+ * Consume a prompt token-id sequence and greedily emit max_new_tokens ids.
+ * The first emitted id is the LM-head result after the final prompt token.
+ * Each later emitted id is fed back through tied-Q4 embedding at the next
+ * position. KV cache and QMAP tables remain resident in PL DDR between calls.
+ */
+static inline int qot_decode_token_ids(
+    uintptr_t base,
+    const qot_run_config_t *cfg,
+    const uint32_t *prompt_token_ids,
+    uint32_t prompt_token_count,
+    uint32_t max_new_tokens,
+    uint32_t *generated_token_ids,
+    uint32_t generated_token_capacity,
+    uint32_t max_polls_per_token,
+    uint32_t *generated_token_count,
+    qot_result_t *last_result)
+{
+    qot_result_t result = {0};
+    uint32_t position;
+    uint32_t run_count;
+    uint32_t prompt_index;
+    uint32_t generated_index;
+    uint32_t next_token;
+    int rc;
+
+    if (generated_token_count != NULL) *generated_token_count = 0u;
+    if (cfg == NULL || prompt_token_ids == NULL ||
+        generated_token_ids == NULL || last_result == NULL) {
+        return QOT_ERR_NULL;
+    }
+    if (prompt_token_count == 0u || max_new_tokens == 0u) {
+        return QOT_ERR_CAPACITY;
+    }
+    if (generated_token_capacity < max_new_tokens) return QOT_ERR_CAPACITY;
+    if (cfg->runtime_context_enable == 0u || cfg->embedding_enable == 0u) {
+        return QOT_ERR_CONTEXT;
+    }
+    if (cfg->final_hidden_override_valid != 0u) {
+        return QOT_ERR_CONTEXT;
+    }
+
+    /* prompt_count runs plus one run for every generated token after the first */
+    run_count = prompt_token_count + max_new_tokens - 1u;
+    if (run_count < prompt_token_count ||
+        cfg->position >= QOT_MAX_CONTEXT ||
+        run_count > (QOT_MAX_CONTEXT - cfg->position)) {
+        return QOT_ERR_CONTEXT;
+    }
+
+    position = cfg->position;
+    next_token = 0u;
+    for (prompt_index = 0u; prompt_index < prompt_token_count; ++prompt_index) {
+        if (prompt_token_ids[prompt_index] >= QOT_VOCAB_SIZE) {
+            return QOT_ERR_BAD_TOKEN;
+        }
+        rc = qot_run_token(base, cfg, prompt_token_ids[prompt_index], position,
+                           max_polls_per_token, &result);
+        if (rc != QOT_OK) {
+            *last_result = result;
+            return rc;
+        }
+        next_token = result.token_id;
+        ++position;
+    }
+
+    generated_token_ids[0] = next_token;
+    if (generated_token_count != NULL) *generated_token_count = 1u;
+    for (generated_index = 1u; generated_index < max_new_tokens; ++generated_index) {
+        if (next_token >= QOT_VOCAB_SIZE) {
+            *last_result = result;
+            return QOT_ERR_BAD_TOKEN;
+        }
+        rc = qot_run_token(base, cfg, next_token, position,
+                           max_polls_per_token, &result);
+        if (rc != QOT_OK) {
+            *last_result = result;
+            return rc;
+        }
+        next_token = result.token_id;
+        generated_token_ids[generated_index] = next_token;
+        if (generated_token_count != NULL) {
+            *generated_token_count = generated_index + 1u;
+        }
+        ++position;
+    }
+
+    *last_result = result;
+    return QOT_OK;
+}
+
 /*
  * Board bring-up smoke for the AXI-Lite/control seam. This intentionally starts
  * an invalid layer_count=0 request, matching tb_qmap_one_token_axil_top.sv. A
@@ -347,6 +501,7 @@ static inline int qot_run_no_memory_validation_smoke(uintptr_t base,
     qot_write32(base, QOT_REG_LAYER_START, 0u);
     qot_write32(base, QOT_REG_LAYER_COUNT, 0u);
     qot_write32(base, QOT_REG_POSITION, 4u);
+    qot_write32(base, QOT_REG_RUNTIME_CTRL, 0u);
     qot_write32(base, QOT_REG_EMBEDDING_CTRL, 0u);
     qot_write64(base, QOT_REG_INPUT_HIDDEN_LO, QOT_REG_INPUT_HIDDEN_HI,
                 0x0000000405092540ull);

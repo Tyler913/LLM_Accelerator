@@ -29,6 +29,9 @@ BODY_QMAP_BASE = 0x0000_0004_1790_0000
 BODY_QMAP_STRIDE = 0x0010_0000
 KV_CACHE_BASE = 0x0000_0004_1410_0000
 FINAL_TAIL_QMAP_BASE = 0x0000_0004_1950_0000
+RUNTIME_HIDDEN_A_BASE = 0x0000_0004_1960_0000
+RUNTIME_HIDDEN_B_BASE = 0x0000_0004_1960_1000
+ROPE_TABLE_BASE = 0x0000_0004_1A10_0000
 
 PERSISTENT_OFFSETS = {
     "o_proj_weight": 0x0023_0000,
@@ -68,6 +71,8 @@ NUM_KV_HEADS = 8
 MAX_CONTEXT = 256
 HEAD_DIM = 128
 KV_CACHE_BYTES_PER_LAYER = 2 * NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM * 4
+ROPE_PLANE_BYTES = MAX_CONTEXT * HEAD_DIM * 4
+ROPE_TABLE_BYTES = 2 * ROPE_PLANE_BYTES
 
 DESCRIPTOR_TABLE_WORD_OFFSET = 0x0100 // 4
 DESCRIPTOR_WORDS = 32
@@ -97,6 +102,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--token-id", type=int, default=None)
     parser.add_argument("--layer-count", type=int, default=MAX_LAYERS)
     parser.add_argument("--lm-chunk-rows", type=int, default=1024)
+    parser.add_argument(
+        "--runtime-rope-table",
+        action="store_true",
+        help="Emit one persistent rank-2 RoPE table and point every layer packet at it",
+    )
+    parser.add_argument(
+        "--rope-table-base",
+        type=lambda text: int(text.replace("_", ""), 0),
+        default=ROPE_TABLE_BASE,
+        help="Physical base of the combined cos/sin runtime RoPE table",
+    )
+    parser.add_argument(
+        "--runtime-hidden-a-base",
+        type=lambda text: int(text.replace("_", ""), 0),
+        default=RUNTIME_HIDDEN_A_BASE,
+        help="Runtime hidden ping-pong buffer A base",
+    )
+    parser.add_argument(
+        "--runtime-hidden-b-base",
+        type=lambda text: int(text.replace("_", ""), 0),
+        default=RUNTIME_HIDDEN_B_BASE,
+        help="Runtime hidden ping-pong buffer B base",
+    )
     parser.add_argument(
         "--layout-only",
         action="store_true",
@@ -203,10 +231,9 @@ def layer_output_hex(layer_root: Path, layer_id: int) -> Path:
     )
 
 
-def descriptor_base(image_hex: Path, slot: int) -> int:
-    lo_index = DESCRIPTOR_TABLE_WORD_OFFSET + (slot * DESCRIPTOR_WORDS) + DESC_BASE_LO_WORD
-    hi_index = DESCRIPTOR_TABLE_WORD_OFFSET + (slot * DESCRIPTOR_WORDS) + DESC_BASE_HI_WORD
-    needed = hi_index + 1
+def descriptor_words(image_hex: Path, slot: int) -> list[int]:
+    start = DESCRIPTOR_TABLE_WORD_OFFSET + (slot * DESCRIPTOR_WORDS)
+    needed = start + DESCRIPTOR_WORDS
     words: list[int] = []
     with image_hex.open("r", encoding="ascii") as file:
         for line in file:
@@ -217,7 +244,12 @@ def descriptor_base(image_hex: Path, slot: int) -> int:
                     break
     if len(words) < needed:
         raise RuntimeError(f"descriptor table is truncated in {image_hex}")
-    return words[lo_index] | (words[hi_index] << 32)
+    return words[start:needed]
+
+
+def descriptor_base(image_hex: Path, slot: int) -> int:
+    words = descriptor_words(image_hex, slot)
+    return words[DESC_BASE_LO_WORD] | (words[DESC_BASE_HI_WORD] << 32)
 
 
 def manifest_file(manifest: dict[str, Any], stage: str, key: str) -> Path:
@@ -302,6 +334,10 @@ def build_layer_entry(
     persistent_bases = {
         name: parse_addr(value) for name, value in manifest["persistent_bases"].items()
     }
+    runtime_rope_cos = persistent_bases.get("runtime_rope_cos")
+    runtime_rope_sin = persistent_bases.get("runtime_rope_sin")
+    if (runtime_rope_cos is None) != (runtime_rope_sin is None):
+        raise RuntimeError(f"Layer {layer_id} has an incomplete runtime RoPE contract")
 
     write_bases = {
         "input_norm": descriptor_base(files["input_norm_image"], 3),
@@ -338,12 +374,43 @@ def build_layer_entry(
         ("residual down", descriptor_base(files["residual_image"], 2), write_bases["down"]),
         ("layer output", write_bases["layer"], layer_output_base(layer_id)),
     ]
+    if runtime_rope_cos is not None:
+        contracts.extend(
+            [
+                ("runtime RoPE cos", descriptor_base(files["frontend_image"], 6), runtime_rope_cos),
+                ("runtime RoPE sin", descriptor_base(files["frontend_image"], 7), runtime_rope_sin),
+            ]
+        )
     for label, actual, expected in contracts:
         if actual != expected:
             raise RuntimeError(
                 f"Layer {layer_id} {label} contract mismatch: "
                 f"0x{actual:016X} != 0x{expected:016X}"
             )
+
+    if runtime_rope_cos is not None:
+        for label, slot in (("cos", 6), ("sin", 7)):
+            descriptor = descriptor_words(files["frontend_image"], slot)
+            descriptor_nbytes = descriptor[10] | (descriptor[11] << 32)
+            stride0 = descriptor[16] | (descriptor[17] << 32)
+            stride1 = descriptor[18] | (descriptor[19] << 32)
+            stride2 = descriptor[20] | (descriptor[21] << 32)
+            stride3 = descriptor[22] | (descriptor[23] << 32)
+            if (
+                descriptor[3] != 2
+                or descriptor[12] != MAX_CONTEXT
+                or descriptor[13] != HEAD_DIM
+                or descriptor[14] != 0
+                or descriptor[15] != 0
+                or descriptor_nbytes != ROPE_PLANE_BYTES
+                or stride0 != HEAD_DIM * 4
+                or stride1 != 4
+                or stride2 != 0
+                or stride3 != 0
+            ):
+                raise RuntimeError(
+                    f"Layer {layer_id} runtime RoPE {label} descriptor shape/stride mismatch"
+                )
 
     cache_low = KV_CACHE_BASE + (layer_id * KV_CACHE_BYTES_PER_LAYER)
     cache_high = cache_low + KV_CACHE_BYTES_PER_LAYER
@@ -452,13 +519,24 @@ def audit_intervals(intervals: list[Interval]) -> dict[str, Any]:
     }
 
 
-def planned_intervals(layer_count: int) -> list[Interval]:
+def planned_intervals(
+    layer_count: int,
+    runtime_rope_base: int | None = None,
+    runtime_hidden_a_base: int | None = None,
+    runtime_hidden_b_base: int | None = None,
+) -> list[Interval]:
     intervals = [
         Interval("tied_lm_head_weight", TIED_WEIGHT_BASE, TIED_WEIGHT_BYTES),
         Interval("tied_lm_head_scale", TIED_SCALE_BASE, TIED_SCALE_BYTES),
         Interval("full_model_kv_cache", KV_CACHE_BASE, layer_count * KV_CACHE_BYTES_PER_LAYER),
         Interval("final_tail_qmap", FINAL_TAIL_QMAP_BASE, 0x0000_4000),
     ]
+    if runtime_rope_base is not None:
+        intervals.append(Interval("runtime_rope_table", runtime_rope_base, ROPE_TABLE_BYTES))
+    if runtime_hidden_a_base is not None:
+        intervals.append(Interval("runtime_hidden_a", runtime_hidden_a_base, 1024 * 4))
+    if runtime_hidden_b_base is not None:
+        intervals.append(Interval("runtime_hidden_b", runtime_hidden_b_base, 1024 * 4))
     persistent_sizes = {
         "o_proj_weight": OPROJ_WEIGHT_BYTES,
         "o_proj_scale": OPROJ_SCALE_BYTES,
@@ -493,7 +571,29 @@ def main() -> None:
 
     output_dir = require_temp_path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    planned_audit = audit_intervals(planned_intervals(args.layer_count))
+    runtime_rope_base = args.rope_table_base if args.runtime_rope_table else None
+    runtime_rope_cos_base = runtime_rope_base
+    runtime_rope_sin_base = (
+        runtime_rope_base + ROPE_PLANE_BYTES if runtime_rope_base is not None else None
+    )
+    runtime_hidden_a_base = args.runtime_hidden_a_base if args.runtime_rope_table else None
+    runtime_hidden_b_base = args.runtime_hidden_b_base if args.runtime_rope_table else None
+    if runtime_hidden_a_base is not None and runtime_hidden_a_base == runtime_hidden_b_base:
+        raise ValueError("runtime hidden ping-pong bases must differ")
+    if runtime_rope_base is not None and (runtime_rope_base & 0x3) != 0:
+        raise ValueError("runtime RoPE table base must be 4-byte aligned")
+    if runtime_hidden_a_base is not None and (
+        (runtime_hidden_a_base & 0x3) != 0 or (runtime_hidden_b_base & 0x3) != 0
+    ):
+        raise ValueError("runtime hidden ping-pong bases must be 4-byte aligned")
+    planned_audit = audit_intervals(
+        planned_intervals(
+            args.layer_count,
+            runtime_rope_base,
+            runtime_hidden_a_base,
+            runtime_hidden_b_base,
+        )
+    )
     planned_audit_path = output_dir / "physical_address_plan.json"
     planned_audit_path.write_text(
         json.dumps(planned_audit, indent=2) + "\n", encoding="ascii"
@@ -514,6 +614,29 @@ def main() -> None:
         path.mkdir(parents=True, exist_ok=True)
 
     commands: list[list[str]] = []
+    rope_files: dict[str, Path] | None = None
+    if runtime_rope_base is not None:
+        rope_root = output_dir / "persistent" / "rope"
+        rope_files = {
+            "binary": rope_root / "qwen3_rope_context256_q1_15.bin",
+            "manifest": rope_root / "qwen3_rope_context256_q1_15_manifest.json",
+            "sim_hex": rope_root / "qwen3_rope_context256_q1_15_words32.hex",
+        }
+        commands.append(
+            run_script(
+                "54_export_rope_runtime_table.py",
+                "--output",
+                rope_files["binary"],
+                "--manifest",
+                rope_files["manifest"],
+                "--sim-hex",
+                rope_files["sim_hex"],
+                "--base-addr",
+                hex(runtime_rope_base),
+                "--max-context",
+                MAX_CONTEXT,
+            )
+        )
     layer0_args: list[str | Path | int] = [
         "--output-dir",
         layer0_bundle,
@@ -523,6 +646,15 @@ def main() -> None:
     ]
     if args.token_id is not None:
         layer0_args.extend(["--token-id", args.token_id])
+    if runtime_rope_base is not None:
+        layer0_args.extend(
+            [
+                "--runtime-rope-cos-base-addr",
+                hex(runtime_rope_cos_base),
+                "--runtime-rope-sin-base-addr",
+                hex(runtime_rope_sin_base),
+            ]
+        )
     commands.append(run_script("51_export_embedding_layer0_full_chain.py", *layer0_args))
 
     layer_roots: list[Path] = [layer0_bundle / "layer0"]
@@ -539,8 +671,7 @@ def main() -> None:
         qkv_npz = source_q4 if source_q4.is_file() else (
             layer_root / "q4" / f"qkv_layer{layer_id}_last_token_q4.npz"
         )
-        commands.append(
-            run_script(
+        chained_layer_args: list[str | Path | int] = [
                 "47_export_chained_layer_qmap_artifacts.py",
                 "--layer-id",
                 layer_id,
@@ -557,8 +688,17 @@ def main() -> None:
                 layer_root,
                 "--manifest",
                 manifest_path,
+        ]
+        if runtime_rope_base is not None:
+            chained_layer_args.extend(
+                [
+                    "--runtime-rope-cos-base-addr",
+                    hex(runtime_rope_cos_base),
+                    "--runtime-rope-sin-base-addr",
+                    hex(runtime_rope_sin_base),
+                ]
             )
-        )
+        commands.append(run_script(*chained_layer_args))
         layer_roots.append(layer_root)
         layer_manifests.append(manifest_path)
         previous_output = require_file(layer_output_hex(layer_root, layer_id))
@@ -635,6 +775,19 @@ def main() -> None:
             input_hidden_base=input_hidden,
             output_dir=output_dir,
         )
+        if runtime_rope_base is not None:
+            # The exported per-layer images remain independently replayable and
+            # therefore retain their descriptor/golden hidden addresses.  A
+            # persistent runtime overrides those endpoints with two shared
+            # buffers, starting with the embedding result in A.
+            entry["descriptor_input_hidden_base"] = entry["input_hidden_base"]
+            entry["descriptor_output_hidden_base"] = entry["output_hidden_base"]
+            entry["runtime_input_hidden_base"] = (
+                runtime_hidden_a_base if (layer_id & 1) == 0 else runtime_hidden_b_base
+            )
+            entry["runtime_output_hidden_base"] = (
+                runtime_hidden_b_base if (layer_id & 1) == 0 else runtime_hidden_a_base
+            )
         layer_entries.append(entry)
         intervals.extend(layer_intervals)
 
@@ -653,6 +806,10 @@ def main() -> None:
             Interval("final_tail_qmap", FINAL_TAIL_QMAP_BASE, tail_binary.stat().st_size),
         ]
     )
+    if runtime_rope_base is not None:
+        intervals.append(Interval("runtime_rope_table", runtime_rope_base, ROPE_TABLE_BYTES))
+        intervals.append(Interval("runtime_hidden_a", runtime_hidden_a_base, 1024 * 4))
+        intervals.append(Interval("runtime_hidden_b", runtime_hidden_b_base, 1024 * 4))
     address_audit = audit_intervals(intervals)
     address_audit_path = output_dir / "physical_address_audit.json"
     address_audit_path.write_text(json.dumps(address_audit, indent=2) + "\n", encoding="ascii")
@@ -690,11 +847,17 @@ def main() -> None:
             "kv_cache_base": KV_CACHE_BASE,
             "kv_cache_bytes_per_layer": KV_CACHE_BYTES_PER_LAYER,
             "final_tail_qmap": FINAL_TAIL_QMAP_BASE,
+            "runtime_rope_table": runtime_rope_base,
         },
         "embedding": {
             "weight_base": int(embedding_meta["weight_base_addr"]),
             "scale_base": int(embedding_meta["scale_base_addr"]),
-            "output_base": layer_output_base(0),
+            "output_base": (
+                runtime_hidden_a_base
+                if runtime_rope_base is not None
+                else layer_output_base(0)
+            ),
+            "descriptor_golden_output_base": layer_output_base(0),
             "files": {
                 "weight": relative_output_path(
                     layer0_bundle / "embedding" / "embedding_weight_words32.hex", output_dir
@@ -711,9 +874,33 @@ def main() -> None:
             },
         },
         "layers": layer_entries,
+        "runtime_context": {
+            "enabled": runtime_rope_base is not None,
+            "rope_cos_base": runtime_rope_cos_base,
+            "rope_sin_base": runtime_rope_sin_base,
+            "rope_shape": [MAX_CONTEXT, HEAD_DIM],
+            "rope_row_stride_bytes": HEAD_DIM * 4,
+            "hidden_a_base": runtime_hidden_a_base,
+            "hidden_b_base": runtime_hidden_b_base,
+            "last_layer_hidden_base": (
+                runtime_hidden_b_base if (args.layer_count & 1) else runtime_hidden_a_base
+            ) if runtime_rope_base is not None else None,
+            "register_enable_required": runtime_rope_base is not None,
+            "files": (
+                {
+                    name: relative_output_path(path, output_dir)
+                    for name, path in rope_files.items()
+                }
+                if rope_files is not None
+                else None
+            ),
+        },
         "final_tail": {
             "qmap_base": FINAL_TAIL_QMAP_BASE,
-            "runtime_hidden_override": layer_output_base(args.layer_count - 1),
+            "runtime_hidden_override": (
+                runtime_hidden_b_base if (args.layer_count & 1) else runtime_hidden_a_base
+            ) if runtime_rope_base is not None else layer_output_base(args.layer_count - 1),
+            "descriptor_golden_hidden_base": layer_output_base(args.layer_count - 1),
             "norm_prefix": final_norm_prefix,
             "lm_head_prefix": lm_head_prefix,
             "best_token": int(tail_manifest["expected"]["best_token"]),
@@ -746,6 +933,14 @@ def main() -> None:
                 "path": relative_output_path(tail_binary, output_dir),
                 "sha256": sha256_file(tail_binary),
             },
+            "runtime_rope_table": (
+                {
+                    "path": relative_output_path(rope_files["binary"], output_dir),
+                    "sha256": sha256_file(rope_files["binary"]),
+                }
+                if rope_files is not None
+                else None
+            ),
         },
         "commands": commands,
     }
@@ -763,7 +958,15 @@ def main() -> None:
     )
     print(f"output_dir={output_dir}")
     print(f"address_audit={address_audit_path}")
-    print(f"last_layer_output=0x{layer_output_base(args.layer_count - 1):016X}")
+    print(
+        "last_layer_output="
+        f"0x{int(manifest['final_tail']['runtime_hidden_override']):016X}"
+    )
+    if runtime_rope_base is not None:
+        print(
+            "descriptor_golden_last_layer_output="
+            f"0x{layer_output_base(args.layer_count - 1):016X}"
+        )
     print(
         "final="
         f"token {manifest['final_tail']['best_token']} "

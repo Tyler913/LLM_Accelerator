@@ -1,12 +1,15 @@
 `timescale 1ns/1ps
 `default_nettype none
 
-module tb_qmap_one_token_axi_embedding_top;
+module tb_qmap_one_token_axi_embedding_top #(
+    parameter bit INJECT_MEM_ERROR = 1'b0
+);
 
     localparam int INPUT_SIZE = 1024;
     localparam int WEIGHT_WORDS = 128;
     localparam int SCALE_WORDS = 8;
     localparam logic [1 : 0] AXI_RESP_OKAY = 2'b00;
+    localparam logic [1 : 0] AXI_RESP_SLVERR = 2'b10;
     localparam logic [63 : 0] WEIGHT_BASE = 64'h0000_0004_0010_0000;
     localparam logic [63 : 0] SCALE_BASE = 64'h0000_0004_04B3_0000;
     localparam logic [63 : 0] INPUT_HIDDEN_BASE = 64'h0000_0004_0509_2540;
@@ -122,7 +125,8 @@ module tb_qmap_one_token_axi_embedding_top;
     assign m_axi_arready = !read_active && !m_axi_rvalid && ((cycle_count % 5) != 1);
     assign m_axi_awready = !write_active && !m_axi_bvalid && ((cycle_count % 7) != 2);
     assign m_axi_wready = write_active && ((cycle_count % 6) != 3);
-    assign m_axi_rresp = AXI_RESP_OKAY;
+    assign m_axi_rresp = (INJECT_MEM_ERROR && (read_target == 1) && (read_index == 0)) ?
+                         AXI_RESP_SLVERR : AXI_RESP_OKAY;
 
     qmap_one_token_axi_top dut (
         .aclk(clk),
@@ -417,7 +421,11 @@ module tb_qmap_one_token_axi_embedding_top;
         check(status[1] && status[2], "BD-facing live done/error status mismatch");
         wait_clk();
         check(error, "BD-facing scheduler validation error missing after embedding");
-        check(!mem_error, "BD-facing embedding reported an AXI memory error");
+        if (INJECT_MEM_ERROR) begin
+            check(mem_error, "BD-facing wrapper did not preserve an early AXI read error");
+        end else begin
+            check(!mem_error, "BD-facing embedding reported an AXI memory error");
+        end
         axil_read(REG_STATUS, sticky_status);
         check(sticky_status[1] && sticky_status[2], "BD-facing sticky done/error status mismatch");
         check(ar_count == 2, "BD-facing embedding AR burst count mismatch");
@@ -445,6 +453,12 @@ module tb_qmap_one_token_axi_embedding_top;
         $finish(1);
     end
 
+endmodule
+
+module tb_qmap_one_token_axi_embedding_top_mem_error;
+    tb_qmap_one_token_axi_embedding_top #(
+        .INJECT_MEM_ERROR(1'b1)
+    ) testbench ();
 endmodule
 
 `default_nettype wire

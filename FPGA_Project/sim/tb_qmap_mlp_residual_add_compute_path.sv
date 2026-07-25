@@ -19,6 +19,8 @@ module tb_qmap_mlp_residual_add_compute_path;
     localparam int VECTOR_BURSTS        = VECTOR_BYTES / MAX_READ_BYTES;
     localparam int QMAP_IMAGE_BYTES     = 32'h0000_5000;
     localparam logic [ADDR_WIDTH-1 : 0] DEFAULT_QMAP_BASE_ADDR = `QMAP_MLP_RESIDUAL_ADD_BASE_ADDR;
+    localparam logic [ADDR_WIDTH-1 : 0] RUNTIME_OUTPUT_BASE_ADDR =
+        `QMAP_MLP_RESIDUAL_ADD_BASE_ADDR + 64'h0000_0000_0001_0000;
     localparam int QMAP_WORDS           = QMAP_IMAGE_BYTES / MEM_DATA_BYTES;
     localparam int DESCRIPTOR_WORDS     = 32;
     localparam int DESCRIPTOR_TABLE_WORD_OFFSET = 32'h0100 / 4;
@@ -42,6 +44,7 @@ module tb_qmap_mlp_residual_add_compute_path;
     localparam int INVALID_RD_WORDS     = QMAP_READER_WORDS;
     localparam int PROTOCOL_RD_REQS     = QMAP_READER_REQS + 1;
     localparam int PROTOCOL_RD_WORDS    = QMAP_READER_WORDS + 1;
+    localparam int INVALID_OVERRIDE_RUNS = 2;
 
     logic clk;
     logic rst_n;
@@ -59,6 +62,9 @@ module tb_qmap_mlp_residual_add_compute_path;
     logic [31 : 0] dut_write_word_count;
     logic [7 : 0] state_debug;
     logic [1 : 0] read_slot_debug;
+    logic output_base_override_valid;
+    logic [ADDR_WIDTH-1 : 0] output_base_override_addr;
+    logic [ADDR_WIDTH-1 : 0] effective_output_base_addr;
 
     logic mem_rd_req_valid;
     logic mem_rd_req_ready;
@@ -125,11 +131,17 @@ module tb_qmap_mlp_residual_add_compute_path;
     logic protocol_error;
     integer protocol_dut_read_bursts;
     integer protocol_dut_read_words;
+    integer runtime_write_req_delta;
+    integer runtime_write_word_delta;
+    integer invalid_override_error_count;
+    integer invalid_override_write_req_delta;
+    integer invalid_override_write_word_delta;
 
     logic [ADDR_WIDTH-1 : 0] qmap_base_addr;
     logic [ADDR_WIDTH-1 : 0] post_base_addr;
     logic [ADDR_WIDTH-1 : 0] down_base_addr;
     logic [ADDR_WIDTH-1 : 0] output_base_addr;
+    logic [ADDR_WIDTH-1 : 0] expected_output_base_addr;
 
     logic read_active;
     integer active_read_region;
@@ -177,9 +189,12 @@ module tb_qmap_mlp_residual_add_compute_path;
         .i_rst_n                  (rst_n),
         .i_start                  (start),
         .i_qmap_base_addr         (qmap_base_addr),
+        .i_output_base_override_valid(output_base_override_valid),
+        .i_output_base_override_addr(output_base_override_addr),
         .o_busy                   (busy),
         .o_done                   (done),
         .o_error                  (error),
+        .o_effective_output_base_addr(effective_output_base_addr),
         .o_saturation             (saturation),
         .o_output_count           (output_count),
         .o_stage_cycle_count      (stage_cycle_count),
@@ -293,6 +308,7 @@ module tb_qmap_mlp_residual_add_compute_path;
             post_base_addr = descriptor_base_addr(SLOT_POST_ATTN);
             down_base_addr = descriptor_base_addr(SLOT_DOWN);
             output_base_addr = descriptor_base_addr(SLOT_OUTPUT);
+            expected_output_base_addr = output_base_addr;
         end
     endtask
 
@@ -434,10 +450,10 @@ module tb_qmap_mlp_residual_add_compute_path;
                 $display("FAIL: write request while another write is active");
                 mismatch_count = mismatch_count + 1;
             end
-            if ((mem_wr_req_addr !== output_base_addr) ||
+            if ((mem_wr_req_addr !== expected_output_base_addr) ||
                 (mem_wr_req_len_bytes != VECTOR_BYTES)) begin
                 $display("FAIL: layer_out write request mismatch addr=0x%016h expected=0x%016h len=%0d",
-                         mem_wr_req_addr, output_base_addr, mem_wr_req_len_bytes);
+                         mem_wr_req_addr, expected_output_base_addr, mem_wr_req_len_bytes);
                 mismatch_count = mismatch_count + 1;
             end
             write_active = 1'b1;
@@ -522,6 +538,9 @@ module tb_qmap_mlp_residual_add_compute_path;
     task run_success;
         integer prior_done_count;
         begin
+            output_base_override_valid = 1'b0;
+            output_base_override_addr = '0;
+            expected_output_base_addr = output_base_addr;
             prior_done_count = done_seen_count;
             pulse_start();
 
@@ -543,6 +562,96 @@ module tb_qmap_mlp_residual_add_compute_path;
             normal_dut_write_words = dut_write_word_count;
             normal_error = error;
             normal_saturation = saturation;
+        end
+    endtask
+
+    task run_runtime_override;
+        integer prior_done_count;
+        integer saved_write_req_count;
+        integer saved_write_word_count;
+        begin
+            prior_done_count = done_seen_count;
+            saved_write_req_count = mem_wr_req_count;
+            saved_write_word_count = mem_wr_word_count_total;
+            expected_output_base_addr = RUNTIME_OUTPUT_BASE_ADDR;
+            output_base_override_valid = 1'b1;
+            output_base_override_addr = RUNTIME_OUTPUT_BASE_ADDR;
+            pulse_start();
+
+            // The accepted transaction owns the start-time address even if the
+            // live configuration pins change while descriptor reads are active.
+            output_base_override_valid = 1'b0;
+            output_base_override_addr = RUNTIME_OUTPUT_BASE_ADDR + 64'd2;
+            wait_for_next_done(prior_done_count, 200000);
+
+            runtime_write_req_delta = mem_wr_req_count - saved_write_req_count;
+            runtime_write_word_delta = mem_wr_word_count_total - saved_write_word_count;
+            if (error) begin
+                $display("FAIL: runtime output override run reported error");
+                mismatch_count = mismatch_count + 1;
+            end
+            if (effective_output_base_addr !== RUNTIME_OUTPUT_BASE_ADDR) begin
+                $display("FAIL: runtime effective output base mismatch actual=0x%016h expected=0x%016h",
+                         effective_output_base_addr, RUNTIME_OUTPUT_BASE_ADDR);
+                mismatch_count = mismatch_count + 1;
+            end
+            if ((runtime_write_req_delta != 1) ||
+                (runtime_write_word_delta != VECTOR_WORDS)) begin
+                $display("FAIL: runtime write delta mismatch req=%0d words=%0d expected=1/%0d",
+                         runtime_write_req_delta, runtime_write_word_delta, VECTOR_WORDS);
+                mismatch_count = mismatch_count + 1;
+            end
+
+            output_base_override_valid = 1'b0;
+            output_base_override_addr = '0;
+            expected_output_base_addr = output_base_addr;
+        end
+    endtask
+
+    task run_invalid_runtime_override(input logic [ADDR_WIDTH-1 : 0] bad_addr);
+        integer prior_done_count;
+        integer saved_write_req_count;
+        integer saved_write_word_count;
+        begin
+            prior_done_count = done_seen_count;
+            saved_write_req_count = mem_wr_req_count;
+            saved_write_word_count = mem_wr_word_count_total;
+            output_base_override_valid = 1'b1;
+            output_base_override_addr = bad_addr;
+            pulse_start();
+            output_base_override_valid = 1'b0;
+            output_base_override_addr = RUNTIME_OUTPUT_BASE_ADDR;
+            wait_for_next_done(prior_done_count, 80000);
+
+            invalid_override_write_req_delta =
+                invalid_override_write_req_delta +
+                (mem_wr_req_count - saved_write_req_count);
+            invalid_override_write_word_delta =
+                invalid_override_write_word_delta +
+                (mem_wr_word_count_total - saved_write_word_count);
+            if (!error) begin
+                $display("FAIL: invalid runtime output override 0x%016h did not report error", bad_addr);
+                mismatch_count = mismatch_count + 1;
+            end
+            else begin
+                invalid_override_error_count = invalid_override_error_count + 1;
+            end
+            if (effective_output_base_addr !== bad_addr) begin
+                $display("FAIL: invalid runtime output base was not latched actual=0x%016h expected=0x%016h",
+                         effective_output_base_addr, bad_addr);
+                mismatch_count = mismatch_count + 1;
+            end
+            if ((mem_wr_req_count != saved_write_req_count) ||
+                (mem_wr_word_count_total != saved_write_word_count)) begin
+                $display("FAIL: invalid runtime output override wrote data req=%0d/%0d words=%0d/%0d",
+                         mem_wr_req_count, saved_write_req_count,
+                         mem_wr_word_count_total, saved_write_word_count);
+                mismatch_count = mismatch_count + 1;
+            end
+
+            output_base_override_valid = 1'b0;
+            output_base_override_addr = '0;
+            expected_output_base_addr = output_base_addr;
         end
     endtask
 
@@ -867,6 +976,8 @@ module tb_qmap_mlp_residual_add_compute_path;
         load_vectors();
 
         start = 1'b0;
+        output_base_override_valid = 1'b0;
+        output_base_override_addr = '0;
         rst_n = 1'b0;
         mismatch_count = 0;
         print_count = 0;
@@ -896,6 +1007,11 @@ module tb_qmap_mlp_residual_add_compute_path;
         protocol_error = 1'b0;
         protocol_dut_read_bursts = 0;
         protocol_dut_read_words = 0;
+        runtime_write_req_delta = 0;
+        runtime_write_word_delta = 0;
+        invalid_override_error_count = 0;
+        invalid_override_write_req_delta = 0;
+        invalid_override_write_word_delta = 0;
         force_bad_payload_last = 1'b0;
         bad_payload_last_fired = 1'b0;
 
@@ -905,6 +1021,9 @@ module tb_qmap_mlp_residual_add_compute_path;
         repeat (4) @(posedge clk);
 
         run_success();
+        run_runtime_override();
+        run_invalid_runtime_override('0);
+        run_invalid_runtime_override(RUNTIME_OUTPUT_BASE_ADDR + 64'd2);
         run_invalid_bad_down_dtype();
         run_bad_payload_last();
 
@@ -930,12 +1049,15 @@ module tb_qmap_mlp_residual_add_compute_path;
         $display("  spurious start covered    = %0d", spurious_start_seen_busy);
         $display("  invalid descriptor error  = %0d", invalid_error);
         $display("  bad payload-last error    = %0d", protocol_error);
+        $display("  runtime write req/words   = %0d / %0d",
+                 runtime_write_req_delta, runtime_write_word_delta);
+        $display("  invalid override errors   = %0d", invalid_override_error_count);
         $display("  done cycles ok/bad/proto  = %0d / %0d / %0d",
                  normal_done_cycle, invalid_done_cycle, protocol_done_cycle);
         $display("  trace                     = %s", tracefile);
 
-        if (done_seen_count != 3) begin
-            $display("FAIL: done pulse count mismatch actual=%0d expected=3", done_seen_count);
+        if (done_seen_count != 6) begin
+            $display("FAIL: done pulse count mismatch actual=%0d expected=6", done_seen_count);
             mismatch_count = mismatch_count + 1;
         end
         if (normal_error) begin
@@ -961,23 +1083,29 @@ module tb_qmap_mlp_residual_add_compute_path;
                      normal_output_write_count, VECTOR_WORDS);
             mismatch_count = mismatch_count + 1;
         end
-        if ((mem_qmap_req_count != (3 * QMAP_READER_REQS)) ||
-            (mem_post_req_count != (VECTOR_BURSTS + 1)) ||
-            (mem_down_req_count != VECTOR_BURSTS)) begin
+        if ((mem_qmap_req_count != ((4 + INVALID_OVERRIDE_RUNS) * QMAP_READER_REQS)) ||
+            (mem_post_req_count != ((2 * VECTOR_BURSTS) + 1)) ||
+            (mem_down_req_count != (2 * VECTOR_BURSTS))) begin
             $display("FAIL: read request class counts mismatch qmap=%0d post=%0d down=%0d",
                      mem_qmap_req_count, mem_post_req_count, mem_down_req_count);
             mismatch_count = mismatch_count + 1;
         end
-        if ((mem_req_fire_count != (NORMAL_RD_REQS + INVALID_RD_REQS + PROTOCOL_RD_REQS)) ||
-            (mem_rsp_fire_count != (NORMAL_RD_WORDS + INVALID_RD_WORDS + PROTOCOL_RD_WORDS))) begin
+        if ((mem_req_fire_count != ((2 * NORMAL_RD_REQS) +
+                                    ((1 + INVALID_OVERRIDE_RUNS) * INVALID_RD_REQS) +
+                                    PROTOCOL_RD_REQS)) ||
+            (mem_rsp_fire_count != ((2 * NORMAL_RD_WORDS) +
+                                    ((1 + INVALID_OVERRIDE_RUNS) * INVALID_RD_WORDS) +
+                                    PROTOCOL_RD_WORDS))) begin
             $display("FAIL: total read count mismatch req=%0d/%0d rsp=%0d/%0d",
-                     mem_req_fire_count, NORMAL_RD_REQS + INVALID_RD_REQS + PROTOCOL_RD_REQS,
-                     mem_rsp_fire_count, NORMAL_RD_WORDS + INVALID_RD_WORDS + PROTOCOL_RD_WORDS);
+                     mem_req_fire_count,
+                     (2 * NORMAL_RD_REQS) + ((1 + INVALID_OVERRIDE_RUNS) * INVALID_RD_REQS) + PROTOCOL_RD_REQS,
+                     mem_rsp_fire_count,
+                     (2 * NORMAL_RD_WORDS) + ((1 + INVALID_OVERRIDE_RUNS) * INVALID_RD_WORDS) + PROTOCOL_RD_WORDS);
             mismatch_count = mismatch_count + 1;
         end
-        if ((mem_wr_req_count != 1) || (mem_wr_word_count_total != VECTOR_WORDS)) begin
-            $display("FAIL: write count mismatch req=%0d words=%0d expected=1/%0d",
-                     mem_wr_req_count, mem_wr_word_count_total, VECTOR_WORDS);
+        if ((mem_wr_req_count != 2) || (mem_wr_word_count_total != (2 * VECTOR_WORDS))) begin
+            $display("FAIL: write count mismatch req=%0d words=%0d expected=2/%0d",
+                     mem_wr_req_count, mem_wr_word_count_total, 2 * VECTOR_WORDS);
             mismatch_count = mismatch_count + 1;
         end
         if ((normal_dut_read_bursts != NORMAL_RD_REQS) ||
@@ -1014,13 +1142,22 @@ module tb_qmap_mlp_residual_add_compute_path;
             $display("FAIL: bad payload-last path did not report error");
             mismatch_count = mismatch_count + 1;
         end
+        if ((invalid_override_error_count != INVALID_OVERRIDE_RUNS) ||
+            (invalid_override_write_req_delta != 0) ||
+            (invalid_override_write_word_delta != 0)) begin
+            $display("FAIL: runtime output override validation coverage failed errors=%0d req=%0d words=%0d",
+                     invalid_override_error_count,
+                     invalid_override_write_req_delta,
+                     invalid_override_write_word_delta);
+            mismatch_count = mismatch_count + 1;
+        end
 
         if (mismatch_count != 0) begin
             $display("FAIL: qmap_mlp_residual_add_compute_path found %0d mismatch(es)", mismatch_count);
             $finish(1);
         end
 
-        $display("PASS: qmap_mlp_residual_add_compute_path matched exact layer_out write-back and caught descriptor/protocol errors.");
+        $display("PASS: qmap_mlp_residual_add_compute_path matched legacy/runtime outputs and rejected invalid overrides.");
         $display("Waveform: %s", wavefile);
         $finish;
     end

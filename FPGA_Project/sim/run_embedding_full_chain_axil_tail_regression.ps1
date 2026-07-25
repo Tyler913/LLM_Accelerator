@@ -5,6 +5,7 @@ param(
     [ValidateRange(3, 28)]
     [int]$LayerCount = 28,
     [int]$TokenId = -1,
+    [switch]$RuntimeContext,
     [string]$CondaEnvironment = "llm_fpga"
 )
 
@@ -75,6 +76,28 @@ function Resolve-VectorFile {
     return $path
 }
 
+function Resolve-ReferencedFile {
+    param(
+        [Parameter(Mandatory = $true)] [string]$VectorRoot,
+        [Parameter(Mandatory = $true)] [string]$RepoRoot,
+        [Parameter(Mandatory = $true)] [string]$Reference
+    )
+
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    if ([System.IO.Path]::IsPathRooted($Reference)) {
+        $candidates.Add([System.IO.Path]::GetFullPath($Reference))
+    } else {
+        $candidates.Add([System.IO.Path]::GetFullPath((Join-Path $VectorRoot $Reference)))
+        $candidates.Add([System.IO.Path]::GetFullPath((Join-Path $RepoRoot $Reference)))
+    }
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return $candidate
+        }
+    }
+    throw "Manifest references a missing file: $Reference"
+}
+
 function Format-SvAddress {
     param([Parameter(Mandatory = $true)] [UInt64]$Value)
     return "64'h{0:X16}" -f $Value
@@ -129,9 +152,10 @@ $simDir = Join-Path $repoRoot "FPGA_Project\sim"
 $tbPath = Join-Path $simDir "tb_qmap_one_token_layer_scheduler.sv"
 $exporter = Join-Path $repoRoot "Qwen3-0.6B-Base\python_each_module\53_export_embedding_full28_final_chain.py"
 $timingChecker = Join-Path $simDir "check_embedding_full_chain_axil_tail_timing.py"
-$rtlFiles = @(Get-ChildItem -LiteralPath $rtlDir -Filter "*.sv" -File |
-    Sort-Object FullName |
-    ForEach-Object { $_.FullName })
+. (Join-Path $simDir "load_rtl_manifest.ps1")
+$rtlBuild = Get-RtlBuildManifest -RtlDir $rtlDir
+$rtlFiles = $rtlBuild.SourceFiles
+$rtlIncludeDirs = $rtlBuild.IncludeDirs
 
 $conda = (Get-Command conda -ErrorAction Stop).Source
 $xvlog = (Get-Command xvlog -ErrorAction Stop).Source
@@ -142,6 +166,7 @@ $summary.Add("AXI-Lite tied-Q4 embedding -> full decoder chain -> final tail reg
 $summary.Add("run_id=$runId")
 $summary.Add("session_dir=$sessionDir")
 $summary.Add("vector_dir=$vectorDirFull")
+$summary.Add("runtime_context=$($RuntimeContext.IsPresent)")
 
 $savedPycachePrefix = $env:PYTHONPYCACHEPREFIX
 $env:PYTHONPYCACHEPREFIX = $pycacheDir
@@ -159,7 +184,11 @@ try {
         if ($TokenId -ge 0) {
             $exportArgs += @("--token-id", "$TokenId")
         }
-        Write-Host "[export]  tied-Q4 embedding through $LayerCount layers and full-vocabulary tail"
+        if ($RuntimeContext) {
+            $exportArgs += "--runtime-rope-table"
+        }
+        $modeLabel = if ($RuntimeContext) { "runtime-context" } else { "legacy" }
+        Write-Host "[export]  tied-Q4 embedding through $LayerCount layers and full-vocabulary tail ($modeLabel)"
         $exportOutput = Invoke-LoggedCommand -Executable $conda -Arguments $exportArgs `
             -LogPath (Join-Path $sessionDir "export.log")
         if (($exportOutput -join "`n") -notmatch
@@ -181,6 +210,111 @@ try {
     }
     if ($manifest.address_audit.status -ne "PASS") {
         throw "Manifest address audit did not pass"
+    }
+
+    $manifestRuntimeEnabled = ($null -ne $manifest.runtime_context) -and
+        ([bool]$manifest.runtime_context.enabled)
+    if ($manifestRuntimeEnabled -ne $RuntimeContext.IsPresent) {
+        throw "Requested RuntimeContext=$($RuntimeContext.IsPresent) but manifest runtime_context.enabled=$manifestRuntimeEnabled"
+    }
+
+    $runtimePosition = 0
+    $runtimeRopeHex = $null
+    $runtimeRopeCosBase = [UInt64]0
+    $runtimeRopeSinBase = [UInt64]0
+    $runtimeHiddenABase = [UInt64]0
+    $runtimeHiddenBBase = [UInt64]0
+    $runtimeLastHiddenBase = [UInt64]$manifest.final_tail.runtime_hidden_override
+    $embeddingOutputBase = [UInt64]$manifest.embedding.output_base
+    if ($RuntimeContext) {
+        $runtimeRopeCosBase = [UInt64]$manifest.runtime_context.rope_cos_base
+        $runtimeRopeSinBase = [UInt64]$manifest.runtime_context.rope_sin_base
+        $runtimeHiddenABase = [UInt64]$manifest.runtime_context.hidden_a_base
+        $runtimeHiddenBBase = [UInt64]$manifest.runtime_context.hidden_b_base
+        $runtimeLastHiddenBase = [UInt64]$manifest.runtime_context.last_layer_hidden_base
+        $runtimeRopePlaneBytes = [UInt64](256 * 128 * 4)
+        if (($runtimeRopeCosBase -eq 0) -or
+            ($runtimeRopeSinBase -ne ($runtimeRopeCosBase + $runtimeRopePlaneBytes))) {
+            throw "Runtime RoPE cos/sin bases are missing or non-contiguous"
+        }
+        if (($runtimeHiddenABase -eq 0) -or ($runtimeHiddenBBase -eq 0) -or
+            ($runtimeHiddenABase -eq $runtimeHiddenBBase) -or
+            ((($runtimeHiddenABase -bor $runtimeHiddenBBase) -band 3) -ne 0)) {
+            throw "Runtime hidden A/B bases must be distinct, non-zero, and word aligned"
+        }
+        if (($manifest.runtime_context.rope_shape[0] -ne 256) -or
+            ($manifest.runtime_context.rope_shape[1] -ne 128) -or
+            ($manifest.runtime_context.rope_row_stride_bytes -ne 512)) {
+            throw "Runtime RoPE manifest shape/stride contract mismatch"
+        }
+        if ($embeddingOutputBase -ne $runtimeHiddenABase) {
+            throw "Runtime embedding output must select hidden buffer A"
+        }
+        if ([UInt64]$manifest.embedding.descriptor_golden_output_base -ne
+            [UInt64]$manifest.layers[0].input_hidden_base) {
+            throw "Embedding descriptor-golden output no longer matches Layer 0 static input"
+        }
+
+        $expectedLastHiddenBase = if (($manifestLayerCount % 2) -eq 0) {
+            $runtimeHiddenABase
+        } else {
+            $runtimeHiddenBBase
+        }
+        if (($runtimeLastHiddenBase -ne $expectedLastHiddenBase) -or
+            ([UInt64]$manifest.final_tail.runtime_hidden_override -ne $expectedLastHiddenBase)) {
+            throw "Runtime final hidden address does not follow A/B layer parity"
+        }
+        if ([UInt64]$manifest.final_tail.descriptor_golden_hidden_base -ne
+            [UInt64]$manifest.layers[$manifestLayerCount - 1].output_hidden_base) {
+            throw "Final-tail descriptor-golden hidden base changed unexpectedly"
+        }
+        $runtimeRopeHex = Resolve-VectorFile $vectorDirFull `
+            ([string]$manifest.runtime_context.files.sim_hex)
+
+        for ($layerIndex = 0; $layerIndex -lt $manifestLayerCount; $layerIndex++) {
+            $layer = $manifest.layers[$layerIndex]
+            $expectedRuntimeInput = if (($layerIndex % 2) -eq 0) {
+                $runtimeHiddenABase
+            } else {
+                $runtimeHiddenBBase
+            }
+            $expectedRuntimeOutput = if (($layerIndex % 2) -eq 0) {
+                $runtimeHiddenBBase
+            } else {
+                $runtimeHiddenABase
+            }
+            if (([UInt64]$layer.runtime_input_hidden_base -ne $expectedRuntimeInput) -or
+                ([UInt64]$layer.runtime_output_hidden_base -ne $expectedRuntimeOutput)) {
+                throw "Layer $layerIndex runtime hidden A/B parity mismatch"
+            }
+            if (([UInt64]$layer.descriptor_input_hidden_base -ne [UInt64]$layer.input_hidden_base) -or
+                ([UInt64]$layer.descriptor_output_hidden_base -ne [UInt64]$layer.output_hidden_base)) {
+                throw "Layer $layerIndex descriptor-golden hidden addresses changed unexpectedly"
+            }
+
+            $layerManifestPath = Resolve-VectorFile $vectorDirFull ([string]$layer.manifest)
+            $layerManifest = Get-Content -Raw -LiteralPath $layerManifestPath | ConvertFrom-Json
+            $frontendManifestPath = Resolve-ReferencedFile -VectorRoot $vectorDirFull `
+                -RepoRoot $repoRoot -Reference ([string]$layerManifest.files.frontend.manifest)
+            $frontendManifest = Get-Content -Raw -LiteralPath $frontendManifestPath | ConvertFrom-Json
+            $scoreManifestPath = Resolve-ReferencedFile -VectorRoot $vectorDirFull `
+                -RepoRoot $repoRoot -Reference ([string]$layerManifest.files.score_value.manifest)
+            $scoreManifest = Get-Content -Raw -LiteralPath $scoreManifestPath | ConvertFrom-Json
+            $layerPosition = [int]$frontendManifest.shape.selected_position
+            if ($layerIndex -eq 0) {
+                $runtimePosition = $layerPosition
+            } elseif ($layerPosition -ne $runtimePosition) {
+                throw "Runtime token position is inconsistent across layer manifests"
+            }
+            if (($layerPosition -lt 0) -or ($layerPosition -ge 256) -or
+                ([int]$frontendManifest.shape.layer_id -ne $layerIndex) -or
+                ([int]$scoreManifest.shape.layer_id -ne $layerIndex) -or
+                ([int]$scoreManifest.shape.selected_position -ne $layerPosition) -or
+                ([int]$scoreManifest.shape.cache_length -ne ($layerPosition + 1))) {
+                throw "Layer $layerIndex runtime layer/position/cache-length manifest mismatch"
+            }
+        }
+        $summary.Add("PASS runtime_manifest_contract :: position=$runtimePosition hidden_a=$(Format-SvAddress $runtimeHiddenABase) hidden_b=$(Format-SvAddress $runtimeHiddenBBase)")
     }
 
     $syntheticVectors = Join-Path $xsimDir "FPGA_Project\sim\vectors"
@@ -217,6 +351,18 @@ try {
     $includeLines.Add("                full_chain_layer_count = $manifestLayerCount;")
     $includeLines.Add("                full_chain_kv_cache_base_addr = $(Format-SvAddress ([UInt64]$manifest.address_formula.kv_cache_base));")
     $includeLines.Add("                tail_qmap_base_addr = $(Format-SvAddress ([UInt64]$manifest.final_tail.qmap_base));")
+    $includeLines.Add("                full_chain_manifest_runtime_context = $([int]$manifestRuntimeEnabled);")
+    $includeLines.Add("                full_chain_runtime_position = $runtimePosition;")
+    $includeLines.Add("                full_chain_embedding_output_base_addr = $(Format-SvAddress $embeddingOutputBase);")
+    $includeLines.Add("                full_chain_runtime_hidden_a_base_addr = $(Format-SvAddress $runtimeHiddenABase);")
+    $includeLines.Add("                full_chain_runtime_hidden_b_base_addr = $(Format-SvAddress $runtimeHiddenBBase);")
+    $includeLines.Add("                full_chain_runtime_rope_cos_base_addr = $(Format-SvAddress $runtimeRopeCosBase);")
+    $includeLines.Add("                full_chain_runtime_rope_sin_base_addr = $(Format-SvAddress $runtimeRopeSinBase);")
+    $includeLines.Add("                full_chain_runtime_last_hidden_base_addr = $(Format-SvAddress $runtimeLastHiddenBase);")
+    if ($RuntimeContext) {
+        Add-ReadMemLine -Lines $includeLines -Path $runtimeRopeHex `
+            -ArrayName "full_runtime_rope_mem" -Start 0 -WordCount (2 * 256 * 128)
+    }
 
     $qmapLoads = @(
         @("qkv_image", "full_qkv_qmap", 568320),
@@ -298,6 +444,18 @@ try {
         }.GetEnumerator()) {
             $includeLines.Add("                $($assignment.Key)[$layerIndex] = $(Format-SvAddress ([UInt64]$assignment.Value));")
         }
+        $actualInputHidden = if ($RuntimeContext) {
+            [UInt64]$layer.runtime_input_hidden_base
+        } else {
+            [UInt64]$layer.input_hidden_base
+        }
+        $actualOutputHidden = if ($RuntimeContext) {
+            [UInt64]$layer.runtime_output_hidden_base
+        } else {
+            [UInt64]$layer.output_hidden_base
+        }
+        $includeLines.Add("                full_actual_input_hidden_base[$layerIndex] = $(Format-SvAddress $actualInputHidden);")
+        $includeLines.Add("                full_actual_layer_output_base[$layerIndex] = $(Format-SvAddress $actualOutputHidden);")
         foreach ($load in @($qmapLoads + $dataLoads)) {
             $key = [string]$load[0]
             $arrayName = [string]$load[1]
@@ -315,8 +473,13 @@ try {
 
     Push-Location $xsimDir
     try {
-        $snapshot = "embedding_full_chain_${manifestLayerCount}_axil_tail_xsim"
-        $xvlogArgs = @("--sv", "--relax", "-i", $rtlDir, "-i", $xsimDir)
+        $snapshotMode = if ($RuntimeContext) { "runtime" } else { "legacy" }
+        $snapshot = "embedding_full_chain_${manifestLayerCount}_${snapshotMode}_axil_tail_xsim"
+        $xvlogArgs = @("--sv", "--relax")
+        foreach ($includeDir in $rtlIncludeDirs) {
+            $xvlogArgs += @("-i", $includeDir)
+        }
+        $xvlogArgs += @("-i", $xsimDir)
         foreach ($define in @(
             "QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL",
             "QMAP_ONE_TOKEN_TB_USE_TOP",
@@ -353,6 +516,18 @@ try {
             "--log", (Join-Path $xsimDir "xsim.log"),
             "--runall"
         )
+        if ($RuntimeContext) {
+            $xsimArgs = @($snapshot,
+                "-testplusarg", "true3_mmio_top_tail_only",
+                "-testplusarg", "embedding_true3",
+                "-testplusarg", "embedding_full_chain",
+                "-testplusarg", "runtime_context",
+                "-testplusarg", "fastmem",
+                "-testplusarg", "progress",
+                "-testplusarg", "notrace",
+                "--log", (Join-Path $xsimDir "xsim.log"),
+                "--runall")
+        }
         Write-Host "[xsim]   run embedding -> $manifestLayerCount layers -> full-vocabulary tail"
         $xsimOutput = Invoke-LoggedCommand -Executable $xsim -Arguments $xsimArgs `
             -LogPath (Join-Path $xsimDir "xsim_console.log")

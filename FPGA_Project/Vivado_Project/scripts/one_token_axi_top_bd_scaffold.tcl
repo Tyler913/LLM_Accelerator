@@ -39,6 +39,8 @@ set script_dir [file dirname [file normalize [info script]]]
 set project_dir [file dirname $script_dir]
 set fpga_dir [file dirname $project_dir]
 set rtl_dir [file join $fpga_dir rtl]
+set rtl_source_manifest [file join $rtl_dir rtl_sources.list]
+set rtl_include_manifest [file join $rtl_dir include_dirs.list]
 set project_file [file join $project_dir LLM_FPGA.xpr]
 set bd_file [file join $project_dir LLM_FPGA.srcs sources_1 bd llm_system llm_system.bd]
 set top_cell_name qmap_one_token_axi_top_0
@@ -51,15 +53,15 @@ set required_cells [list \
 ]
 
 set required_rtl [list \
-    axi4_read_master.sv \
-    axi4_write_master.sv \
-    axi4lite_to_mmio_regs.sv \
-    q4_embedding_lookup.sv \
-    qmap_one_token_control_regs.sv \
-    qmap_one_token_top.sv \
-    qmap_one_token_mmio_top.sv \
-    qmap_one_token_axil_top.sv \
-    qmap_one_token_axi_top.sv \
+    [file join lib bus axi4_read_master.sv] \
+    [file join lib bus axi4_write_master.sv] \
+    [file join lib bus axi4lite_to_mmio_regs.sv] \
+    [file join lib q4 q4_embedding_lookup.sv] \
+    [file join top one_token qmap_one_token_control_regs.sv] \
+    [file join top one_token qmap_one_token_top.sv] \
+    [file join top one_token qmap_one_token_mmio_top.sv] \
+    [file join top one_token qmap_one_token_axil_top.sv] \
+    [file join top one_token qmap_one_token_axi_top.sv] \
 ]
 
 proc require_nonempty {objects message} {
@@ -67,6 +69,34 @@ proc require_nonempty {objects message} {
         error $message
     }
     return $objects
+}
+
+proc read_relative_path_list {root list_file expected_kind} {
+    if {![file exists $list_file]} {
+        error "Missing RTL manifest: $list_file"
+    }
+
+    set handle [open $list_file r]
+    set paths [list]
+    while {[gets $handle line] >= 0} {
+        set entry [string trim $line]
+        if {$entry eq "" || [string index $entry 0] eq "#"} {
+            continue
+        }
+
+        set path [file normalize [file join $root $entry]]
+        if {$expected_kind eq "file" && ![file isfile $path]} {
+            close $handle
+            error "RTL manifest file entry does not exist: $path"
+        }
+        if {$expected_kind eq "directory" && ![file isdirectory $path]} {
+            close $handle
+            error "RTL include directory does not exist: $path"
+        }
+        lappend paths $path
+    }
+    close $handle
+    return $paths
 }
 
 proc ensure_intf_connection {src_pin dst_pin} {
@@ -101,6 +131,8 @@ puts "One-token AXI top BD scaffold"
 puts "  project:    $project_file"
 puts "  bd:         $bd_file"
 puts "  rtl dir:    $rtl_dir"
+puts "  sources:    $rtl_source_manifest"
+puts "  includes:   $rtl_include_manifest"
 puts "  ctrl base:  $ctrl_base / $ctrl_range"
 puts "  PL DDR:     $pl_ddr_base / $pl_ddr_range"
 puts "  apply:      $apply_changes"
@@ -130,14 +162,26 @@ if {[llength [get_projects -quiet]] == 0} {
     open_project $project_file
 }
 
-set source_files [glob -nocomplain [file join $rtl_dir *.sv]]
+set source_files [read_relative_path_list $rtl_dir $rtl_source_manifest file]
+set include_dirs [read_relative_path_list $rtl_dir $rtl_include_manifest directory]
+set header_files [list]
+foreach include_dir $include_dirs {
+    foreach header_file [glob -nocomplain -types f [file join $include_dir *.svh]] {
+        lappend header_files $header_file
+    }
+}
+
 add_files -norecurse -fileset sources_1 $source_files
+if {[llength $header_files] != 0} {
+    add_files -norecurse -fileset sources_1 $header_files
+}
 foreach sv_file $source_files {
     set fobj [get_files -quiet $sv_file]
-    if {[llength $fobj] != 0} {
+    if {[llength $fobj] != 0 && [string equal -nocase [file extension $sv_file] ".sv"]} {
         set_property FILE_TYPE SystemVerilog $fobj
     }
 }
+set_property include_dirs $include_dirs [get_filesets sources_1]
 update_compile_order -fileset sources_1
 
 open_bd_design $bd_file

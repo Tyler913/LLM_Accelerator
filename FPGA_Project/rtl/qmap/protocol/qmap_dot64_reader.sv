@@ -57,6 +57,10 @@ module qmap_dot64_reader #(
     output logic [DESCRIPTOR_SLOTS*32-1 : 0]  o_desc_dim1_flat,
     output logic [DESCRIPTOR_SLOTS*32-1 : 0]  o_desc_dim2_flat,
     output logic [DESCRIPTOR_SLOTS*32-1 : 0]  o_desc_dim3_flat,
+    output logic [DESCRIPTOR_SLOTS*64-1 : 0]  o_desc_stride0_bytes_flat,
+    output logic [DESCRIPTOR_SLOTS*64-1 : 0]  o_desc_stride1_bytes_flat,
+    output logic [DESCRIPTOR_SLOTS*64-1 : 0]  o_desc_stride2_bytes_flat,
+    output logic [DESCRIPTOR_SLOTS*64-1 : 0]  o_desc_stride3_bytes_flat,
     output logic [DESCRIPTOR_SLOTS*32-1 : 0]  o_desc_aux0_flat,
     output logic [DESCRIPTOR_SLOTS*32-1 : 0]  o_desc_aux1_flat,
     output logic [DESCRIPTOR_SLOTS*32-1 : 0]  o_desc_aux2_flat,
@@ -256,6 +260,10 @@ module qmap_dot64_reader #(
             o_desc_dim1_flat            <= 'd0;
             o_desc_dim2_flat            <= 'd0;
             o_desc_dim3_flat            <= 'd0;
+            o_desc_stride0_bytes_flat   <= 'd0;
+            o_desc_stride1_bytes_flat   <= 'd0;
+            o_desc_stride2_bytes_flat   <= 'd0;
+            o_desc_stride3_bytes_flat   <= 'd0;
             o_desc_aux0_flat            <= 'd0;
             o_desc_aux1_flat            <= 'd0;
             o_desc_aux2_flat            <= 'd0;
@@ -282,6 +290,10 @@ module qmap_dot64_reader #(
                         o_desc_dim1_flat            <= 'd0;
                         o_desc_dim2_flat            <= 'd0;
                         o_desc_dim3_flat            <= 'd0;
+                        o_desc_stride0_bytes_flat   <= 'd0;
+                        o_desc_stride1_bytes_flat   <= 'd0;
+                        o_desc_stride2_bytes_flat   <= 'd0;
+                        o_desc_stride3_bytes_flat   <= 'd0;
                         o_desc_aux0_flat            <= 'd0;
                         o_desc_aux1_flat            <= 'd0;
                         o_desc_aux2_flat            <= 'd0;
@@ -332,6 +344,10 @@ module qmap_dot64_reader #(
                             o_desc_dim1_flat[slot_index*32 +: 32]            <= desc_dim1;
                             o_desc_dim2_flat[slot_index*32 +: 32]            <= desc_dim2;
                             o_desc_dim3_flat[slot_index*32 +: 32]            <= desc_dim3;
+                            o_desc_stride0_bytes_flat[slot_index*64 +: 64]   <= desc_stride0_bytes;
+                            o_desc_stride1_bytes_flat[slot_index*64 +: 64]   <= desc_stride1_bytes;
+                            o_desc_stride2_bytes_flat[slot_index*64 +: 64]   <= desc_stride2_bytes;
+                            o_desc_stride3_bytes_flat[slot_index*64 +: 64]   <= desc_stride3_bytes;
                             o_desc_aux0_flat[slot_index*32 +: 32]            <= desc_aux0;
                             o_desc_aux1_flat[slot_index*32 +: 32]            <= desc_aux1;
                             o_desc_aux2_flat[slot_index*32 +: 32]            <= desc_aux2;

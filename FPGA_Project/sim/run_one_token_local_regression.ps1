@@ -10,6 +10,7 @@ function Invoke-LoggedCommand {
         [Parameter(Mandatory = $true)]
         [string]$Executable,
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [string[]]$Arguments,
         [Parameter(Mandatory = $true)]
         [string]$LogPath
@@ -52,9 +53,10 @@ New-Item -ItemType Directory -Force -Path $sessionDir | Out-Null
 $rtlDir = Join-Path $repoRoot "FPGA_Project\rtl"
 $simDir = Join-Path $repoRoot "FPGA_Project\sim"
 $runtimeDir = Join-Path $repoRoot "FPGA_Project\software\qmap_one_token_runtime"
-$rtlFiles = @(Get-ChildItem -LiteralPath $rtlDir -Filter "*.sv" -File |
-    Sort-Object FullName |
-    ForEach-Object { $_.FullName })
+. (Join-Path $simDir "load_rtl_manifest.ps1")
+$rtlBuild = Get-RtlBuildManifest -RtlDir $rtlDir
+$rtlFiles = $rtlBuild.SourceFiles
+$rtlIncludeDirs = $rtlBuild.IncludeDirs
 
 $tests = @(
     @{ Top = "tb_axi4_read_master"; Source = "tb_axi4_read_master.sv" },
@@ -86,7 +88,11 @@ try {
         $compileLog = Join-Path $testDir "compile.log"
         $runLog = Join-Path $testDir "run.log"
         $tbPath = Join-Path $simDir $test.Source
-        $compileArgs = @("-g2012", "-Wall", "-I", $rtlDir, "-s", $name, "-o", $vvpPath) + $rtlFiles + @($tbPath)
+        $compileArgs = @("-g2012", "-Wall")
+        foreach ($includeDir in $rtlIncludeDirs) {
+            $compileArgs += @("-I", $includeDir)
+        }
+        $compileArgs += @("-s", $name, "-o", $vvpPath) + $rtlFiles + @($tbPath)
 
         Write-Host "[compile] $name"
         Invoke-LoggedCommand -Executable $iverilog -Arguments $compileArgs -LogPath $compileLog | Out-Null
@@ -104,7 +110,7 @@ try {
     $contractDir = Join-Path $sessionDir "qmap_one_token_register_contract"
     New-Item -ItemType Directory -Force -Path $contractDir | Out-Null
     $contractLog = Join-Path $contractDir "register_map.log"
-    $svText = Get-Content -Raw (Join-Path $rtlDir "qmap_one_token_control_regs.sv")
+    $svText = Get-Content -Raw (Join-Path $rtlDir "top\one_token\qmap_one_token_control_regs.sv")
     $headerText = Get-Content -Raw (Join-Path $runtimeDir "qmap_one_token_regs.h")
     $svMatches = [regex]::Matches($svText,
         "localparam\s+logic\s+\[9\s*:\s*0\]\s+REG_([A-Z0-9_]+)\s*=\s*10'h([0-9A-Fa-f]+)")
@@ -156,6 +162,29 @@ try {
     Write-Host "[syntax]  qmap_one_token_runtime/main.c"
     Invoke-LoggedCommand -Executable $gcc -Arguments $hostArgs -LogPath $hostLog | Out-Null
     $summary.Add("PASS qmap_one_token_runtime_host_syntax")
+
+    $hostTestSource = Join-Path $runtimeDir "test_runtime_host.c"
+    $hostTestExe = Join-Path $hostDir "test_runtime_host.exe"
+    $hostTestCompileLog = Join-Path $hostDir "test_runtime_host_compile.log"
+    $hostTestRunLog = Join-Path $hostDir "test_runtime_host_run.log"
+    $hostTestArgs = @(
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-I$runtimeDir",
+        $hostTestSource,
+        "-o",
+        $hostTestExe
+    )
+    Write-Host "[compile] qmap_one_token_runtime/test_runtime_host.c"
+    Invoke-LoggedCommand -Executable $gcc -Arguments $hostTestArgs -LogPath $hostTestCompileLog | Out-Null
+    Write-Host "[run]     qmap_one_token_runtime/test_runtime_host.c"
+    $hostTestOutput = Invoke-LoggedCommand -Executable $hostTestExe -Arguments @() -LogPath $hostTestRunLog
+    if (($hostTestOutput -join "`n") -notmatch "(?m)^PASS[: ]") {
+        throw "Host runtime test did not print a PASS line. See $hostTestRunLog"
+    }
+    $summary.Add("PASS qmap_one_token_runtime_host_decode")
 
     $summaryPath = Join-Path $sessionDir "summary.txt"
     [System.IO.File]::WriteAllLines($summaryPath, [string[]]$summary)

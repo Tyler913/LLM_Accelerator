@@ -823,14 +823,14 @@ Where:
 The first RTL address generator is:
 
 ```text
-FPGA_Project/rtl/kv_cache_addr_gen.sv
+FPGA_Project/rtl/model/attention/kv_cache_addr_gen.sv
 ```
 
 It generates byte addresses and range-valid flags. The first append controller
 is:
 
 ```text
-FPGA_Project/rtl/kv_cache_append.sv
+FPGA_Project/rtl/model/attention/kv_cache_append.sv
 ```
 
 `kv_cache_append.sv` writes K first and V second for one token position, pads
@@ -924,7 +924,7 @@ contract now lives in `FPGA_Project/software/qmap_one_token_runtime/`:
 `qmap_one_token_regs.h` keeps the offsets/table ids/status masks,
 `qmap_one_token_runtime.h` keeps configure/start/poll/result helpers, and
 `main.c` is a Vitis no-memory validation smoke. The BD-facing RTL shell is now
-`FPGA_Project/rtl/qmap_one_token_axi_top.sv`; it exposes `S_AXI` for this
+`FPGA_Project/rtl/top/one_token/qmap_one_token_axi_top.sv`; it exposes `S_AXI` for this
 register map and `M_AXI` for PL-DDR traffic. The runbook
 `FPGA_Project/Vivado_Project/ONE_TOKEN_AXI_TOP_BD_PLAN.md` recommends first
 control aperture `0xA004_0000` / `64 KiB`. The safe-by-default Tcl scaffold

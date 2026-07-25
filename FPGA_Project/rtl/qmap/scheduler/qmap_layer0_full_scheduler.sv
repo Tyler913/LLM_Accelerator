@@ -14,13 +14,25 @@
 // locally simulated Layer 0 path.
 module qmap_layer0_full_scheduler #(
     parameter int ADDR_WIDTH     = 64,
-    parameter int MEM_DATA_WIDTH = 32
+    parameter int MEM_DATA_WIDTH = 32,
+    parameter int NUM_LAYERS     = 28,
+    parameter int MAX_CONTEXT    = 256,
+    parameter int LAYER_INDEX_WIDTH = (NUM_LAYERS <= 1) ? 1 : $clog2(NUM_LAYERS),
+    parameter int POSITION_WIDTH = (MAX_CONTEXT <= 1) ? 1 : $clog2(MAX_CONTEXT)
 )
 (
     input  wire logic                         i_clk,
     input  wire logic                         i_rst_n,
 
     input  wire logic                         i_start,
+    input  wire logic                         i_runtime_context_valid,
+    input  wire logic [LAYER_INDEX_WIDTH-1:0] i_runtime_layer_id,
+    input  wire logic [POSITION_WIDTH-1:0]    i_runtime_position,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_runtime_kv_cache_base_addr,
+    input  wire logic                         i_residual_base_override_valid,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_residual_base_override_addr,
+    input  wire logic                         i_output_base_override_valid,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_output_base_override_addr,
     input  wire logic [ADDR_WIDTH-1 : 0]      i_attn_frontend_qmap_base_addr,
     input  wire logic [ADDR_WIDTH-1 : 0]      i_attn_score_value_qmap_base_addr,
     input  wire logic [ADDR_WIDTH-1 : 0]      i_o_proj_qmap_base_addr,
@@ -267,11 +279,22 @@ module qmap_layer0_full_scheduler #(
         endcase
     end
 
-    qmap_attention_frontend_compute_path attention_frontend (
+    qmap_attention_frontend_compute_path #(
+        .ADDR_WIDTH(ADDR_WIDTH),
+        .NUM_LAYERS(NUM_LAYERS),
+        .MAX_CONTEXT(MAX_CONTEXT),
+        .MEM_DATA_WIDTH(MEM_DATA_WIDTH),
+        .LAYER_INDEX_W(LAYER_INDEX_WIDTH),
+        .POSITION_INDEX_W(POSITION_WIDTH)
+    ) attention_frontend (
         .i_clk(i_clk),
         .i_rst_n(i_rst_n),
         .i_start(frontend_start),
         .i_qmap_base_addr(i_attn_frontend_qmap_base_addr),
+        .i_runtime_context_valid(i_runtime_context_valid),
+        .i_runtime_layer_id(i_runtime_layer_id),
+        .i_runtime_position(i_runtime_position),
+        .i_runtime_kv_cache_base_addr(i_runtime_kv_cache_base_addr),
         .o_busy(),
         .o_done(frontend_done),
         .o_error(frontend_error),
@@ -306,11 +329,22 @@ module qmap_layer0_full_scheduler #(
         .i_mem_wr_error(frontend_active ? i_mem_wr_error : 1'b0)
     );
 
-    qmap_attention_score_value_compute_path attention_score_value (
+    qmap_attention_score_value_compute_path #(
+        .ADDR_WIDTH(ADDR_WIDTH),
+        .NUM_LAYERS(NUM_LAYERS),
+        .MAX_CONTEXT(MAX_CONTEXT),
+        .MEM_DATA_WIDTH(MEM_DATA_WIDTH),
+        .LAYER_INDEX_W(LAYER_INDEX_WIDTH),
+        .POSITION_INDEX_W(POSITION_WIDTH)
+    ) attention_score_value (
         .i_clk(i_clk),
         .i_rst_n(i_rst_n),
         .i_start(score_value_start),
         .i_qmap_base_addr(i_attn_score_value_qmap_base_addr),
+        .i_runtime_context_valid(i_runtime_context_valid),
+        .i_runtime_layer_id(i_runtime_layer_id),
+        .i_runtime_position(i_runtime_position),
+        .i_runtime_kv_cache_base_addr(i_runtime_kv_cache_base_addr),
         .o_busy(),
         .o_done(score_value_done),
         .o_error(score_value_error),
@@ -389,6 +423,10 @@ module qmap_layer0_full_scheduler #(
         .i_clk(i_clk),
         .i_rst_n(i_rst_n),
         .i_start(body_start),
+        .i_residual_base_override_valid(i_residual_base_override_valid),
+        .i_residual_base_override_addr(i_residual_base_override_addr),
+        .i_output_base_override_valid(i_output_base_override_valid),
+        .i_output_base_override_addr(i_output_base_override_addr),
         .i_post_attn_norm_qmap_base_addr(i_post_attn_norm_qmap_base_addr),
         .i_mlp_gate_up_qmap_base_addr(i_mlp_gate_up_qmap_base_addr),
         .i_mlp_silu_mul_qmap_base_addr(i_mlp_silu_mul_qmap_base_addr),

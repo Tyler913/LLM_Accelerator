@@ -121,8 +121,123 @@ def expected_write_kind_counts(layer_count: int) -> dict[int, int]:
     }
 
 
+def resolve_hidden_contract(
+    manifest: dict[str, Any], layers: list[dict[str, Any]]
+) -> tuple[bool, int, list[int], list[int], int]:
+    """Resolve the addresses actually used by the embedding/layer/tail chain.
+
+    Legacy manifests describe the physical chain directly in ``output_base`` and
+    each layer's ``input_hidden_base``/``output_hidden_base`` fields.  Runtime
+    manifests keep those descriptor-golden addresses but execute from two shared
+    hidden buffers.  New runtime manifests publish the actual addresses explicitly;
+    manifests produced before that schema correction are accepted only when their
+    stale fields exactly match the corresponding descriptor-golden address.
+    """
+
+    embedding = manifest["embedding"]
+    final_tail = manifest["final_tail"]
+    runtime_context = manifest.get("runtime_context")
+    runtime_enabled = bool(
+        isinstance(runtime_context, dict) and runtime_context.get("enabled", False)
+    )
+    if not runtime_enabled:
+        embedding_output = int(embedding["output_base"])
+        layer_inputs = [int(layer["input_hidden_base"]) for layer in layers]
+        layer_outputs = [int(layer["output_hidden_base"]) for layer in layers]
+        require(layer_inputs[0] == embedding_output, "Layer 0 input does not use embedding output")
+        for layer_index in range(1, len(layers)):
+            require(
+                layer_inputs[layer_index] == layer_outputs[layer_index - 1],
+                f"Layer {layer_index} input does not chain from the previous layer",
+            )
+        final_hidden = int(final_tail["runtime_hidden_override"])
+        require(
+            final_hidden == layer_outputs[-1],
+            "final hidden override does not select the last layer output",
+        )
+        return False, embedding_output, layer_inputs, layer_outputs, final_hidden
+
+    assert isinstance(runtime_context, dict)
+    require(runtime_context.get("hidden_a_base") is not None, "runtime hidden A base is missing")
+    require(runtime_context.get("hidden_b_base") is not None, "runtime hidden B base is missing")
+    hidden_a = int(runtime_context["hidden_a_base"])
+    hidden_b = int(runtime_context["hidden_b_base"])
+    require(hidden_a != 0 and hidden_b != 0, "runtime hidden bases must be non-zero")
+    require(hidden_a != hidden_b, "runtime hidden A and B bases must differ")
+    require((hidden_a | hidden_b) & 0x3 == 0, "runtime hidden bases must be word aligned")
+
+    expected_inputs = [hidden_a if (index & 1) == 0 else hidden_b for index in range(len(layers))]
+    expected_outputs = [hidden_b if (index & 1) == 0 else hidden_a for index in range(len(layers))]
+
+    published_embedding_output = int(embedding["output_base"])
+    descriptor_embedding_output = int(
+        embedding.get("descriptor_golden_output_base", layers[0]["input_hidden_base"])
+    )
+    if "descriptor_golden_output_base" in embedding:
+        require(
+            published_embedding_output == hidden_a,
+            "runtime embedding output_base does not select hidden A",
+        )
+        require(
+            descriptor_embedding_output == int(layers[0]["input_hidden_base"]),
+            "embedding descriptor-golden output disagrees with Layer 0 descriptor input",
+        )
+    elif published_embedding_output != hidden_a:
+        require(
+            published_embedding_output == descriptor_embedding_output,
+            "old runtime embedding output is neither hidden A nor the descriptor-golden address",
+        )
+
+    layer_inputs: list[int] = []
+    layer_outputs: list[int] = []
+    for layer_index, layer in enumerate(layers):
+        runtime_input = int(layer.get("runtime_input_hidden_base", expected_inputs[layer_index]))
+        runtime_output = int(layer.get("runtime_output_hidden_base", expected_outputs[layer_index]))
+        require(
+            runtime_input == expected_inputs[layer_index],
+            f"Layer {layer_index} runtime input does not follow A/B ping-pong parity",
+        )
+        require(
+            runtime_output == expected_outputs[layer_index],
+            f"Layer {layer_index} runtime output does not follow A/B ping-pong parity",
+        )
+        layer_inputs.append(runtime_input)
+        layer_outputs.append(runtime_output)
+
+    final_hidden = layer_outputs[-1]
+    require(
+        runtime_context.get("last_layer_hidden_base") is not None,
+        "runtime last-layer hidden base is missing",
+    )
+    require(
+        int(runtime_context["last_layer_hidden_base"]) == final_hidden,
+        "runtime last-layer hidden base does not match A/B parity",
+    )
+
+    published_tail_hidden = int(final_tail["runtime_hidden_override"])
+    descriptor_tail_hidden = int(
+        final_tail.get("descriptor_golden_hidden_base", layers[-1]["output_hidden_base"])
+    )
+    if "descriptor_golden_hidden_base" in final_tail:
+        require(
+            published_tail_hidden == final_hidden,
+            "runtime final hidden override does not select the last A/B output",
+        )
+        require(
+            descriptor_tail_hidden == int(layers[-1]["output_hidden_base"]),
+            "final-tail descriptor-golden hidden disagrees with the last layer descriptor output",
+        )
+    elif published_tail_hidden != final_hidden:
+        require(
+            published_tail_hidden == descriptor_tail_hidden,
+            "old runtime final hidden override is neither the last A/B output nor the descriptor address",
+        )
+
+    return True, hidden_a, layer_inputs, layer_outputs, final_hidden
+
+
 def expected_write_requests(
-    root: Path, layers: list[dict[str, Any]]
+    root: Path, layers: list[dict[str, Any]], layer_outputs: list[int]
 ) -> dict[int, list[tuple[int, int]]]:
     expected: dict[int, list[tuple[int, int]]] = defaultdict(list)
     row_specs = (
@@ -141,7 +256,6 @@ def expected_write_requests(
         (WRITE_UP, "up", 12288),
         (WRITE_SILU, "silu", 12288),
         (WRITE_DOWN, "down", 4096),
-        (WRITE_LAYER, "layer", 4096),
     )
     for layer in layers:
         bases = layer["write_bases"]
@@ -153,6 +267,7 @@ def expected_write_requests(
         expected[WRITE_CACHE].extend((address, 4) for address in cache_addresses)
         for kind, key, byte_count in burst_specs:
             expected[kind].append((int(bases[key]), byte_count))
+    expected[WRITE_LAYER].extend((address, 4096) for address in layer_outputs)
     return expected
 
 
@@ -172,23 +287,14 @@ def main() -> None:
     embedding = manifest["embedding"]
     weight_base = int(embedding["weight_base"])
     scale_base = int(embedding["scale_base"])
-    embedding_output = int(embedding["output_base"])
+    runtime_enabled, embedding_output, layer_inputs, layer_outputs, final_hidden = (
+        resolve_hidden_contract(manifest, layers)
+    )
     weight_row = weight_base + token_id * 512
     scale_row = scale_base + token_id * 32
-    layer_inputs = [int(layer["input_hidden_base"]) for layer in layers]
-    layer_outputs = [int(layer["output_hidden_base"]) for layer in layers]
-    require(layer_inputs[0] == embedding_output, "Layer 0 input does not use embedding output")
-    for layer_index in range(1, layer_count):
-        require(
-            layer_inputs[layer_index] == layer_outputs[layer_index - 1],
-            f"Layer {layer_index} input does not chain from the previous layer",
-        )
 
     final_tail = manifest["final_tail"]
-    require(
-        int(final_tail["runtime_hidden_override"]) == layer_outputs[-1],
-        "final hidden override does not select the last layer output",
-    )
+    require(final_hidden == layer_outputs[-1], "resolved final hidden does not match Layer N output")
     expected_token = int(final_tail["best_token"])
     expected_score = int(final_tail["best_score_q26"])
 
@@ -205,7 +311,7 @@ def main() -> None:
         expected_scheduler[3] + TOP_EXTRA_WRITE_WORDS,
     )
     expected_kinds = expected_write_kind_counts(layer_count)
-    expected_requests = expected_write_requests(root, layers)
+    expected_requests = expected_write_requests(root, layers, layer_outputs)
 
     qmap_base_labels: dict[int, str] = {}
     for layer_index, layer in enumerate(layers):
@@ -427,6 +533,7 @@ def main() -> None:
         "trace": str(trace_path),
         "manifest": str(manifest_path),
         "layer_count": layer_count,
+        "runtime_context_enabled": runtime_enabled,
         "token_id": token_id,
         "final_token": expected_token,
         "final_score_q26": expected_score,
@@ -438,8 +545,10 @@ def main() -> None:
         "addresses": {
             "embedding_weight_row": f"0x{weight_row:016x}",
             "embedding_scale_row": f"0x{scale_row:016x}",
+            "embedding_output": f"0x{embedding_output:016x}",
             "layer_inputs": [f"0x{address:016x}" for address in layer_inputs],
             "layer_outputs": [f"0x{address:016x}" for address in layer_outputs],
+            "final_hidden": f"0x{final_hidden:016x}",
         },
         "cycles": {
             "embedding_response": embedding_done_cycle,

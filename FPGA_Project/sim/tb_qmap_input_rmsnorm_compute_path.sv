@@ -19,6 +19,8 @@ module tb_qmap_input_rmsnorm_compute_path;
     localparam int VECTOR_BURSTS    = VECTOR_BYTES / MAX_READ_BYTES;
     localparam int QMAP_IMAGE_BYTES = 32'h0000_5000;
     localparam int QMAP_WORDS       = QMAP_IMAGE_BYTES / MEM_DATA_BYTES;
+    localparam logic [ADDR_WIDTH-1 : 0] RUNTIME_HIDDEN_BASE_ADDR =
+        `QMAP_INPUT_NORM_BASE_ADDR + 64'h0000_0000_0001_0000;
     localparam int DESCRIPTOR_WORDS = 32;
     localparam int DESCRIPTOR_TABLE_WORD_OFFSET = 32'h0100 / 4;
     localparam int DESC_DTYPE_WORD = 2;
@@ -51,6 +53,9 @@ module tb_qmap_input_rmsnorm_compute_path;
     logic [31 : 0] dut_write_word_count;
     logic [7 : 0] state_debug;
     logic [1 : 0] read_slot_debug;
+    logic hidden_base_override_valid;
+    logic [ADDR_WIDTH-1 : 0] hidden_base_override_addr;
+    logic [ADDR_WIDTH-1 : 0] effective_hidden_base_addr;
 
     logic mem_rd_req_valid;
     logic mem_rd_req_ready;
@@ -105,6 +110,10 @@ module tb_qmap_input_rmsnorm_compute_path;
     integer mem_wr_req_count;
     integer mem_wr_word_count_total;
     integer invalid_write_word_delta;
+    integer runtime_hidden_req_delta;
+    integer runtime_write_word_delta;
+    integer invalid_override_write_word_delta;
+    integer invalid_override_error_count;
 
     integer normal_norm_write_count;
     integer normal_dut_read_bursts;
@@ -128,6 +137,7 @@ module tb_qmap_input_rmsnorm_compute_path;
     logic [ADDR_WIDTH-1 : 0] hidden_base_addr;
     logic [ADDR_WIDTH-1 : 0] gamma_base_addr;
     logic [ADDR_WIDTH-1 : 0] norm_base_addr;
+    logic [ADDR_WIDTH-1 : 0] expected_hidden_base_addr;
 
     logic read_active;
     integer active_read_region;
@@ -165,9 +175,12 @@ module tb_qmap_input_rmsnorm_compute_path;
         .i_rst_n(rst_n),
         .i_start(start),
         .i_qmap_base_addr(qmap_base_addr),
+        .i_hidden_base_override_valid(hidden_base_override_valid),
+        .i_hidden_base_override_addr(hidden_base_override_addr),
         .o_busy(busy),
         .o_done(done),
         .o_error(error),
+        .o_effective_hidden_base_addr(effective_hidden_base_addr),
         .o_norm_saturation(norm_saturation),
         .o_norm_cycle_count(norm_cycle_count),
         .o_sum_squares(sum_squares),
@@ -275,6 +288,7 @@ module tb_qmap_input_rmsnorm_compute_path;
             hidden_base_addr = descriptor_base_addr(SLOT_HIDDEN);
             gamma_base_addr = descriptor_base_addr(SLOT_GAMMA);
             norm_base_addr = descriptor_base_addr(SLOT_NORM);
+            expected_hidden_base_addr = hidden_base_addr;
         end
     endtask
 
@@ -306,7 +320,7 @@ module tb_qmap_input_rmsnorm_compute_path;
             end
 
             active_read_region = REGION_QMAP;
-            if (in_range(mem_rd_req_addr, hidden_base_addr, VECTOR_BYTES)) begin
+            if (in_range(mem_rd_req_addr, expected_hidden_base_addr, VECTOR_BYTES)) begin
                 active_read_region = REGION_HIDDEN;
                 mem_hidden_req_count = mem_hidden_req_count + 1;
             end
@@ -325,14 +339,29 @@ module tb_qmap_input_rmsnorm_compute_path;
                 active_read_region = REGION_NONE;
             end
 
-            if (!in_range(mem_rd_req_addr + mem_rd_req_len_bytes - 1, qmap_base_addr, QMAP_IMAGE_BYTES)) begin
+            if ((active_read_region == REGION_HIDDEN) &&
+                !in_range(mem_rd_req_addr + mem_rd_req_len_bytes - 1,
+                          expected_hidden_base_addr, VECTOR_BYTES)) begin
+                $display("FAIL: hidden read request crosses selected hidden buffer addr=0x%016h len=%0d",
+                         mem_rd_req_addr, mem_rd_req_len_bytes);
+                mismatch_count = mismatch_count + 1;
+            end
+            else if ((active_read_region != REGION_HIDDEN) &&
+                     !in_range(mem_rd_req_addr + mem_rd_req_len_bytes - 1,
+                               qmap_base_addr, QMAP_IMAGE_BYTES)) begin
                 $display("FAIL: read request crosses QMAP image addr=0x%016h len=%0d",
                          mem_rd_req_addr, mem_rd_req_len_bytes);
                 mismatch_count = mismatch_count + 1;
             end
 
             read_active <= 1'b1;
-            active_read_index <= (mem_rd_req_addr - qmap_base_addr) >> 2;
+            if (active_read_region == REGION_HIDDEN) begin
+                active_read_index <= ((hidden_base_addr - qmap_base_addr) >> 2) +
+                                     ((mem_rd_req_addr - expected_hidden_base_addr) >> 2);
+            end
+            else begin
+                active_read_index <= (mem_rd_req_addr - qmap_base_addr) >> 2;
+            end
             active_words_left <= words;
             read_gap_count <= 1;
             mem_req_fire_count = mem_req_fire_count + 1;
@@ -429,6 +458,9 @@ module tb_qmap_input_rmsnorm_compute_path;
 
     task run_success;
         begin
+            hidden_base_override_valid = 1'b0;
+            hidden_base_override_addr = '0;
+            expected_hidden_base_addr = hidden_base_addr;
             pulse_start();
             repeat (40) @(posedge clk);
             if (busy) begin
@@ -459,6 +491,88 @@ module tb_qmap_input_rmsnorm_compute_path;
             normal_mem_gamma_req_count = mem_gamma_req_count;
             normal_mem_wr_req_count = mem_wr_req_count;
             normal_mem_wr_word_count_total = mem_wr_word_count_total;
+        end
+    endtask
+
+    task run_runtime_override;
+        integer hidden_reqs_before;
+        integer write_words_before;
+        begin
+            hidden_reqs_before = mem_hidden_req_count;
+            write_words_before = mem_wr_word_count_total;
+            expected_hidden_base_addr = RUNTIME_HIDDEN_BASE_ADDR;
+            hidden_base_override_valid = 1'b1;
+            hidden_base_override_addr = RUNTIME_HIDDEN_BASE_ADDR;
+            pulse_start();
+
+            // Change the live pins after acceptance; the transaction must retain
+            // the start-time runtime address.
+            hidden_base_override_valid = 1'b0;
+            hidden_base_override_addr = RUNTIME_HIDDEN_BASE_ADDR + 64'd2;
+            wait_for_done(20000);
+            #1;
+
+            runtime_hidden_req_delta = mem_hidden_req_count - hidden_reqs_before;
+            runtime_write_word_delta = mem_wr_word_count_total - write_words_before;
+            if (error) begin
+                fail_once("FAIL: runtime hidden override run reported error");
+            end
+            if (effective_hidden_base_addr !== RUNTIME_HIDDEN_BASE_ADDR) begin
+                $display("FAIL: runtime effective hidden base mismatch actual=0x%016h expected=0x%016h",
+                         effective_hidden_base_addr, RUNTIME_HIDDEN_BASE_ADDR);
+                mismatch_count = mismatch_count + 1;
+            end
+            if (runtime_hidden_req_delta != VECTOR_BURSTS) begin
+                $display("FAIL: runtime hidden burst delta mismatch actual=%0d expected=%0d",
+                         runtime_hidden_req_delta, VECTOR_BURSTS);
+                mismatch_count = mismatch_count + 1;
+            end
+            if (runtime_write_word_delta != VECTOR_WORDS) begin
+                $display("FAIL: runtime write word delta mismatch actual=%0d expected=%0d",
+                         runtime_write_word_delta, VECTOR_WORDS);
+                mismatch_count = mismatch_count + 1;
+            end
+
+            hidden_base_override_valid = 1'b0;
+            hidden_base_override_addr = '0;
+            expected_hidden_base_addr = hidden_base_addr;
+        end
+    endtask
+
+    task run_invalid_runtime_override(input logic [ADDR_WIDTH-1 : 0] bad_addr);
+        integer write_words_before;
+        begin
+            write_words_before = mem_wr_word_count_total;
+            hidden_base_override_valid = 1'b1;
+            hidden_base_override_addr = bad_addr;
+            pulse_start();
+            hidden_base_override_valid = 1'b0;
+            hidden_base_override_addr = RUNTIME_HIDDEN_BASE_ADDR;
+            wait_for_done(8000);
+            #1;
+
+            invalid_override_write_word_delta =
+                invalid_override_write_word_delta +
+                (mem_wr_word_count_total - write_words_before);
+            if (!error) begin
+                $display("FAIL: invalid runtime hidden override 0x%016h did not report error", bad_addr);
+                mismatch_count = mismatch_count + 1;
+            end
+            else begin
+                invalid_override_error_count = invalid_override_error_count + 1;
+            end
+            if (effective_hidden_base_addr !== bad_addr) begin
+                $display("FAIL: invalid runtime hidden base was not latched actual=0x%016h expected=0x%016h",
+                         effective_hidden_base_addr, bad_addr);
+                mismatch_count = mismatch_count + 1;
+            end
+            if ((mem_wr_word_count_total - write_words_before) != 0) begin
+                fail_once("FAIL: invalid runtime hidden override wrote output data");
+            end
+
+            hidden_base_override_valid = 1'b0;
+            hidden_base_override_addr = '0;
+            expected_hidden_base_addr = hidden_base_addr;
         end
     endtask
 
@@ -664,6 +778,8 @@ module tb_qmap_input_rmsnorm_compute_path;
         load_vectors();
 
         start = 1'b0;
+        hidden_base_override_valid = 1'b0;
+        hidden_base_override_addr = '0;
         rst_n = 1'b0;
         mismatch_count = 0;
         print_count = 0;
@@ -681,12 +797,19 @@ module tb_qmap_input_rmsnorm_compute_path;
         mem_wr_req_count = 0;
         mem_wr_word_count_total = 0;
         invalid_write_word_delta = 0;
+        runtime_hidden_req_delta = 0;
+        runtime_write_word_delta = 0;
+        invalid_override_write_word_delta = 0;
+        invalid_override_error_count = 0;
 
         repeat (8) @(posedge clk);
         @(negedge clk);
         rst_n = 1'b1;
 
         run_success();
+        run_runtime_override();
+        run_invalid_runtime_override('0);
+        run_invalid_runtime_override(RUNTIME_HIDDEN_BASE_ADDR + 64'd2);
         run_invalid_bad_gamma_dtype();
 
         $fclose(trace_fd);
@@ -712,10 +835,13 @@ module tb_qmap_input_rmsnorm_compute_path;
         $display("  max_abs norm          = %0d", norm_max_abs_diff);
         $display("  spurious start covered= %0d", spurious_start_seen_busy);
         $display("  invalid write delta   = %0d", invalid_write_word_delta);
+        $display("  runtime hidden bursts = %0d", runtime_hidden_req_delta);
+        $display("  runtime write words   = %0d", runtime_write_word_delta);
+        $display("  invalid override errs = %0d", invalid_override_error_count);
         $display("  trace                 = %s", tracefile);
 
-        if (done_seen_count != 2) begin
-            $display("FAIL: done pulse count mismatch actual=%0d expected=2", done_seen_count);
+        if (done_seen_count != 5) begin
+            $display("FAIL: done pulse count mismatch actual=%0d expected=5", done_seen_count);
             mismatch_count = mismatch_count + 1;
         end
         if (normal_norm_write_count != VECTOR_WORDS) begin
@@ -785,13 +911,17 @@ module tb_qmap_input_rmsnorm_compute_path;
         if (invalid_write_word_delta != 0) begin
             fail_once("FAIL: invalid descriptor no-write check failed");
         end
+        if ((invalid_override_error_count != 2) ||
+            (invalid_override_write_word_delta != 0)) begin
+            fail_once("FAIL: runtime hidden override validation coverage failed");
+        end
 
         if (mismatch_count != 0) begin
             $display("FAIL: qmap_input_rmsnorm_compute_path found %0d mismatch(es)", mismatch_count);
             $finish(1);
         end
 
-        $display("PASS: qmap_input_rmsnorm_compute_path matched exact input_norm write-back.");
+        $display("PASS: qmap_input_rmsnorm_compute_path matched legacy/runtime hidden reads and rejected invalid overrides.");
         $display("Waveform: %s", wavefile);
         $finish;
     end

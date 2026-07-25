@@ -7,7 +7,7 @@
 //
 //   iverilog -g2012 -o FPGA_Project/sim/tb_fixed_sqrt_u64.vvp \
 //     FPGA_Project/sim/tb_fixed_sqrt_u64.sv \
-//     FPGA_Project/rtl/fixed_sqrt_u64.sv
+//     FPGA_Project/rtl/lib/math/fixed_sqrt_u64.sv
 //   vvp FPGA_Project/sim/tb_fixed_sqrt_u64.vvp
 
 module tb_fixed_sqrt_u64;

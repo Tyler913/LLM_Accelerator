@@ -7,7 +7,7 @@ DDR/QMAP smoke apps.
 Files:
 
 - `qmap_one_token_regs.h` mirrors the byte offsets, status bits, control bits,
-  and per-layer QMAP table ids from `FPGA_Project/rtl/qmap_one_token_control_regs.sv`.
+  and per-layer QMAP table ids from `FPGA_Project/rtl/top/one_token/qmap_one_token_control_regs.sv`.
 - `qmap_one_token_runtime.h` provides header-only helpers for 32/64-bit AXI-Lite
   register access, table commits, run configuration, start/poll/result readback,
   optional tied-Q4 embedding configuration, and a no-memory validation smoke.

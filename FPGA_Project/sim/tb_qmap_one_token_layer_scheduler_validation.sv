@@ -20,10 +20,12 @@ module tb_qmap_one_token_layer_scheduler_validation;
     logic [4 : 0] layer_start_index;
     logic [4 : 0] layer_count;
     logic [7 : 0] token_position;
+    logic runtime_context_enable;
     logic [ADDR_WIDTH-1 : 0] input_hidden_base_addr;
     logic [ADDR_WIDTH-1 : 0] output_hidden_base_addr;
     logic [ADDR_WIDTH-1 : 0] kv_cache_base_addr;
     logic [BASE_TABLE_BITS-1 : 0] qkv_qmap_base_addr_table;
+    logic [BASE_TABLE_BITS-1 : 0] input_norm_qmap_base_addr_table;
     logic [BASE_TABLE_BITS-1 : 0] attn_frontend_qmap_base_addr_table;
     logic [BASE_TABLE_BITS-1 : 0] attn_score_value_qmap_base_addr_table;
     logic [BASE_TABLE_BITS-1 : 0] o_proj_qmap_base_addr_table;
@@ -37,6 +39,7 @@ module tb_qmap_one_token_layer_scheduler_validation;
     logic [4 : 0] layers_completed;
     logic [27 : 0] layer_done_mask;
     logic [27 : 0] layer_error_mask;
+    logic [ADDR_WIDTH-1 : 0] last_layer_output_base_addr;
     logic mem_rd_req_valid;
     logic [ADDR_WIDTH-1 : 0] mem_rd_req_addr;
     logic [15 : 0] mem_rd_req_len_bytes;
@@ -56,6 +59,9 @@ module tb_qmap_one_token_layer_scheduler_validation;
     integer rd_req_seen;
     integer wr_req_seen;
     integer wr_data_seen;
+    logic [ADDR_WIDTH-1 : 0] expected_input_addr;
+    logic [ADDR_WIDTH-1 : 0] expected_output_addr;
+    logic [27 : 0] expected_success_mask;
 
     qmap_one_token_layer_scheduler dut (
         .i_clk(clk),
@@ -64,11 +70,12 @@ module tb_qmap_one_token_layer_scheduler_validation;
         .i_layer_start_index(layer_start_index),
         .i_layer_count(layer_count),
         .i_position(token_position),
+        .i_runtime_context_enable(runtime_context_enable),
         .i_input_hidden_base_addr(input_hidden_base_addr),
         .i_output_hidden_base_addr(output_hidden_base_addr),
         .i_kv_cache_base_addr(kv_cache_base_addr),
         .i_qkv_qmap_base_addr_table(qkv_qmap_base_addr_table),
-        .i_input_norm_qmap_base_addr_table({BASE_TABLE_BITS{1'b0}}),
+        .i_input_norm_qmap_base_addr_table(input_norm_qmap_base_addr_table),
         .i_attn_frontend_qmap_base_addr_table(attn_frontend_qmap_base_addr_table),
         .i_attn_score_value_qmap_base_addr_table(attn_score_value_qmap_base_addr_table),
         .i_o_proj_qmap_base_addr_table(o_proj_qmap_base_addr_table),
@@ -86,7 +93,7 @@ module tb_qmap_one_token_layer_scheduler_validation;
         .o_layers_completed(layers_completed),
         .o_layer_done_mask(layer_done_mask),
         .o_layer_error_mask(layer_error_mask),
-        .o_last_layer_output_base_addr(),
+        .o_last_layer_output_base_addr(last_layer_output_base_addr),
         .o_layer0_active_stage_debug(),
         .o_layer0_state_debug(),
         .o_layer0_stage_done_mask(),
@@ -130,6 +137,8 @@ module tb_qmap_one_token_layer_scheduler_validation;
     task set_layer_packet_bases;
         input integer layer_index;
         begin
+            input_norm_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH] =
+                `QMAP_INPUT_NORM_BASE_ADDR;
             qkv_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH] = `QMAP_QKV_BASE_ADDR;
             attn_frontend_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH] = `QMAP_ATTN_FRONTEND_BASE_ADDR;
             attn_score_value_qmap_base_addr_table[layer_index*ADDR_WIDTH +: ADDR_WIDTH] = `QMAP_ATTN_SCORE_VALUE_BASE_ADDR;
@@ -147,10 +156,12 @@ module tb_qmap_one_token_layer_scheduler_validation;
             layer_start_index = 5'd0;
             layer_count = 5'd1;
             token_position = 8'd4;
+            runtime_context_enable = 1'b0;
             input_hidden_base_addr = 64'h0000_0004_0008_2000;
             output_hidden_base_addr = 64'h0000_0004_0508_1400;
             kv_cache_base_addr = 64'h0000_0004_1410_0000;
             qkv_qmap_base_addr_table = '0;
+            input_norm_qmap_base_addr_table = '0;
             attn_frontend_qmap_base_addr_table = '0;
             attn_score_value_qmap_base_addr_table = '0;
             o_proj_qmap_base_addr_table = '0;
@@ -160,6 +171,151 @@ module tb_qmap_one_token_layer_scheduler_validation;
             mlp_down_qmap_base_addr_table = '0;
             mlp_residual_add_qmap_base_addr_table = '0;
             set_layer_packet_bases(0);
+        end
+    endtask
+
+    task expect_override_hierarchy;
+        input integer ordinal;
+        input logic expected_valid;
+        begin
+            expected_input_addr = ordinal[0] ?
+                output_hidden_base_addr : input_hidden_base_addr;
+            expected_output_addr = ordinal[0] ?
+                input_hidden_base_addr : output_hidden_base_addr;
+
+            if (active_layer_index != (layer_start_index + ordinal)) begin
+                $display(
+                    "FAIL: ordinal %0d used active layer %0d instead of %0d",
+                    ordinal,
+                    active_layer_index,
+                    layer_start_index + ordinal
+                );
+                $finish(1);
+            end
+            if ((dut.layer0_compute.i_hidden_base_override_valid !== expected_valid) ||
+                (dut.layer0_compute.i_residual_base_override_valid !== expected_valid) ||
+                (dut.layer0_compute.i_output_base_override_valid !== expected_valid) ||
+                (dut.layer0_compute.input_rmsnorm.i_hidden_base_override_valid !== expected_valid) ||
+                (dut.layer0_compute.layer0_full.i_residual_base_override_valid !== expected_valid) ||
+                (dut.layer0_compute.layer0_full.i_output_base_override_valid !== expected_valid) ||
+                (dut.layer0_compute.layer0_full.body_scheduler.i_residual_base_override_valid !== expected_valid) ||
+                (dut.layer0_compute.layer0_full.body_scheduler.i_output_base_override_valid !== expected_valid) ||
+                (dut.layer0_compute.layer0_full.body_scheduler.post_attention_norm.i_residual_base_override_valid !== expected_valid) ||
+                (dut.layer0_compute.layer0_full.body_scheduler.mlp_residual_add.i_output_base_override_valid !== expected_valid)) begin
+                $display("FAIL: ordinal %0d override-valid hierarchy mismatch", ordinal);
+                $finish(1);
+            end
+            if ((dut.effective_input_hidden_base_addr != expected_input_addr) ||
+                (dut.effective_output_hidden_base_addr != expected_output_addr) ||
+                (dut.layer0_compute.i_hidden_base_override_addr != expected_input_addr) ||
+                (dut.layer0_compute.input_rmsnorm.i_hidden_base_override_addr != expected_input_addr) ||
+                (dut.layer0_compute.i_residual_base_override_addr != expected_input_addr) ||
+                (dut.layer0_compute.layer0_full.i_residual_base_override_addr != expected_input_addr) ||
+                (dut.layer0_compute.layer0_full.body_scheduler.i_residual_base_override_addr != expected_input_addr) ||
+                (dut.layer0_compute.layer0_full.body_scheduler.post_attention_norm.i_residual_base_override_addr != expected_input_addr) ||
+                (dut.layer0_compute.i_output_base_override_addr != expected_output_addr) ||
+                (dut.layer0_compute.layer0_full.i_output_base_override_addr != expected_output_addr) ||
+                (dut.layer0_compute.layer0_full.body_scheduler.i_output_base_override_addr != expected_output_addr) ||
+                (dut.layer0_compute.layer0_full.body_scheduler.mlp_residual_add.i_output_base_override_addr != expected_output_addr)) begin
+                $display(
+                    "FAIL: ordinal %0d address hierarchy mismatch input=0x%016h output=0x%016h",
+                    ordinal,
+                    expected_input_addr,
+                    expected_output_addr
+                );
+                $finish(1);
+            end
+        end
+    endtask
+
+    task run_forced_success;
+        input integer start_layer;
+        input integer run_layer_count;
+        input logic runtime_enable;
+        input logic [ADDR_WIDTH-1 : 0] hidden_a;
+        input logic [ADDR_WIDTH-1 : 0] hidden_b;
+        input logic [ADDR_WIDTH-1 : 0] expected_last_output;
+        integer ordinal;
+        integer wait_cycles;
+        begin
+            reset_case();
+            layer_start_index = start_layer[4 : 0];
+            layer_count = run_layer_count[4 : 0];
+            runtime_context_enable = runtime_enable;
+            input_hidden_base_addr = hidden_a;
+            output_hidden_base_addr = hidden_b;
+            for (ordinal = 0; ordinal < run_layer_count; ordinal = ordinal + 1) begin
+                set_layer_packet_bases(start_layer + ordinal);
+            end
+
+            @(negedge clk);
+            start = 1'b1;
+            @(negedge clk);
+            start = 1'b0;
+
+            for (ordinal = 0; ordinal < run_layer_count; ordinal = ordinal + 1) begin
+                wait_cycles = 0;
+                while ((dut.layer0_start !== 1'b1) && (wait_cycles < 20)) begin
+                    @(posedge clk);
+                    #1;
+                    wait_cycles = wait_cycles + 1;
+                end
+                if (dut.layer0_start !== 1'b1) begin
+                    $display("FAIL: forced success ordinal %0d did not reach layer start", ordinal);
+                    $finish(1);
+                end
+
+                expect_override_hierarchy(ordinal, runtime_enable);
+
+                force dut.layer0_done = 1'b1;
+                force dut.layer0_error = 1'b0;
+                repeat (2) @(posedge clk);
+                #1;
+                release dut.layer0_done;
+                release dut.layer0_error;
+            end
+
+            wait_cycles = 0;
+            while ((done !== 1'b1) && (wait_cycles < 20)) begin
+                @(posedge clk);
+                #1;
+                wait_cycles = wait_cycles + 1;
+            end
+            if (done !== 1'b1) begin
+                $display("FAIL: forced success run did not finish");
+                $finish(1);
+            end
+
+            expected_success_mask =
+                ((28'h0000001 << run_layer_count) - 1'b1) << start_layer;
+            if (error ||
+                (layers_started != run_layer_count) ||
+                (layers_completed != run_layer_count) ||
+                (layer_done_mask != expected_success_mask) ||
+                (layer_error_mask != 28'd0) ||
+                (last_layer_output_base_addr != expected_last_output)) begin
+                $display(
+                    "FAIL: forced success result start=%0d count=%0d runtime=%0d started=%0d completed=%0d done_mask=0x%0h error_mask=0x%0h last=0x%016h expected_last=0x%016h",
+                    start_layer,
+                    run_layer_count,
+                    runtime_enable,
+                    layers_started,
+                    layers_completed,
+                    layer_done_mask,
+                    layer_error_mask,
+                    last_layer_output_base_addr,
+                    expected_last_output
+                );
+                $finish(1);
+            end
+            $display(
+                "PASS_CASE: forced start=%0d count=%0d runtime=%0d last=0x%016h",
+                start_layer,
+                run_layer_count,
+                runtime_enable,
+                last_layer_output_base_addr
+            );
+            @(posedge clk);
         end
     endtask
 
@@ -261,6 +417,39 @@ module tb_qmap_one_token_layer_scheduler_validation;
     end
 
     initial begin
+        run_forced_success(
+            5,
+            1,
+            1'b1,
+            64'h0000_0004_1000_0000,
+            64'h0000_0004_2000_0000,
+            64'h0000_0004_2000_0000
+        );
+        run_forced_success(
+            5,
+            2,
+            1'b1,
+            64'h0000_0004_1000_0000,
+            64'h0000_0004_2000_0000,
+            64'h0000_0004_1000_0000
+        );
+        run_forced_success(
+            5,
+            3,
+            1'b1,
+            64'h0000_0004_1000_0000,
+            64'h0000_0004_2000_0000,
+            64'h0000_0004_2000_0000
+        );
+        run_forced_success(
+            5,
+            1,
+            1'b0,
+            64'h0000_0004_1000_0002,
+            64'h0000_0004_1000_0002,
+            (`QMAP_MLP_RESIDUAL_ADD_BASE_ADDR + `QMAP_MLP_RESIDUAL_ADD_OUTPUT_OFFSET)
+        );
+
         reset_case();
         qkv_qmap_base_addr_table[0*ADDR_WIDTH +: ADDR_WIDTH] = '0;
         run_until_done(20);
@@ -286,7 +475,37 @@ module tb_qmap_one_token_layer_scheduler_validation;
         run_until_done(20);
         expect_no_memory_error("zero_input_hidden_base", 28'h0000001);
 
-        $display("PASS: qmap_one_token_layer_scheduler validation-only no-memory contract checks passed.");
+        reset_case();
+        runtime_context_enable = 1'b1;
+        output_hidden_base_addr = '0;
+        run_until_done(20);
+        expect_no_memory_error("runtime_zero_output_hidden_base", 28'h0000001);
+
+        reset_case();
+        runtime_context_enable = 1'b1;
+        input_hidden_base_addr = input_hidden_base_addr + 2;
+        run_until_done(20);
+        expect_no_memory_error("runtime_unaligned_input_hidden_base", 28'h0000001);
+
+        reset_case();
+        runtime_context_enable = 1'b1;
+        output_hidden_base_addr = output_hidden_base_addr + 2;
+        run_until_done(20);
+        expect_no_memory_error("runtime_unaligned_output_hidden_base", 28'h0000001);
+
+        reset_case();
+        runtime_context_enable = 1'b1;
+        output_hidden_base_addr = input_hidden_base_addr;
+        run_until_done(20);
+        expect_no_memory_error("runtime_identical_hidden_bases", 28'h0000001);
+
+        reset_case();
+        runtime_context_enable = 1'b1;
+        input_norm_qmap_base_addr_table[0*ADDR_WIDTH +: ADDR_WIDTH] = '0;
+        run_until_done(20);
+        expect_no_memory_error("runtime_missing_input_norm_base", 28'h0000001);
+
+        $display("PASS: qmap_one_token_layer_scheduler ordinal ping-pong and validation contracts passed.");
         $finish;
     end
 

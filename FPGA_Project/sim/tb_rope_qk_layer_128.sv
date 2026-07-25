@@ -14,7 +14,7 @@
 //
 //   iverilog -g2012 -o FPGA_Project/sim/tb_rope_qk_layer_128.vvp \
 //     FPGA_Project/sim/tb_rope_qk_layer_128.sv \
-//     FPGA_Project/rtl/rope_qk_layer_128.sv
+//     FPGA_Project/rtl/model/attention/rope_qk_layer_128.sv
 //   vvp FPGA_Project/sim/tb_rope_qk_layer_128.vvp
 
 module tb_rope_qk_layer_128;

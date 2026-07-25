@@ -118,6 +118,7 @@ module qmap_one_token_mmio_top #(
     logic [LAYER_INDEX_WIDTH-1 : 0] layer_start_index;
     logic [LAYER_COUNT_WIDTH-1 : 0] layer_count;
     logic [POSITION_WIDTH-1 : 0] position;
+    logic runtime_context_enable;
     logic [ADDR_WIDTH-1 : 0] input_hidden_base_addr;
     logic [ADDR_WIDTH-1 : 0] output_hidden_base_addr;
     logic [ADDR_WIDTH-1 : 0] kv_cache_base_addr;
@@ -164,6 +165,7 @@ module qmap_one_token_mmio_top #(
         .o_layer_start_index(layer_start_index),
         .o_layer_count(layer_count),
         .o_position(position),
+        .o_runtime_context_enable(runtime_context_enable),
         .o_input_hidden_base_addr(input_hidden_base_addr),
         .o_output_hidden_base_addr(output_hidden_base_addr),
         .o_kv_cache_base_addr(kv_cache_base_addr),
@@ -237,6 +239,7 @@ module qmap_one_token_mmio_top #(
         .i_layer_start_index(layer_start_index),
         .i_layer_count(layer_count),
         .i_position(position),
+        .i_runtime_context_enable(runtime_context_enable),
         .i_input_hidden_base_addr(input_hidden_base_addr),
         .i_output_hidden_base_addr(output_hidden_base_addr),
         .i_kv_cache_base_addr(kv_cache_base_addr),

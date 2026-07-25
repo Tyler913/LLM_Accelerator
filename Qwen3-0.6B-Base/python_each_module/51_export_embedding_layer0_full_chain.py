@@ -46,6 +46,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--token-id", type=int, default=None)
     parser.add_argument("--input-hidden-base", type=parse_int_auto, default=INPUT_HIDDEN_BASE)
+    parser.add_argument("--runtime-rope-cos-base-addr", type=parse_int_auto, default=None)
+    parser.add_argument("--runtime-rope-sin-base-addr", type=parse_int_auto, default=None)
     parser.add_argument("--qkv-qmap-base0", type=parse_int_auto, default=QKV_STAGING_BASE)
     parser.add_argument("--body-qmap-base0", type=parse_int_auto, default=BODY_QMAP_BASE0)
     parser.add_argument("--qkv-qmap-stride", type=parse_int_auto, default=LAYER_QMAP_STRIDE)
@@ -93,6 +95,8 @@ def sha256_file(path: Path) -> str:
 
 def main() -> None:
     args = parse_args()
+    if (args.runtime_rope_cos_base_addr is None) != (args.runtime_rope_sin_base_addr is None):
+        raise ValueError("runtime RoPE mode requires both cos and sin base addresses")
     output_dir = require_temp_path(args.output_dir)
     embedding_dir = output_dir / "embedding"
     layer_dir = output_dir / "layer0"
@@ -111,8 +115,7 @@ def main() -> None:
     token_id = int(embedding_meta["token_id"])
     layer_manifest_path = layer_dir / "qmap" / "layer0_chained_layer_manifest.json"
 
-    commands.append(
-        run_script(
+    layer_args: list[str | Path | int] = [
             "47_export_chained_layer_qmap_artifacts.py",
             "--layer-id",
             0,
@@ -156,8 +159,17 @@ def main() -> None:
             layer_dir,
             "--manifest",
             layer_manifest_path,
+    ]
+    if args.runtime_rope_cos_base_addr is not None:
+        layer_args.extend(
+            [
+                "--runtime-rope-cos-base-addr",
+                hex(args.runtime_rope_cos_base_addr),
+                "--runtime-rope-sin-base-addr",
+                hex(args.runtime_rope_sin_base_addr),
+            ]
         )
-    )
+    commands.append(run_script(*layer_args))
 
     layer_manifest = load_json(layer_manifest_path)
     qmap_bases = layer_manifest["qmap_bases"]

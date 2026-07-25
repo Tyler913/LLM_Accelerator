@@ -28,6 +28,7 @@ module tb_qmap_one_token_mmio_top;
     localparam logic [11 : 0] REG_MEM_RD_WORDS       = 12'h094;
     localparam logic [11 : 0] REG_MEM_WR_REQS        = 12'h098;
     localparam logic [11 : 0] REG_MEM_WR_WORDS       = 12'h09C;
+    localparam logic [11 : 0] REG_RUNTIME_CTRL       = 12'h0B0;
 
     logic clk;
     logic rst_n;
@@ -216,16 +217,46 @@ module tb_qmap_one_token_mmio_top;
         rst_n = 1'b1;
         repeat (2) @(posedge clk);
 
+        mmio_read(REG_RUNTIME_CTRL, read_data);
+        check(read_data == 32'd0, "runtime context should default disabled");
+
         // Program a deliberately invalid layer request through the productized
         // wrapper. The path should enter qmap_one_token_top and then exit via
         // the scheduler validation path without issuing memory traffic.
         mmio_write(REG_LAYER_START, 32'd0);
         mmio_write(REG_LAYER_COUNT, 32'd0);
         mmio_write(REG_POSITION, 32'd4);
+        mmio_write(REG_RUNTIME_CTRL, 32'd1);
         write_addr64(REG_INPUT_HIDDEN_LO, REG_INPUT_HIDDEN_HI, 64'h0000_0004_0509_2540);
         write_addr64(REG_OUTPUT_HIDDEN_LO, REG_OUTPUT_HIDDEN_HI, 64'h0000_0004_1509_2540);
         write_addr64(REG_KV_CACHE_LO, REG_KV_CACHE_HI, 64'h0000_0004_1410_0000);
         write_addr64(REG_FINAL_TAIL_QMAP_LO, REG_FINAL_TAIL_QMAP_HI, 64'h0000_0004_0501_0000);
+
+        mmio_read(REG_RUNTIME_CTRL, read_data);
+        check(read_data == 32'd1, "runtime context enable readback");
+        check(dut.runtime_context_enable === 1'b1,
+              "MMIO control must drive runtime context enable");
+        check(dut.top.i_runtime_context_enable === 1'b1,
+              "top must receive runtime context enable");
+        check(dut.top.scheduler.i_runtime_context_enable === 1'b1,
+              "one-token scheduler must receive runtime context enable");
+        check(dut.top.scheduler.layer0_compute.i_runtime_context_valid === 1'b1,
+              "layer compute scheduler must receive runtime context valid");
+        check(dut.top.scheduler.layer0_compute.i_runtime_position == 8'd4,
+              "layer compute scheduler must receive runtime position");
+        check(dut.top.scheduler.layer0_compute.i_runtime_kv_cache_base_addr ==
+              64'h0000_0004_1410_0000,
+              "layer compute scheduler must receive runtime KV base");
+        check(dut.top.scheduler.layer0_compute.layer0_full.i_runtime_context_valid === 1'b1,
+              "full scheduler must receive runtime context valid");
+        check(dut.top.scheduler.layer0_compute.layer0_full.i_runtime_layer_id ==
+              active_layer_index,
+              "full scheduler must receive active layer index");
+        check(dut.top.scheduler.layer0_compute.layer0_full.i_runtime_position == 8'd4,
+              "full scheduler must receive runtime position");
+        check(dut.top.scheduler.layer0_compute.layer0_full.i_runtime_kv_cache_base_addr ==
+              64'h0000_0004_1410_0000,
+              "full scheduler must receive runtime KV base");
 
         mmio_write(REG_CTRL, 32'd1);
 

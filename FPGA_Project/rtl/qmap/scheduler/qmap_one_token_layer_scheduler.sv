@@ -44,6 +44,7 @@ module qmap_one_token_layer_scheduler #(
     input  wire logic [LAYER_INDEX_WIDTH-1:0] i_layer_start_index,
     input  wire logic [LAYER_COUNT_WIDTH-1:0] i_layer_count,
     input  wire logic [POSITION_WIDTH-1:0]    i_position,
+    input  wire logic                         i_runtime_context_enable,
     input  wire logic [ADDR_WIDTH-1 : 0]      i_input_hidden_base_addr,
     input  wire logic [ADDR_WIDTH-1 : 0]      i_output_hidden_base_addr,
     input  wire logic [ADDR_WIDTH-1 : 0]      i_kv_cache_base_addr,
@@ -148,6 +149,8 @@ module qmap_one_token_layer_scheduler #(
         input logic [LAYER_INDEX_WIDTH-1:0] layer_index;
         begin
             layer_base_has_zero =
+                (((i_runtime_context_enable === 1'b1) &&
+                  (select_layer_base_addr(i_input_norm_qmap_base_addr_table, layer_index) == '0))) ||
                 (select_layer_base_addr(i_qkv_qmap_base_addr_table, layer_index) == '0) ||
                 (select_layer_base_addr(i_attn_frontend_qmap_base_addr_table, layer_index) == '0) ||
                 (select_layer_base_addr(i_attn_score_value_qmap_base_addr_table, layer_index) == '0) ||
@@ -161,8 +164,8 @@ module qmap_one_token_layer_scheduler #(
     endfunction
 
     logic layer0_start;
-    logic layer0_done;
-    logic layer0_error;
+    wire logic layer0_done;
+    wire logic layer0_error;
     logic layer0_busy;
     logic [1 : 0] layer0_active_stage_debug;
     logic [7 : 0] layer0_state_debug;
@@ -191,6 +194,7 @@ module qmap_one_token_layer_scheduler #(
     logic validation_range_error;
     logic validation_base_error;
     logic validation_found_base_error;
+    logic runtime_hidden_base_error;
     logic layer0_active;
     logic [LAYER_INDEX_WIDTH-1:0] active_layer_index_reg;
     logic [LAYER_INDEX_WIDTH-1:0] validation_error_layer_index;
@@ -205,6 +209,8 @@ module qmap_one_token_layer_scheduler #(
     logic [ADDR_WIDTH-1:0] selected_mlp_down_qmap_base_addr;
     logic [ADDR_WIDTH-1:0] selected_mlp_residual_add_qmap_base_addr;
     logic [ADDR_WIDTH-1:0] selected_layer_output_base_addr;
+    logic [ADDR_WIDTH-1:0] effective_input_hidden_base_addr;
+    logic [ADDR_WIDTH-1:0] effective_output_hidden_base_addr;
     integer validation_idx;
     integer validation_start_int;
     integer validation_stop_int;
@@ -239,7 +245,17 @@ module qmap_one_token_layer_scheduler #(
     assign selected_layer_output_base_addr =
         selected_mlp_residual_add_qmap_base_addr + MLP_RESIDUAL_OUTPUT_OFFSET;
 
+    // Hidden-buffer selection is based on the invocation ordinal within this
+    // command, not the absolute model layer id. o_layers_completed remains the
+    // current ordinal from layer start until that layer completes.
+    assign effective_input_hidden_base_addr =
+        o_layers_completed[0] ? i_output_hidden_base_addr : i_input_hidden_base_addr;
+    assign effective_output_hidden_base_addr =
+        o_layers_completed[0] ? i_input_hidden_base_addr : i_output_hidden_base_addr;
+
     assign selected_base_error =
+        (((i_runtime_context_enable === 1'b1) &&
+          (selected_input_norm_qmap_base_addr == '0))) ||
         (selected_qkv_qmap_base_addr == '0) ||
         (selected_attn_frontend_qmap_base_addr == '0) ||
         (selected_attn_score_value_qmap_base_addr == '0) ||
@@ -249,6 +265,12 @@ module qmap_one_token_layer_scheduler #(
         (selected_mlp_silu_mul_qmap_base_addr == '0) ||
         (selected_mlp_down_qmap_base_addr == '0) ||
         (selected_mlp_residual_add_qmap_base_addr == '0);
+
+    assign runtime_hidden_base_error =
+        (i_runtime_context_enable === 1'b1) &&
+        ((i_input_hidden_base_addr[1 : 0] != 2'b00) ||
+         (i_output_hidden_base_addr[1 : 0] != 2'b00) ||
+         (i_input_hidden_base_addr == i_output_hidden_base_addr));
 
     always_comb begin
         validation_start_int = i_layer_start_index;
@@ -281,6 +303,7 @@ module qmap_one_token_layer_scheduler #(
         (i_position > MAX_POSITION_INDEX) ||
         (i_input_hidden_base_addr == '0) ||
         (i_output_hidden_base_addr == '0) ||
+        runtime_hidden_base_error ||
         (i_kv_cache_base_addr == '0) ||
         selected_base_error ||
         validation_base_error;
@@ -307,6 +330,10 @@ module qmap_one_token_layer_scheduler #(
     qmap_layer0_compute_scheduler #(
         .ADDR_WIDTH(ADDR_WIDTH),
         .MEM_DATA_WIDTH(MEM_DATA_WIDTH),
+        .NUM_LAYERS(MAX_LAYERS),
+        .MAX_CONTEXT(MAX_CONTEXT),
+        .LAYER_INDEX_WIDTH(LAYER_INDEX_WIDTH),
+        .POSITION_WIDTH(POSITION_WIDTH),
         .INPUT_SIZE(INPUT_SIZE),
         .GROUP_SIZE(GROUP_SIZE),
         .GROUP_COUNT(GROUP_COUNT),
@@ -323,6 +350,16 @@ module qmap_one_token_layer_scheduler #(
         .i_clk(i_clk),
         .i_rst_n(i_rst_n),
         .i_start(layer0_start),
+        .i_runtime_context_valid(i_runtime_context_enable),
+        .i_runtime_layer_id(active_layer_index_reg),
+        .i_runtime_position(i_position),
+        .i_runtime_kv_cache_base_addr(i_kv_cache_base_addr),
+        .i_hidden_base_override_valid(i_runtime_context_enable),
+        .i_hidden_base_override_addr(effective_input_hidden_base_addr),
+        .i_residual_base_override_valid(i_runtime_context_enable),
+        .i_residual_base_override_addr(effective_input_hidden_base_addr),
+        .i_output_base_override_valid(i_runtime_context_enable),
+        .i_output_base_override_addr(effective_output_hidden_base_addr),
         .i_input_norm_qmap_base_addr(selected_input_norm_qmap_base_addr),
         .i_qkv_qmap_base_addr(selected_qkv_qmap_base_addr),
         .i_attn_frontend_qmap_base_addr(selected_attn_frontend_qmap_base_addr),
@@ -454,7 +491,10 @@ module qmap_one_token_layer_scheduler #(
                         else begin
                             o_layers_completed <= o_layers_completed + ONE_LAYER_COUNT;
                             o_layer_done_mask[active_layer_index_reg] <= 1'b1;
-                            o_last_layer_output_base_addr <= selected_layer_output_base_addr;
+                            o_last_layer_output_base_addr <=
+                                (i_runtime_context_enable === 1'b1) ?
+                                effective_output_hidden_base_addr :
+                                selected_layer_output_base_addr;
                             if ((o_layers_completed + ONE_LAYER_COUNT) == i_layer_count) begin
                                 state <= S_DONE;
                             end

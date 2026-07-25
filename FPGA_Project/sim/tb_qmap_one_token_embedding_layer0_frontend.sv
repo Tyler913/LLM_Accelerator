@@ -631,6 +631,7 @@ module tb_qmap_one_token_embedding_layer0_frontend;
         .i_layer_start_index(5'd0),
         .i_layer_count(5'd1),
         .i_position(8'd4),
+        .i_runtime_context_enable(1'b0),
         .i_input_hidden_base_addr(INPUT_HIDDEN_BASE),
         .i_output_hidden_base_addr(OUTPUT_HIDDEN_BASE),
         .i_kv_cache_base_addr(KV_CACHE_BASE),

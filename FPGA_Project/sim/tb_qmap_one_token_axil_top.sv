@@ -29,6 +29,7 @@ module tb_qmap_one_token_axil_top;
     localparam logic [11 : 0] REG_MEM_RD_WORDS       = 12'h094;
     localparam logic [11 : 0] REG_MEM_WR_REQS        = 12'h098;
     localparam logic [11 : 0] REG_MEM_WR_WORDS       = 12'h09C;
+    localparam logic [11 : 0] REG_RUNTIME_CTRL       = 12'h0B0;
 
     logic clk;
     logic rst_n;
@@ -290,6 +291,12 @@ module tb_qmap_one_token_axil_top;
         rst_n = 1'b1;
         repeat (2) @(posedge clk);
 
+        axil_read(REG_RUNTIME_CTRL, read_data);
+        check(read_data == 32'd0, "runtime context mode should reset to legacy mode through AXI-Lite");
+        axil_write(REG_RUNTIME_CTRL, 32'd1);
+        axil_read(REG_RUNTIME_CTRL, read_data);
+        check(read_data == 32'd1, "runtime context enable should read back through AXI-Lite");
+
         // Program a deliberately invalid layer request through the AXI-Lite
         // wrapper. The path should enter qmap_one_token_top and then exit via
         // the scheduler validation path without issuing memory traffic.
@@ -300,6 +307,24 @@ module tb_qmap_one_token_axil_top;
         write_addr64(REG_OUTPUT_HIDDEN_LO, REG_OUTPUT_HIDDEN_HI, 64'h0000_0004_1509_2540);
         write_addr64(REG_KV_CACHE_LO, REG_KV_CACHE_HI, 64'h0000_0004_1410_0000);
         write_addr64(REG_FINAL_TAIL_QMAP_LO, REG_FINAL_TAIL_QMAP_HI, 64'h0000_0004_0501_0000);
+
+        check(dut.mmio_top.runtime_context_enable === 1'b1,
+              "AXI-Lite runtime context enable should reach the MMIO top");
+        check(dut.mmio_top.top.scheduler.i_runtime_context_enable === 1'b1,
+              "runtime context enable should reach the layer scheduler");
+        check(dut.mmio_top.top.scheduler.layer0_compute.i_runtime_context_valid === 1'b1,
+              "runtime context valid should reach the layer0 compute scheduler");
+        check(dut.mmio_top.top.scheduler.layer0_compute.i_runtime_position == POSITION_WIDTH'(4),
+              "runtime position should reach the layer0 compute scheduler");
+        check(dut.mmio_top.top.scheduler.layer0_compute.i_runtime_kv_cache_base_addr ==
+              64'h0000_0004_1410_0000,
+              "runtime KV base should reach the layer0 compute scheduler");
+        check(dut.mmio_top.top.scheduler.layer0_compute.layer0_full.i_runtime_context_valid === 1'b1,
+              "runtime context valid should reach the full scheduler");
+        check(dut.mmio_top.top.scheduler.layer0_compute.layer0_full.attention_frontend.i_runtime_context_valid === 1'b1,
+              "runtime context valid should reach the attention frontend");
+        check(dut.mmio_top.top.scheduler.layer0_compute.layer0_full.attention_score_value.i_runtime_context_valid === 1'b1,
+              "runtime context valid should reach score/value attention");
 
         axil_write(REG_CTRL, 32'd1);
 

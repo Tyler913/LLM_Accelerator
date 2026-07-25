@@ -7,7 +7,7 @@
 //
 //   iverilog -g2012 -o FPGA_Project/sim/tb_fixed_udiv.vvp \
 //     FPGA_Project/sim/tb_fixed_udiv.sv \
-//     FPGA_Project/rtl/fixed_udiv.sv
+//     FPGA_Project/rtl/lib/math/fixed_udiv.sv
 //   vvp FPGA_Project/sim/tb_fixed_udiv.vvp
 
 module tb_fixed_udiv;

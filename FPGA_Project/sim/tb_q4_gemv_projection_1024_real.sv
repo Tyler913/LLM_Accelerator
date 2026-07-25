@@ -25,10 +25,10 @@
 //
 //   iverilog -g2012 -o FPGA_Project/sim/tb_q4_gemv_projection_1024_real.vvp \
 //     FPGA_Project/sim/tb_q4_gemv_projection_1024_real.sv \
-//     FPGA_Project/rtl/q4_gemv_projection_1024.sv \
-//     FPGA_Project/rtl/q4_gemv_tile_1024.sv \
-//     FPGA_Project/rtl/q4_gemv_row_1024.sv \
-//     FPGA_Project/rtl/q4_dot_product_64.sv
+//     FPGA_Project/rtl/lib/q4/q4_gemv_projection_1024.sv \
+//     FPGA_Project/rtl/lib/q4/q4_gemv_tile_1024.sv \
+//     FPGA_Project/rtl/lib/q4/q4_gemv_row_1024.sv \
+//     FPGA_Project/rtl/lib/q4/q4_dot_product_64.sv
 //   vvp FPGA_Project/sim/tb_q4_gemv_projection_1024_real.vvp
 
 module tb_q4_gemv_projection_1024_real;

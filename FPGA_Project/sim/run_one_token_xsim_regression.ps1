@@ -60,9 +60,10 @@ $rtlDir = Join-Path $repoRoot "FPGA_Project\rtl"
 $simDir = Join-Path $repoRoot "FPGA_Project\sim"
 $tbPath = Join-Path $repoRoot "FPGA_Project\sim\tb_qmap_one_token_layer_scheduler.sv"
 $timingChecker = Join-Path $simDir "check_one_token_timing_trace.py"
-$rtlFiles = @(Get-ChildItem -LiteralPath $rtlDir -Filter "*.sv" -File |
-    Sort-Object FullName |
-    ForEach-Object { $_.FullName })
+. (Join-Path $simDir "load_rtl_manifest.ps1")
+$rtlBuild = Get-RtlBuildManifest -RtlDir $rtlDir
+$rtlFiles = $rtlBuild.SourceFiles
+$rtlIncludeDirs = $rtlBuild.IncludeDirs
 
 $xvlog = (Get-Command xvlog -ErrorAction Stop).Source
 $xelab = (Get-Command xelab -ErrorAction Stop).Source
@@ -94,7 +95,10 @@ $summary.Add("session_dir=$sessionDir")
 
 Push-Location $sessionDir
 try {
-    $xvlogArgs = @("--sv", "--relax", "-i", $rtlDir)
+    $xvlogArgs = @("--sv", "--relax")
+    foreach ($includeDir in $rtlIncludeDirs) {
+        $xvlogArgs += @("-i", $includeDir)
+    }
     foreach ($define in $defines) {
         $xvlogArgs += @("-d", $define)
     }

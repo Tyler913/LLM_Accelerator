@@ -7,7 +7,7 @@
 //
 //   iverilog -g2012 -o FPGA_Project/sim/tb_q4_dot_product_64.vvp \
 //     FPGA_Project/sim/tb_q4_dot_product_64.sv \
-//     FPGA_Project/rtl/q4_dot_product_64.sv
+//     FPGA_Project/rtl/lib/q4/q4_dot_product_64.sv
 //   vvp FPGA_Project/sim/tb_q4_dot_product_64.vvp
 //
 // The default waveform output is:

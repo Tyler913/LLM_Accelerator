@@ -41,10 +41,13 @@ module qmap_input_rmsnorm_compute_path #(
 
     input  wire logic                         i_start,
     input  wire logic [ADDR_WIDTH-1 : 0]      i_qmap_base_addr,
+    input  wire logic                         i_hidden_base_override_valid,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_hidden_base_override_addr,
 
     output logic                              o_busy,
     output logic                              o_done,
     output logic                              o_error,
+    output logic [ADDR_WIDTH-1 : 0]           o_effective_hidden_base_addr,
     output logic                              o_norm_saturation,
     output logic [31 : 0]                     o_norm_cycle_count,
     output logic [SUM_WIDTH-1 : 0]            o_sum_squares,
@@ -162,6 +165,8 @@ module qmap_input_rmsnorm_compute_path #(
     logic norm_start;
     logic norm_done;
     logic [31 : 0] norm_write_data_word;
+    logic hidden_base_override_valid_reg;
+    logic [ADDR_WIDTH-1 : 0] hidden_base_override_addr_reg;
 
     genvar desc_index;
     generate
@@ -265,6 +270,10 @@ module qmap_input_rmsnorm_compute_path #(
     assign o_busy = (state != S_IDLE) && (state != S_DONE);
     assign o_state_debug = {4'd0, state};
     assign o_read_slot_debug = active_read_slot;
+    assign o_effective_hidden_base_addr =
+        (hidden_base_override_valid_reg === 1'b1) ?
+        hidden_base_override_addr_reg :
+        desc_base_addr[SLOT_HIDDEN];
 
     assign reader_req_ready = (state == S_READER_WAIT) ? i_mem_rd_req_ready : 1'b0;
     assign reader_rsp_valid = (state == S_READER_WAIT) ? i_mem_rd_rsp_valid : 1'b0;
@@ -278,7 +287,7 @@ module qmap_input_rmsnorm_compute_path #(
         1'b0;
     assign o_mem_rd_req_addr =
         (state == S_READER_WAIT) ? reader_req_addr :
-        (state == S_HIDDEN_REQ)  ? (desc_base_addr[SLOT_HIDDEN] + (read_chunk_index * MAX_READ_BYTES)) :
+        (state == S_HIDDEN_REQ)  ? (o_effective_hidden_base_addr + (read_chunk_index * MAX_READ_BYTES)) :
         (state == S_GAMMA_REQ)   ? (desc_base_addr[SLOT_GAMMA] + (read_chunk_index * MAX_READ_BYTES)) :
         'd0;
     assign o_mem_rd_req_len_bytes =
@@ -349,7 +358,8 @@ module qmap_input_rmsnorm_compute_path #(
             (desc_nbytes[SLOT_GAMMA] != VECTOR_BYTES) ||
             (desc_nbytes[SLOT_NORM] != VECTOR_BYTES) ||
             (desc_nbytes[SLOT_EXPECTED] != VECTOR_BYTES) ||
-            (desc_base_addr[SLOT_HIDDEN] == '0) ||
+            (o_effective_hidden_base_addr == '0) ||
+            (o_effective_hidden_base_addr[1:0] != 2'b00) ||
             (desc_base_addr[SLOT_GAMMA] == '0) ||
             (desc_base_addr[SLOT_NORM] == '0)) begin
             validate_error = 1'b1;
@@ -365,6 +375,8 @@ module qmap_input_rmsnorm_compute_path #(
             read_chunk_index <= 32'd0;
             read_word_index <= 32'd0;
             norm_write_word_index <= 32'd0;
+            hidden_base_override_valid_reg <= 1'b0;
+            hidden_base_override_addr_reg <= '0;
             o_done <= 1'b0;
             o_error <= 1'b0;
             o_norm_cycle_count <= 32'd0;
@@ -396,6 +408,9 @@ module qmap_input_rmsnorm_compute_path #(
             case (state)
                 S_IDLE: begin
                     if (i_start) begin
+                        hidden_base_override_valid_reg <=
+                            (i_hidden_base_override_valid === 1'b1);
+                        hidden_base_override_addr_reg <= i_hidden_base_override_addr;
                         state <= S_READER_START;
                         active_read_slot <= R_HIDDEN;
                         hidden_flat <= '0;

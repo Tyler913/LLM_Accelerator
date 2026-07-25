@@ -11,13 +11,19 @@ module tb_qmap_attention_frontend_compute_path;
     localparam int NUM_KV_HEADS     = 8;
     localparam int HEAD_DIM         = 128;
     localparam int MAX_CONTEXT      = 256;
+    localparam int LAYER_INDEX_W    = $clog2(28);
+    localparam int POSITION_INDEX_W = $clog2(MAX_CONTEXT);
     localparam int Q_COUNT          = NUM_Q_HEADS * HEAD_DIM;
     localparam int KV_COUNT         = NUM_KV_HEADS * HEAD_DIM;
     localparam int TOTAL_CACHE_WRITES = 2 * KV_COUNT;
-    localparam int QMAP_IMAGE_BYTES = 32'h8000;
+    localparam int LEGACY_QMAP_IMAGE_BYTES = 32'h8000;
+    localparam int QMAP_IMAGE_BYTES = 32'h48000;
     localparam int QMAP_WORDS       = QMAP_IMAGE_BYTES / 4;
+    localparam int LEGACY_QMAP_WORDS = LEGACY_QMAP_IMAGE_BYTES / 4;
     localparam int DESCRIPTOR_TABLE_OFFSET = 32'h0100;
     localparam int DESCRIPTOR_BYTES = 128;
+    localparam int PARAM_BYTES = HEAD_DIM * 4;
+    localparam int ROPE_TABLE_BYTES = MAX_CONTEXT * PARAM_BYTES;
     localparam int EXPECTED_READ_REQS = 31;
     localparam int EXPECTED_READ_WORDS = 4944;
     localparam int EXPECTED_WRITE_REQS = TOTAL_CACHE_WRITES + 1;
@@ -26,6 +32,10 @@ module tb_qmap_attention_frontend_compute_path;
     logic clk;
     logic rst_n;
     logic start;
+    logic runtime_context_valid;
+    logic [LAYER_INDEX_W-1 : 0] runtime_layer_id;
+    logic [POSITION_INDEX_W-1 : 0] runtime_position;
+    logic [ADDR_WIDTH-1 : 0] runtime_kv_cache_base_addr;
 
     logic busy;
     logic done;
@@ -139,13 +149,54 @@ module tb_qmap_attention_frontend_compute_path;
     logic [31 : 0] stalled_wr_data;
     logic stalled_wr_data_last;
 
+    logic runtime_check_active;
+    integer runtime_cos_read_req_count;
+    integer runtime_sin_read_req_count;
+
+    localparam int SLOT_METADATA = 0;
     localparam int SLOT_COS = 6;
+    localparam int SLOT_SIN = 7;
+    localparam int SLOT_KV_CACHE = 8;
+    localparam int DESC_WORD_RANK = 3;
+    localparam int DESC_WORD_BASE_LO = 8;
+    localparam int DESC_WORD_BASE_HI = 9;
+    localparam int DESC_WORD_NBYTES_LO = 10;
+    localparam int DESC_WORD_NBYTES_HI = 11;
+    localparam int DESC_WORD_DIM0 = 12;
+    localparam int DESC_WORD_DIM1 = 13;
+    localparam int DESC_WORD_DIM2 = 14;
+    localparam int DESC_WORD_DIM3 = 15;
+    localparam int DESC_WORD_STRIDE0_LO = 16;
+    localparam int DESC_WORD_STRIDE0_HI = 17;
+    localparam int DESC_WORD_STRIDE1_LO = 18;
+    localparam int DESC_WORD_STRIDE1_HI = 19;
+    localparam int DESC_WORD_STRIDE2_LO = 20;
+    localparam int DESC_WORD_STRIDE2_HI = 21;
+    localparam int DESC_WORD_STRIDE3_LO = 22;
+    localparam int DESC_WORD_STRIDE3_HI = 23;
+    localparam int DESC_WORD_AUX1 = 25;
+    localparam int DESC_WORD_AUX3 = 27;
+    localparam int READ_SLOT_COS = 5;
+    localparam int READ_SLOT_SIN = 6;
+    localparam int LEGACY_POSITION = 4;
+    localparam int RUNTIME_LAYER_ID = 2;
+    localparam int RUNTIME_POSITION = 7;
+    localparam int LEGACY_COS_OFFSET = 32'h4D40;
+    localparam int LEGACY_SIN_OFFSET = 32'h4F40;
+    localparam int RUNTIME_COS_OFFSET = 32'h8000;
+    localparam int RUNTIME_SIN_OFFSET = 32'h28000;
+    localparam logic [63 : 0] LEGACY_KV_CACHE_BASE = 64'h0000_0004_1410_0000;
+    localparam logic [63 : 0] RUNTIME_KV_CACHE_BASE = 64'h0000_0004_1600_0000;
 
     qmap_attention_frontend_compute_path dut (
         .i_clk(clk),
         .i_rst_n(rst_n),
         .i_start(start),
         .i_qmap_base_addr(qmap_base_addr),
+        .i_runtime_context_valid(runtime_context_valid),
+        .i_runtime_layer_id(runtime_layer_id),
+        .i_runtime_position(runtime_position),
+        .i_runtime_kv_cache_base_addr(runtime_kv_cache_base_addr),
         .o_busy(busy),
         .o_done(done),
         .o_error(error),
@@ -261,13 +312,111 @@ module tb_qmap_attention_frontend_compute_path;
 
     task load_vectors;
         begin
-            $readmemh(qmap_image_file, qmap_mem);
+            $readmemh(qmap_image_file, qmap_mem, 0, LEGACY_QMAP_WORDS - 1);
             $readmemh(q_rope_expected_file, q_rope_expected_mem);
             $readmemh(expected_cache_addr_file, expected_cache_addr_mem);
             $readmemh(expected_cache_data_file, expected_cache_data_mem);
             $readmemh(expected_cache_kind_file, expected_cache_kind_mem);
             $readmemh(expected_cache_head_file, expected_cache_head_mem);
             $readmemh(expected_cache_dim_file, expected_cache_dim_mem);
+        end
+    endtask
+
+    function automatic integer descriptor_word_index(input integer slot, input integer word_offset);
+        begin
+            descriptor_word_index = ((DESCRIPTOR_TABLE_OFFSET + (slot * DESCRIPTOR_BYTES)) >> 2) + word_offset;
+        end
+    endfunction
+
+    task prepare_runtime_override_vectors;
+        integer element_index;
+        integer kind_index;
+        integer head_index;
+        integer dim_index;
+        integer linear_index;
+        logic [63 : 0] runtime_cos_base;
+        logic [63 : 0] runtime_sin_base;
+        logic [63 : 0] descriptor_kv_base;
+        begin
+            load_vectors();
+
+            descriptor_kv_base = {
+                qmap_mem[descriptor_word_index(SLOT_KV_CACHE, DESC_WORD_BASE_HI)],
+                qmap_mem[descriptor_word_index(SLOT_KV_CACHE, DESC_WORD_BASE_LO)]
+            };
+            if (qmap_mem[descriptor_word_index(SLOT_METADATA, DESC_WORD_AUX3)] != LEGACY_POSITION) begin
+                $display("FAIL: runtime test packet metadata position is not the expected legacy value");
+                mismatch_count = mismatch_count + 1;
+            end
+            if (descriptor_kv_base != LEGACY_KV_CACHE_BASE) begin
+                $display("FAIL: runtime test packet KV base is not the expected legacy value");
+                mismatch_count = mismatch_count + 1;
+            end
+
+            runtime_cos_base = qmap_base_addr + RUNTIME_COS_OFFSET;
+            runtime_sin_base = qmap_base_addr + RUNTIME_SIN_OFFSET;
+
+            // The runtime packet exposes full rank-2 RoPE tables.  The selected
+            // row intentionally contains the legacy vector so the existing
+            // numerical Q/K expectations remain exact.
+            for (element_index = 0; element_index < HEAD_DIM; element_index = element_index + 1) begin
+                qmap_mem[((RUNTIME_COS_OFFSET + (RUNTIME_POSITION * PARAM_BYTES)) >> 2) + element_index] =
+                    qmap_mem[(LEGACY_COS_OFFSET >> 2) + element_index];
+                qmap_mem[((RUNTIME_SIN_OFFSET + (RUNTIME_POSITION * PARAM_BYTES)) >> 2) + element_index] =
+                    qmap_mem[(LEGACY_SIN_OFFSET >> 2) + element_index];
+            end
+
+            // Header image_bytes covers both full tables in this direct test.
+            qmap_mem[12] = QMAP_IMAGE_BYTES;
+            qmap_mem[13] = 32'd0;
+            qmap_mem[descriptor_word_index(SLOT_METADATA, DESC_WORD_AUX1)] = RUNTIME_LAYER_ID;
+
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_RANK)] = 32'd2;
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_BASE_LO)] = runtime_cos_base[31 : 0];
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_BASE_HI)] = runtime_cos_base[63 : 32];
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_NBYTES_LO)] = ROPE_TABLE_BYTES;
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_NBYTES_HI)] = 32'd0;
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_DIM0)] = MAX_CONTEXT;
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_DIM1)] = HEAD_DIM;
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_DIM2)] = 32'd0;
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_DIM3)] = 32'd0;
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_STRIDE0_LO)] = PARAM_BYTES;
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_STRIDE0_HI)] = 32'd0;
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_STRIDE1_LO)] = 32'd4;
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_STRIDE1_HI)] = 32'd0;
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_STRIDE2_LO)] = 32'd0;
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_STRIDE2_HI)] = 32'd0;
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_STRIDE3_LO)] = 32'd0;
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_STRIDE3_HI)] = 32'd0;
+
+            qmap_mem[descriptor_word_index(SLOT_SIN, DESC_WORD_RANK)] = 32'd2;
+            qmap_mem[descriptor_word_index(SLOT_SIN, DESC_WORD_BASE_LO)] = runtime_sin_base[31 : 0];
+            qmap_mem[descriptor_word_index(SLOT_SIN, DESC_WORD_BASE_HI)] = runtime_sin_base[63 : 32];
+            qmap_mem[descriptor_word_index(SLOT_SIN, DESC_WORD_NBYTES_LO)] = ROPE_TABLE_BYTES;
+            qmap_mem[descriptor_word_index(SLOT_SIN, DESC_WORD_NBYTES_HI)] = 32'd0;
+            qmap_mem[descriptor_word_index(SLOT_SIN, DESC_WORD_DIM0)] = MAX_CONTEXT;
+            qmap_mem[descriptor_word_index(SLOT_SIN, DESC_WORD_DIM1)] = HEAD_DIM;
+            qmap_mem[descriptor_word_index(SLOT_SIN, DESC_WORD_DIM2)] = 32'd0;
+            qmap_mem[descriptor_word_index(SLOT_SIN, DESC_WORD_DIM3)] = 32'd0;
+            qmap_mem[descriptor_word_index(SLOT_SIN, DESC_WORD_STRIDE0_LO)] = PARAM_BYTES;
+            qmap_mem[descriptor_word_index(SLOT_SIN, DESC_WORD_STRIDE0_HI)] = 32'd0;
+            qmap_mem[descriptor_word_index(SLOT_SIN, DESC_WORD_STRIDE1_LO)] = 32'd4;
+            qmap_mem[descriptor_word_index(SLOT_SIN, DESC_WORD_STRIDE1_HI)] = 32'd0;
+            qmap_mem[descriptor_word_index(SLOT_SIN, DESC_WORD_STRIDE2_LO)] = 32'd0;
+            qmap_mem[descriptor_word_index(SLOT_SIN, DESC_WORD_STRIDE2_HI)] = 32'd0;
+            qmap_mem[descriptor_word_index(SLOT_SIN, DESC_WORD_STRIDE3_LO)] = 32'd0;
+            qmap_mem[descriptor_word_index(SLOT_SIN, DESC_WORD_STRIDE3_HI)] = 32'd0;
+
+            // Rebuild every expected K/V address from the runtime context.
+            for (element_index = 0; element_index < TOTAL_CACHE_WRITES; element_index = element_index + 1) begin
+                kind_index = element_index / KV_COUNT;
+                head_index = (element_index % KV_COUNT) / HEAD_DIM;
+                dim_index = element_index % HEAD_DIM;
+                linear_index =
+                    (((((RUNTIME_LAYER_ID * 2) + kind_index) * NUM_KV_HEADS + head_index) * MAX_CONTEXT
+                      + RUNTIME_POSITION) * HEAD_DIM) + dim_index;
+                expected_cache_addr_mem[element_index] = RUNTIME_KV_CACHE_BASE + (linear_index * 4);
+            end
         end
     endtask
 
@@ -318,6 +467,9 @@ module tb_qmap_attention_frontend_compute_path;
             rd_rsp_stall_active = 1'b0;
             wr_req_stall_active = 1'b0;
             wr_data_stall_active = 1'b0;
+            runtime_check_active = 1'b0;
+            runtime_cos_read_req_count = 0;
+            runtime_sin_read_req_count = 0;
         end
     endtask
 
@@ -485,6 +637,24 @@ module tb_qmap_attention_frontend_compute_path;
                     ((mem_rd_req_len_bytes & 16'h3) != 0)) begin
                     $display("FAIL: bad read request addr=0x%016h len=%0d", mem_rd_req_addr, mem_rd_req_len_bytes);
                     mismatch_count <= mismatch_count + 1;
+                end
+                if (runtime_check_active && (read_slot_debug == READ_SLOT_COS)) begin
+                    runtime_cos_read_req_count <= runtime_cos_read_req_count + 1;
+                    if ((mem_rd_req_addr !=
+                         (qmap_base_addr + RUNTIME_COS_OFFSET + (RUNTIME_POSITION * PARAM_BYTES))) ||
+                        (mem_rd_req_len_bytes != PARAM_BYTES)) begin
+                        $display("FAIL: runtime cos row read addr=0x%016h len=%0d", mem_rd_req_addr, mem_rd_req_len_bytes);
+                        mismatch_count <= mismatch_count + 1;
+                    end
+                end
+                if (runtime_check_active && (read_slot_debug == READ_SLOT_SIN)) begin
+                    runtime_sin_read_req_count <= runtime_sin_read_req_count + 1;
+                    if ((mem_rd_req_addr !=
+                         (qmap_base_addr + RUNTIME_SIN_OFFSET + (RUNTIME_POSITION * PARAM_BYTES))) ||
+                        (mem_rd_req_len_bytes != PARAM_BYTES)) begin
+                        $display("FAIL: runtime sin row read addr=0x%016h len=%0d", mem_rd_req_addr, mem_rd_req_len_bytes);
+                        mismatch_count <= mismatch_count + 1;
+                    end
                 end
                 rd_active <= 1'b1;
                 rd_delay <= rd_latency_pattern(rd_req_accept_count);
@@ -685,10 +855,179 @@ module tb_qmap_attention_frontend_compute_path;
         end
     endtask
 
+    task run_runtime_override;
+        integer rd_req_before;
+        integer rd_rsp_before;
+        integer wr_req_before;
+        integer wr_data_before;
+        begin
+            prepare_runtime_override_vectors();
+            cache_write_accept_count = 0;
+            q_rope_write_accept_count = 0;
+            runtime_cos_read_req_count = 0;
+            runtime_sin_read_req_count = 0;
+            rd_req_before = rd_req_accept_count;
+            rd_rsp_before = rd_rsp_accept_count;
+            wr_req_before = wr_req_accept_count;
+            wr_data_before = wr_data_accept_count;
+
+            runtime_context_valid = 1'b1;
+            runtime_layer_id = RUNTIME_LAYER_ID;
+            runtime_position = RUNTIME_POSITION;
+            runtime_kv_cache_base_addr = RUNTIME_KV_CACHE_BASE;
+            runtime_check_active = 1'b1;
+
+            @(negedge clk);
+            start = 1'b1;
+            @(negedge clk);
+            start = 1'b0;
+
+            while ((done != 1'b1) && (cycle_count < 500000)) begin
+                @(negedge clk);
+            end
+            runtime_check_active = 1'b0;
+
+            if (done != 1'b1) begin
+                $display("FAIL: timed out waiting for runtime override run");
+                $finish(1);
+            end
+            if (error) begin
+                $display("FAIL: runtime override run raised DUT error");
+                mismatch_count = mismatch_count + 1;
+            end
+            if ((runtime_cos_read_req_count != 1) || (runtime_sin_read_req_count != 1)) begin
+                $display("FAIL: runtime RoPE row request counts cos=%0d sin=%0d",
+                         runtime_cos_read_req_count, runtime_sin_read_req_count);
+                mismatch_count = mismatch_count + 1;
+            end
+            if (cache_write_accept_count != TOTAL_CACHE_WRITES) begin
+                $display("FAIL: runtime cache write count actual=%0d expected=%0d",
+                         cache_write_accept_count, TOTAL_CACHE_WRITES);
+                mismatch_count = mismatch_count + 1;
+            end
+            if (q_rope_write_accept_count != Q_COUNT) begin
+                $display("FAIL: runtime Q RoPE write count actual=%0d expected=%0d",
+                         q_rope_write_accept_count, Q_COUNT);
+                mismatch_count = mismatch_count + 1;
+            end
+            if ((rd_req_accept_count - rd_req_before) != EXPECTED_READ_REQS) begin
+                $display("FAIL: runtime read request delta actual=%0d expected=%0d",
+                         rd_req_accept_count - rd_req_before, EXPECTED_READ_REQS);
+                mismatch_count = mismatch_count + 1;
+            end
+            if ((rd_rsp_accept_count - rd_rsp_before) != EXPECTED_READ_WORDS) begin
+                $display("FAIL: runtime read word delta actual=%0d expected=%0d",
+                         rd_rsp_accept_count - rd_rsp_before, EXPECTED_READ_WORDS);
+                mismatch_count = mismatch_count + 1;
+            end
+            if ((wr_req_accept_count - wr_req_before) != EXPECTED_WRITE_REQS) begin
+                $display("FAIL: runtime write request delta actual=%0d expected=%0d",
+                         wr_req_accept_count - wr_req_before, EXPECTED_WRITE_REQS);
+                mismatch_count = mismatch_count + 1;
+            end
+            if ((wr_data_accept_count - wr_data_before) != EXPECTED_WRITE_WORDS) begin
+                $display("FAIL: runtime write word delta actual=%0d expected=%0d",
+                         wr_data_accept_count - wr_data_before, EXPECTED_WRITE_WORDS);
+                mismatch_count = mismatch_count + 1;
+            end
+            if ((cache_write_count != TOTAL_CACHE_WRITES) ||
+                (q_rope_write_word_count != Q_COUNT) ||
+                (mem_read_burst_count != EXPECTED_READ_REQS) ||
+                (mem_read_word_count != EXPECTED_READ_WORDS) ||
+                (mem_write_req_count != EXPECTED_WRITE_REQS) ||
+                (mem_write_word_count != EXPECTED_WRITE_WORDS)) begin
+                $display("FAIL: runtime DUT counters cache=%0d q=%0d rd=%0d/%0d wr=%0d/%0d",
+                         cache_write_count, q_rope_write_word_count,
+                         mem_read_burst_count, mem_read_word_count,
+                         mem_write_req_count, mem_write_word_count);
+                mismatch_count = mismatch_count + 1;
+            end
+            if (saturation || norm_saturation || rope_saturation) begin
+                $display("FAIL: runtime override unexpectedly saturated");
+                mismatch_count = mismatch_count + 1;
+            end
+
+            runtime_context_valid = 1'b0;
+        end
+    endtask
+
+    task run_runtime_layer_mismatch;
+        integer writes_before;
+        begin
+            qmap_mem[descriptor_word_index(SLOT_METADATA, DESC_WORD_AUX1)] = RUNTIME_LAYER_ID + 1;
+            runtime_context_valid = 1'b1;
+            runtime_layer_id = RUNTIME_LAYER_ID;
+            runtime_position = RUNTIME_POSITION;
+            runtime_kv_cache_base_addr = RUNTIME_KV_CACHE_BASE;
+            writes_before = wr_req_accept_count;
+
+            @(negedge clk);
+            start = 1'b1;
+            @(negedge clk);
+            start = 1'b0;
+
+            while ((done != 1'b1) && (cycle_count < 520000)) begin
+                @(negedge clk);
+            end
+            if (done != 1'b1) begin
+                $display("FAIL: timed out waiting for runtime layer mismatch run");
+                $finish(1);
+            end
+            if (!error) begin
+                $display("FAIL: runtime metadata layer mismatch did not raise error");
+                mismatch_count = mismatch_count + 1;
+            end
+            if (wr_req_accept_count != writes_before) begin
+                $display("FAIL: runtime metadata layer mismatch issued writes");
+                mismatch_count = mismatch_count + 1;
+            end
+            runtime_context_valid = 1'b0;
+        end
+    endtask
+
+    task run_runtime_bad_rope_stride;
+        integer writes_before;
+        integer wait_cycles;
+        begin
+            prepare_runtime_override_vectors();
+            qmap_mem[descriptor_word_index(SLOT_COS, DESC_WORD_STRIDE1_LO)] = 32'd8;
+            runtime_context_valid = 1'b1;
+            runtime_layer_id = RUNTIME_LAYER_ID;
+            runtime_position = RUNTIME_POSITION;
+            runtime_kv_cache_base_addr = RUNTIME_KV_CACHE_BASE;
+            writes_before = wr_req_accept_count;
+            wait_cycles = 0;
+
+            @(negedge clk);
+            start = 1'b1;
+            @(negedge clk);
+            start = 1'b0;
+
+            while ((done != 1'b1) && (wait_cycles < 50000)) begin
+                @(negedge clk);
+                wait_cycles = wait_cycles + 1;
+            end
+            if (done != 1'b1) begin
+                $display("FAIL: timed out waiting for runtime bad-RoPE-stride run");
+                $finish(1);
+            end
+            if (!error) begin
+                $display("FAIL: runtime RoPE stride mismatch did not raise error");
+                mismatch_count = mismatch_count + 1;
+            end
+            if (wr_req_accept_count != writes_before) begin
+                $display("FAIL: runtime RoPE stride mismatch issued writes");
+                mismatch_count = mismatch_count + 1;
+            end
+            runtime_context_valid = 1'b0;
+        end
+    endtask
+
     task run_invalid_cos_dtype;
         integer cos_dtype_word_index;
         integer writes_before;
         begin
+            runtime_context_valid = 1'b0;
             load_vectors();
             cos_dtype_word_index = (DESCRIPTOR_TABLE_OFFSET + SLOT_COS * DESCRIPTOR_BYTES + 8) >> 2;
             qmap_mem[cos_dtype_word_index] = `QMAP_DTYPE_U32;
@@ -720,6 +1059,10 @@ module tb_qmap_attention_frontend_compute_path;
     initial begin : main_test
         rst_n = 1'b0;
         start = 1'b0;
+        runtime_context_valid = 1'b0;
+        runtime_layer_id = '0;
+        runtime_position = '0;
+        runtime_kv_cache_base_addr = '0;
         mem_rd_rsp_valid = 1'b0;
         mem_rd_rsp_data = 32'd0;
         mem_rd_rsp_last = 1'b0;
@@ -768,6 +1111,9 @@ module tb_qmap_attention_frontend_compute_path;
         );
 
         run_success();
+        run_runtime_override();
+        run_runtime_layer_mismatch();
+        run_runtime_bad_rope_stride();
         run_invalid_cos_dtype();
 
         @(negedge clk);
@@ -788,6 +1134,8 @@ module tb_qmap_attention_frontend_compute_path;
         $display("  data stalls rd/wr     = %0d / %0d", rd_rsp_stall_cycles, wr_data_stall_cycles);
         $display("  read latency max      = %0d", rd_latency_max);
         $display("  spurious start covered= %0d", spurious_start_covered);
+        $display("  runtime override      = layer %0d position %0d KV 0x%016h",
+                 RUNTIME_LAYER_ID, RUNTIME_POSITION, RUNTIME_KV_CACHE_BASE);
         $display("  done seen count       = %0d", done_seen_count);
         $display("  total cycles waited   = %0d", cycle_count);
         $display("  trace                 = %s", tracefile);

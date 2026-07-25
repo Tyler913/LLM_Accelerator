@@ -14,14 +14,14 @@
 //
 //   iverilog -g2012 -o FPGA_Project/sim/tb_qk_norm_rope_stage_128.vvp \
 //     FPGA_Project/sim/tb_qk_norm_rope_stage_128.sv \
-//     FPGA_Project/rtl/qk_norm_rope_stage_128.sv \
-//     FPGA_Project/rtl/qk_norm_128.sv \
-//     FPGA_Project/rtl/rmsnorm_1024.sv \
-//     FPGA_Project/rtl/rmsnorm_sum_squares_1024.sv \
-//     FPGA_Project/rtl/fixed_sqrt_u64.sv \
-//     FPGA_Project/rtl/fixed_udiv.sv \
-//     FPGA_Project/rtl/rmsnorm_apply_1024.sv \
-//     FPGA_Project/rtl/rope_qk_layer_128.sv
+//     FPGA_Project/rtl/model/attention/qk_norm_rope_stage_128.sv \
+//     FPGA_Project/rtl/model/attention/qk_norm_128.sv \
+//     FPGA_Project/rtl/model/norm/rmsnorm_1024.sv \
+//     FPGA_Project/rtl/model/norm/rmsnorm_sum_squares_1024.sv \
+//     FPGA_Project/rtl/lib/math/fixed_sqrt_u64.sv \
+//     FPGA_Project/rtl/lib/math/fixed_udiv.sv \
+//     FPGA_Project/rtl/model/norm/rmsnorm_apply_1024.sv \
+//     FPGA_Project/rtl/model/attention/rope_qk_layer_128.sv
 //   vvp FPGA_Project/sim/tb_qk_norm_rope_stage_128.vvp
 
 module tb_qk_norm_rope_stage_128;

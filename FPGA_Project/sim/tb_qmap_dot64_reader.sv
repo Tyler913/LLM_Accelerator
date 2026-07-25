@@ -13,9 +13,9 @@
 //
 //   iverilog -g2012 -I FPGA_Project/rtl -o FPGA_Project/sim/tb_qmap_dot64_reader.vvp \
 //     FPGA_Project/sim/tb_qmap_dot64_reader.sv \
-//     FPGA_Project/rtl/qmap_header_reader.sv \
-//     FPGA_Project/rtl/qmap_descriptor_reader.sv \
-//     FPGA_Project/rtl/qmap_dot64_reader.sv
+//     FPGA_Project/rtl/qmap/protocol/qmap_header_reader.sv \
+//     FPGA_Project/rtl/qmap/protocol/qmap_descriptor_reader.sv \
+//     FPGA_Project/rtl/qmap/protocol/qmap_dot64_reader.sv
 //   vvp FPGA_Project/sim/tb_qmap_dot64_reader.vvp
 
 module tb_qmap_dot64_reader;

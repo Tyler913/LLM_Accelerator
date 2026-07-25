@@ -9,14 +9,14 @@
 //
 //   iverilog -g2012 -I FPGA_Project/rtl -o FPGA_Project/sim/tb_qmap_dot64_axi_smoke_top.vvp \
 //     FPGA_Project/sim/tb_qmap_dot64_axi_smoke_top.sv \
-//     FPGA_Project/rtl/qmap_header_reader.sv \
-//     FPGA_Project/rtl/qmap_descriptor_reader.sv \
-//     FPGA_Project/rtl/qmap_dot64_reader.sv \
-//     FPGA_Project/rtl/qmap_dot64_payload_fetcher.sv \
-//     FPGA_Project/rtl/qmap_dot64_compute_path.sv \
-//     FPGA_Project/rtl/q4_dot_product_64.sv \
-//     FPGA_Project/rtl/axi4_read_master.sv \
-//     FPGA_Project/rtl/qmap_dot64_axi_smoke_top.sv
+//     FPGA_Project/rtl/qmap/protocol/qmap_header_reader.sv \
+//     FPGA_Project/rtl/qmap/protocol/qmap_descriptor_reader.sv \
+//     FPGA_Project/rtl/qmap/protocol/qmap_dot64_reader.sv \
+//     FPGA_Project/rtl/qmap/protocol/qmap_dot64_payload_fetcher.sv \
+//     FPGA_Project/rtl/qmap/compute/qmap_dot64_compute_path.sv \
+//     FPGA_Project/rtl/lib/q4/q4_dot_product_64.sv \
+//     FPGA_Project/rtl/lib/bus/axi4_read_master.sv \
+//     FPGA_Project/rtl/top/smoke/qmap_dot64_axi_smoke_top.sv
 //   vvp FPGA_Project/sim/tb_qmap_dot64_axi_smoke_top.vvp
 
 module tb_qmap_dot64_axi_smoke_top;

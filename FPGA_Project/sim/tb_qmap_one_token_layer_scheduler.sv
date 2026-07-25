@@ -94,6 +94,7 @@ module tb_qmap_one_token_layer_scheduler;
 
     localparam logic [ADDR_WIDTH-1 : 0] CACHE_BASE_ADDR = 64'h0000_0004_1410_0000;
     localparam int CACHE_WORDS_FULL = 2 * NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM;
+    localparam int ROPE_TABLE_WORDS = 2 * MAX_CONTEXT * HEAD_DIM;
 `ifdef QMAP_ONE_TOKEN_TB_FULL_CHAIN
     localparam int MODELED_CACHE_LAYERS = MAX_LAYERS;
 `else
@@ -347,6 +348,7 @@ module tb_qmap_one_token_layer_scheduler;
     localparam logic [11 : 0] MMIO_REG_EMBED_WEIGHT_HI      = 12'h0A4;
     localparam logic [11 : 0] MMIO_REG_EMBED_SCALE_LO       = 12'h0A8;
     localparam logic [11 : 0] MMIO_REG_EMBED_SCALE_HI       = 12'h0AC;
+    localparam logic [11 : 0] MMIO_REG_RUNTIME_CTRL         = 12'h0B0;
 
     localparam logic [7 : 0] MMIO_TABLE_QKV             = 8'd0;
     localparam logic [7 : 0] MMIO_TABLE_INPUT_NORM      = 8'd1;
@@ -399,6 +401,7 @@ module tb_qmap_one_token_layer_scheduler;
     logic [LAYER_INDEX_WIDTH-1 : 0] mmio_layer_start_index;
     logic [LAYER_COUNT_WIDTH-1 : 0] mmio_layer_count;
     logic [POSITION_WIDTH-1 : 0] mmio_position;
+    logic mmio_runtime_context_enable;
     logic [ADDR_WIDTH-1 : 0] mmio_input_hidden_base_addr;
     logic [ADDR_WIDTH-1 : 0] mmio_output_hidden_base_addr;
     logic [ADDR_WIDTH-1 : 0] mmio_kv_cache_base_addr;
@@ -652,6 +655,8 @@ module tb_qmap_one_token_layer_scheduler;
     logic [31 : 0] full_expected_down [0 : (MAX_LAYERS*VEC1024)-1];
     logic [31 : 0] full_expected_layer [0 : (MAX_LAYERS*VEC1024)-1];
     logic [31 : 0] full_expected_input_norm [0 : (MAX_LAYERS*VEC1024)-1];
+    logic [31 : 0] full_runtime_rope_mem [0 : ROPE_TABLE_WORDS-1];
+    logic [31 : 0] full_runtime_hidden_mem [0 : (2*VEC1024)-1];
 
     logic [ADDR_WIDTH-1 : 0] full_qkv_qmap_base [0 : MAX_LAYERS-1];
     logic [ADDR_WIDTH-1 : 0] full_input_norm_qmap_base [0 : MAX_LAYERS-1];
@@ -688,6 +693,8 @@ module tb_qmap_one_token_layer_scheduler;
     logic [ADDR_WIDTH-1 : 0] full_silu_output_base [0 : MAX_LAYERS-1];
     logic [ADDR_WIDTH-1 : 0] full_down_output_base [0 : MAX_LAYERS-1];
     logic [ADDR_WIDTH-1 : 0] full_layer_output_base [0 : MAX_LAYERS-1];
+    logic [ADDR_WIDTH-1 : 0] full_actual_input_hidden_base [0 : MAX_LAYERS-1];
+    logic [ADDR_WIDTH-1 : 0] full_actual_layer_output_base [0 : MAX_LAYERS-1];
 `endif
 
     logic [31 : 0] tail_qmap [0 : TAIL_QMAP_WORDS-1];
@@ -750,7 +757,15 @@ module tb_qmap_one_token_layer_scheduler;
     logic [ADDR_WIDTH-1 : 0] embedding_scale_row_base;
     integer full_chain_layer_count;
     integer full_chain_check_index;
+    integer full_chain_manifest_runtime_context;
+    integer full_chain_runtime_position;
     logic [ADDR_WIDTH-1 : 0] full_chain_kv_cache_base_addr;
+    logic [ADDR_WIDTH-1 : 0] full_chain_embedding_output_base_addr;
+    logic [ADDR_WIDTH-1 : 0] full_chain_runtime_hidden_a_base_addr;
+    logic [ADDR_WIDTH-1 : 0] full_chain_runtime_hidden_b_base_addr;
+    logic [ADDR_WIDTH-1 : 0] full_chain_runtime_rope_cos_base_addr;
+    logic [ADDR_WIDTH-1 : 0] full_chain_runtime_rope_sin_base_addr;
+    logic [ADDR_WIDTH-1 : 0] full_chain_runtime_last_hidden_base_addr;
 
     logic [ADDR_WIDTH-1 : 0] tail_qmap_base_addr;
     logic [ADDR_WIDTH-1 : 0] tail_weight_base_addr;
@@ -960,6 +975,7 @@ module tb_qmap_one_token_layer_scheduler;
     logic use_input_norm_qkv_expected;
     logic embedding_true3_mode;
     logic full_chain_mode;
+    logic runtime_context_mode;
     logic embedding_written;
     logic embedding_response_seen;
     logic [MAX_LAYERS-1 : 0] layer_response_seen;
@@ -969,6 +985,11 @@ module tb_qmap_one_token_layer_scheduler;
     integer first_embedding_hidden_read_cycle;
     integer first_layer1_hidden_read_cycle;
     integer first_layer2_hidden_read_cycle;
+    integer runtime_hidden_read_req_count [0 : MAX_LAYERS-1];
+    integer runtime_layer_output_write_req_count [0 : MAX_LAYERS-1];
+    integer runtime_rope_read_req_count [0 : MAX_LAYERS-1];
+    integer runtime_cache_read_req_count [0 : MAX_LAYERS-1];
+    integer runtime_cache_write_word_count [0 : MAX_LAYERS-1];
 
     integer last_trace_stage;
     integer last_trace_state;
@@ -1002,6 +1023,7 @@ module tb_qmap_one_token_layer_scheduler;
         .o_layer_start_index(mmio_layer_start_index),
         .o_layer_count(mmio_layer_count),
         .o_position(mmio_position),
+        .o_runtime_context_enable(mmio_runtime_context_enable),
         .o_input_hidden_base_addr(mmio_input_hidden_base_addr),
         .o_output_hidden_base_addr(mmio_output_hidden_base_addr),
         .o_kv_cache_base_addr(mmio_kv_cache_base_addr),
@@ -1141,6 +1163,7 @@ module tb_qmap_one_token_layer_scheduler;
     wire logic [LAYER_INDEX_WIDTH-1 : 0] top_layer_start_index_signal = mmio_layer_start_index;
     wire logic [LAYER_COUNT_WIDTH-1 : 0] top_layer_count_signal = mmio_layer_count;
     wire logic [POSITION_WIDTH-1 : 0] top_position_signal = mmio_position;
+    wire logic top_runtime_context_enable_signal = mmio_runtime_context_enable;
     wire logic [ADDR_WIDTH-1 : 0] top_input_hidden_base_signal = mmio_input_hidden_base_addr;
     wire logic [ADDR_WIDTH-1 : 0] top_output_hidden_base_signal = mmio_output_hidden_base_addr;
     wire logic [ADDR_WIDTH-1 : 0] top_kv_cache_base_signal = mmio_kv_cache_base_addr;
@@ -1162,6 +1185,7 @@ module tb_qmap_one_token_layer_scheduler;
     wire logic [LAYER_INDEX_WIDTH-1 : 0] top_layer_start_index_signal = layer_start_index;
     wire logic [LAYER_COUNT_WIDTH-1 : 0] top_layer_count_signal = layer_count;
     wire logic [POSITION_WIDTH-1 : 0] top_position_signal = token_position;
+    wire logic top_runtime_context_enable_signal = 1'b0;
     wire logic [ADDR_WIDTH-1 : 0] top_input_hidden_base_signal = input_hidden_base_addr;
     wire logic [ADDR_WIDTH-1 : 0] top_output_hidden_base_signal = output_hidden_base_addr;
     wire logic [ADDR_WIDTH-1 : 0] top_kv_cache_base_signal = kv_cache_base_addr;
@@ -1198,6 +1222,7 @@ module tb_qmap_one_token_layer_scheduler;
         .i_layer_start_index(top_layer_start_index_signal),
         .i_layer_count(top_layer_count_signal),
         .i_position(top_position_signal),
+        .i_runtime_context_enable(top_runtime_context_enable_signal),
         .i_input_hidden_base_addr(top_input_hidden_base_signal),
         .i_output_hidden_base_addr(top_output_hidden_base_signal),
         .i_kv_cache_base_addr(top_kv_cache_base_signal),
@@ -1289,6 +1314,7 @@ module tb_qmap_one_token_layer_scheduler;
         .i_layer_start_index(layer_start_index),
         .i_layer_count(layer_count),
         .i_position(token_position),
+        .i_runtime_context_enable(1'b0),
         .i_input_hidden_base_addr(input_hidden_base_addr),
         .i_output_hidden_base_addr(output_hidden_base_addr),
         .i_kv_cache_base_addr(kv_cache_base_addr),
@@ -2074,9 +2100,18 @@ module tb_qmap_one_token_layer_scheduler;
     task load_vectors;
         begin
             full_chain_mode = $test$plusargs("embedding_full_chain");
+            runtime_context_mode = $test$plusargs("runtime_context");
             embedding_true3_mode = $test$plusargs("embedding_true3") || full_chain_mode;
             full_chain_layer_count = 0;
+            full_chain_manifest_runtime_context = 0;
+            full_chain_runtime_position = 0;
             full_chain_kv_cache_base_addr = CACHE_BASE_ADDR;
+            full_chain_embedding_output_base_addr = '0;
+            full_chain_runtime_hidden_a_base_addr = '0;
+            full_chain_runtime_hidden_b_base_addr = '0;
+            full_chain_runtime_rope_cos_base_addr = '0;
+            full_chain_runtime_rope_sin_base_addr = '0;
+            full_chain_runtime_last_hidden_base_addr = '0;
             tail_qmap_base_addr = `QMAP_FINAL_TOKEN_BASE_ADDR;
             layer0_qkv_packet_base_addr = embedding_true3_mode ?
                 EMBEDDING_LAYER0_QKV_BASE_ADDR : `QMAP_QKV_BASE_ADDR;
@@ -2225,6 +2260,26 @@ module tb_qmap_one_token_layer_scheduler;
                              full_chain_layer_count, MAX_LAYERS);
                     $finish(1);
                 end
+                if (full_chain_manifest_runtime_context != runtime_context_mode) begin
+                    $display("FAIL: runtime-context plusarg=%0d does not match generated manifest=%0d",
+                             runtime_context_mode, full_chain_manifest_runtime_context);
+                    $finish(1);
+                end
+                if (runtime_context_mode &&
+                    ((full_chain_runtime_position < 0) ||
+                     (full_chain_runtime_position >= MAX_CONTEXT) ||
+                     (full_chain_embedding_output_base_addr !==
+                      full_chain_runtime_hidden_a_base_addr) ||
+                     (full_chain_runtime_hidden_a_base_addr == '0) ||
+                     (full_chain_runtime_hidden_b_base_addr == '0) ||
+                     (full_chain_runtime_hidden_a_base_addr ==
+                      full_chain_runtime_hidden_b_base_addr) ||
+                     (full_chain_runtime_rope_sin_base_addr !==
+                      (full_chain_runtime_rope_cos_base_addr +
+                       (MAX_CONTEXT * HEAD_DIM * MEM_DATA_BYTES))))) begin
+                    $display("FAIL: generated runtime-context include violates RoPE/hidden contract");
+                    $finish(1);
+                end
                 layer0_qkv_packet_base_addr = full_qkv_qmap_base[0];
             end
 `endif
@@ -2358,7 +2413,7 @@ module tb_qmap_one_token_layer_scheduler;
 `ifdef QMAP_ONE_TOKEN_TB_USE_TOP
 `ifdef QMAP_ONE_TOKEN_TB_FULL_CHAIN
             if (full_chain_mode) begin
-                tail_final_hidden_base = full_layer_output_base[full_chain_layer_count - 1];
+                tail_final_hidden_base = full_actual_layer_output_base[full_chain_layer_count - 1];
             end
             else begin
                 tail_final_hidden_base = layer_output_base_l2;
@@ -2453,6 +2508,38 @@ module tb_qmap_one_token_layer_scheduler;
     endfunction
 
 `ifdef QMAP_ONE_TOKEN_TB_FULL_CHAIN
+    function automatic logic [ADDR_WIDTH-1 : 0] full_chain_effective_input_hidden_base(
+        input integer layer
+    );
+        begin
+            full_chain_effective_input_hidden_base = full_actual_input_hidden_base[layer];
+        end
+    endfunction
+
+    function automatic logic [ADDR_WIDTH-1 : 0] full_chain_effective_layer_output_base(
+        input integer layer
+    );
+        begin
+            full_chain_effective_layer_output_base = full_actual_layer_output_base[layer];
+        end
+    endfunction
+
+    function automatic integer full_runtime_hidden_word_index(
+        input logic [ADDR_WIDTH-1 : 0] addr
+    );
+        begin
+            if (in_range(addr, full_chain_runtime_hidden_a_base_addr,
+                         VEC1024 * MEM_DATA_BYTES)) begin
+                full_runtime_hidden_word_index =
+                    (addr - full_chain_runtime_hidden_a_base_addr) >> 2;
+            end
+            else begin
+                full_runtime_hidden_word_index = VEC1024 +
+                    ((addr - full_chain_runtime_hidden_b_base_addr) >> 2);
+            end
+        end
+    endfunction
+
     function automatic integer full_chain_active_memory_layer;
         begin
             if (use_tail_mem) begin
@@ -2474,7 +2561,15 @@ module tb_qmap_one_token_layer_scheduler;
             full_chain_memory_hit = 1'b0;
             if ((layer >= 0) && (layer < full_chain_layer_count)) begin
                 full_chain_memory_hit =
-                    in_range(addr, full_input_hidden_base[layer], VEC1024 * MEM_DATA_BYTES) ||
+                    in_range(addr, full_chain_effective_input_hidden_base(layer),
+                             VEC1024 * MEM_DATA_BYTES) ||
+                    (runtime_context_mode &&
+                     (in_range(addr, full_chain_runtime_hidden_a_base_addr,
+                               VEC1024 * MEM_DATA_BYTES) ||
+                      in_range(addr, full_chain_runtime_hidden_b_base_addr,
+                               VEC1024 * MEM_DATA_BYTES) ||
+                      in_range(addr, full_chain_runtime_rope_cos_base_addr,
+                               ROPE_TABLE_WORDS * MEM_DATA_BYTES))) ||
                     in_range(addr, full_qkv_qmap_base[layer], QKV_IMAGE_BYTES) ||
                     in_range(addr, full_input_norm_qmap_base[layer], INPUT_NORM_IMAGE_BYTES) ||
                     in_range(addr, full_frontend_qmap_base[layer], FRONT_IMAGE_BYTES) ||
@@ -2506,7 +2601,21 @@ module tb_qmap_one_token_layer_scheduler;
         begin
             layer = full_chain_active_memory_layer();
             full_chain_memory_word = 32'hBADF_C001;
-            if (in_range(addr, full_input_hidden_base[layer], VEC1024 * MEM_DATA_BYTES)) begin
+            if (runtime_context_mode &&
+                (in_range(addr, full_chain_runtime_hidden_a_base_addr,
+                          VEC1024 * MEM_DATA_BYTES) ||
+                 in_range(addr, full_chain_runtime_hidden_b_base_addr,
+                          VEC1024 * MEM_DATA_BYTES))) begin
+                index = full_runtime_hidden_word_index(addr);
+                full_chain_memory_word = full_runtime_hidden_mem[index];
+            end
+            else if (runtime_context_mode &&
+                     in_range(addr, full_chain_runtime_rope_cos_base_addr,
+                              ROPE_TABLE_WORDS * MEM_DATA_BYTES)) begin
+                index = (addr - full_chain_runtime_rope_cos_base_addr) >> 2;
+                full_chain_memory_word = full_runtime_rope_mem[index];
+            end
+            else if (in_range(addr, full_input_hidden_base[layer], VEC1024 * MEM_DATA_BYTES)) begin
                 source_layer = (layer == 0) ? 0 : (layer - 1);
                 source_offset = (full_input_hidden_base[layer] - full_residual_qmap_base[source_layer]) >> 2;
                 index = (source_layer * RESIDUAL_WORDS) + source_offset +
@@ -2881,6 +2990,14 @@ module tb_qmap_one_token_layer_scheduler;
             if ((layer < 0) || (layer >= full_chain_layer_count)) begin
                 fail_once("FAIL: full-chain write resolved to an invalid layer");
             end
+            else if (runtime_context_mode &&
+                     (in_range(addr, full_chain_runtime_hidden_a_base_addr,
+                               VEC1024 * MEM_DATA_BYTES) ||
+                      in_range(addr, full_chain_runtime_hidden_b_base_addr,
+                               VEC1024 * MEM_DATA_BYTES))) begin
+                index = full_runtime_hidden_word_index(addr);
+                full_runtime_hidden_mem[index] = data;
+            end
             else if (in_range(addr, full_qkv_qmap_base[layer], QKV_IMAGE_BYTES)) begin
                 index = (layer * QKV_WORDS) + ((addr - full_qkv_qmap_base[layer]) >> 2);
                 full_qkv_qmap[index] = data;
@@ -3176,7 +3293,8 @@ module tb_qmap_one_token_layer_scheduler;
             end
             classify_full_chain_write_addr = 0;
             if (embedding_true3_mode && !embedding_written &&
-                in_range(addr, full_layer_output_base[0], VEC1024 * MEM_DATA_BYTES)) begin
+                in_range(addr, full_chain_embedding_output_base_addr,
+                         VEC1024 * MEM_DATA_BYTES)) begin
                 classify_full_chain_write_addr = WRITE_EMBEDDING;
             end
             else if (in_range(addr, full_input_norm_output_base[layer], VEC1024 * MEM_DATA_BYTES)) begin
@@ -3221,7 +3339,8 @@ module tb_qmap_one_token_layer_scheduler;
             else if (in_range(addr, full_down_output_base[layer], VEC1024 * MEM_DATA_BYTES)) begin
                 classify_full_chain_write_addr = WRITE_DOWN;
             end
-            else if (in_range(addr, full_layer_output_base[layer], VEC1024 * MEM_DATA_BYTES)) begin
+            else if (in_range(addr, full_chain_effective_layer_output_base(layer),
+                              VEC1024 * MEM_DATA_BYTES)) begin
                 classify_full_chain_write_addr = WRITE_LAYER;
             end
         end
@@ -3376,6 +3495,26 @@ module tb_qmap_one_token_layer_scheduler;
         end
     endfunction
 
+    function automatic integer classify_completed_write_addr(
+        input logic [ADDR_WIDTH-1 : 0] addr
+    );
+        begin
+            classify_completed_write_addr = classify_write_addr(addr);
+`ifdef QMAP_ONE_TOKEN_TB_FULL_CHAIN
+            // The legacy embedding output aliases Layer 0's descriptor output.
+            // At the final embedding beat embedding_written has just become true,
+            // so use the not-yet-observed response to preserve request identity.
+            if (full_chain_mode && embedding_true3_mode &&
+                !embedding_response_seen &&
+                (embedding_write_accept_count == VEC1024) &&
+                in_range(addr, full_chain_embedding_output_base_addr,
+                         VEC1024 * MEM_DATA_BYTES)) begin
+                classify_completed_write_addr = WRITE_EMBEDDING;
+            end
+`endif
+        end
+    endfunction
+
     function automatic integer cache_layer_for_addr(input logic [ADDR_WIDTH-1 : 0] addr);
         integer element_index;
         logic [ADDR_WIDTH-1 : 0] selected_base;
@@ -3462,9 +3601,11 @@ module tb_qmap_one_token_layer_scheduler;
                     WRITE_UP: expected_write_base = full_up_output_base[layer];
                     WRITE_SILU_HIDDEN: expected_write_base = full_silu_output_base[layer];
                     WRITE_DOWN: expected_write_base = full_down_output_base[layer];
-                    WRITE_LAYER: expected_write_base = full_layer_output_base[layer];
+                    WRITE_LAYER: expected_write_base =
+                        full_chain_effective_layer_output_base(layer);
                     WRITE_INPUT_NORM: expected_write_base = full_input_norm_output_base[layer];
-                    WRITE_EMBEDDING: expected_write_base = full_layer_output_base[0];
+                    WRITE_EMBEDDING: expected_write_base =
+                        full_chain_embedding_output_base_addr;
                     default: expected_write_base = '0;
                 endcase
             end
@@ -3845,7 +3986,8 @@ module tb_qmap_one_token_layer_scheduler;
 
 `ifdef QMAP_ONE_TOKEN_TB_FULL_CHAIN
             if ((full_chain_mode &&
-                 (tail_final_hidden_base !== full_layer_output_base[full_chain_layer_count - 1])) ||
+                 (tail_final_hidden_base !==
+                  full_actual_layer_output_base[full_chain_layer_count - 1])) ||
                 (!full_chain_mode && (tail_final_hidden_base !== layer_output_base_l2))) begin
 `else
             if (tail_final_hidden_base !== layer_output_base_l2) begin
@@ -4193,6 +4335,10 @@ module tb_qmap_one_token_layer_scheduler;
                     end
                     else begin
                         layer_written = 1'b0;
+                        if (full_chain_mode && runtime_context_mode) begin
+                            runtime_layer_output_write_req_count[write_layer] =
+                                runtime_layer_output_write_req_count[write_layer] + 1;
+                        end
                     end
                 end
                 default: begin
@@ -4321,6 +4467,10 @@ module tb_qmap_one_token_layer_scheduler;
                             write_mismatch_count = write_mismatch_count + 1;
                         end
                         update_cache_word(addr, data);
+                        if (full_chain_mode && runtime_context_mode) begin
+                            runtime_cache_write_word_count[write_layer] =
+                                runtime_cache_write_word_count[write_layer] + 1;
+                        end
                         cache_write_accept_count = cache_write_accept_count + 1;
                         if ((cache_write_accept_count % TOTAL_CACHE_WRITES) == 0) begin
                             cache_written = 1'b1;
@@ -4463,6 +4613,10 @@ module tb_qmap_one_token_layer_scheduler;
                     end
                 end
                 default: begin
+                    if (print_count < 64) begin
+                        $display("FAIL: unknown write kind=%0d layer=%0d index=%0d addr=0x%016h",
+                                 kind, write_layer, index, addr);
+                    end
                     fail_once("FAIL: write data for unknown write kind");
                 end
             endcase
@@ -4472,14 +4626,36 @@ module tb_qmap_one_token_layer_scheduler;
 `ifdef QMAP_ONE_TOKEN_TB_FULL_CHAIN
     task check_full_chain_read_ready;
         input logic [ADDR_WIDTH-1 : 0] addr;
+        input integer len_bytes;
         integer layer;
+        integer cache_start_element;
+        integer cache_end_element;
+        integer cache_start_local;
+        integer cache_end_local;
+        integer cache_start_plane;
+        integer cache_end_plane;
+        integer cache_start_position;
+        integer cache_end_position;
+        logic [ADDR_WIDTH-1 : 0] request_end_addr;
+        logic [ADDR_WIDTH-1 : 0] runtime_cos_row_base;
+        logic [ADDR_WIDTH-1 : 0] runtime_sin_row_base;
         begin
             layer = active_layer_index;
+            request_end_addr = addr + len_bytes - 1;
+            runtime_cos_row_base = full_chain_runtime_rope_cos_base_addr +
+                (full_chain_runtime_position * HEAD_DIM * MEM_DATA_BYTES);
+            runtime_sin_row_base = full_chain_runtime_rope_sin_base_addr +
+                (full_chain_runtime_position * HEAD_DIM * MEM_DATA_BYTES);
             if ((layer < 0) || (layer >= full_chain_layer_count)) begin
                 fail_once("FAIL: full-chain read resolved to an invalid active layer");
             end
             else begin
-                if (in_range(addr, full_input_hidden_base[layer], VEC1024 * MEM_DATA_BYTES)) begin
+                if (in_range(addr, full_chain_effective_input_hidden_base(layer),
+                             VEC1024 * MEM_DATA_BYTES)) begin
+                    if (runtime_context_mode) begin
+                        runtime_hidden_read_req_count[layer] =
+                            runtime_hidden_read_req_count[layer] + 1;
+                    end
                     if (first_layer_hidden_read_cycle[layer] < 0) begin
                         first_layer_hidden_read_cycle[layer] = cycle_count;
                     end
@@ -4519,6 +4695,43 @@ module tb_qmap_one_token_layer_scheduler;
                 if (is_cache_addr(addr) && !cache_written && (active_stage_debug > 0)) begin
                     fail_once("FAIL: full-chain K/V cache read before frontend cache writes completed");
                 end
+                if (runtime_context_mode && is_cache_addr(addr)) begin
+                    cache_start_element = (addr - full_chain_kv_cache_base_addr) >> 2;
+                    cache_end_element = (request_end_addr - full_chain_kv_cache_base_addr) >> 2;
+                    cache_start_local = cache_start_element % CACHE_WORDS_FULL;
+                    cache_end_local = cache_end_element % CACHE_WORDS_FULL;
+                    cache_start_plane = cache_start_local / (NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM);
+                    cache_end_plane = cache_end_local / (NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM);
+                    cache_start_position =
+                        (cache_start_local % (MAX_CONTEXT * HEAD_DIM)) / HEAD_DIM;
+                    cache_end_position =
+                        (cache_end_local % (MAX_CONTEXT * HEAD_DIM)) / HEAD_DIM;
+                    if ((cache_layer_for_addr(addr) != layer) ||
+                        (cache_layer_for_addr(request_end_addr) != layer) ||
+                        (cache_start_plane > 1) || (cache_end_plane > 1) ||
+                        (cache_start_position > full_chain_runtime_position) ||
+                        (cache_end_position > full_chain_runtime_position)) begin
+                        fail_once("FAIL: runtime cache read escaped active layer/position context");
+                    end
+                    runtime_cache_read_req_count[layer] =
+                        runtime_cache_read_req_count[layer] + 1;
+                end
+                if (runtime_context_mode &&
+                    in_range(addr, full_chain_runtime_rope_cos_base_addr,
+                             ROPE_TABLE_WORDS * MEM_DATA_BYTES)) begin
+                    if (!((in_range(addr, runtime_cos_row_base,
+                                    HEAD_DIM * MEM_DATA_BYTES) &&
+                           in_range(request_end_addr, runtime_cos_row_base,
+                                    HEAD_DIM * MEM_DATA_BYTES)) ||
+                          (in_range(addr, runtime_sin_row_base,
+                                    HEAD_DIM * MEM_DATA_BYTES) &&
+                           in_range(request_end_addr, runtime_sin_row_base,
+                                    HEAD_DIM * MEM_DATA_BYTES)))) begin
+                        fail_once("FAIL: runtime RoPE read did not select the manifest token row");
+                    end
+                    runtime_rope_read_req_count[layer] =
+                        runtime_rope_read_req_count[layer] + 1;
+                end
                 if (in_range(addr, full_q_rope_base[layer], VEC2048 * MEM_DATA_BYTES) && !q_rope_written) begin
                     fail_once("FAIL: full-chain Q RoPE read before producer write completed");
                 end
@@ -4557,7 +4770,7 @@ module tb_qmap_one_token_layer_scheduler;
         begin
 `ifdef QMAP_ONE_TOKEN_TB_FULL_CHAIN
             if (full_chain_mode) begin
-                check_full_chain_read_ready(addr);
+                check_full_chain_read_ready(addr, len_bytes);
             end
             else begin
 `endif
@@ -4796,6 +5009,11 @@ module tb_qmap_one_token_layer_scheduler;
             for (i = 0; i < MAX_LAYERS; i = i + 1) begin
                 layer_response_cycle[i] = -1;
                 first_layer_hidden_read_cycle[i] = -1;
+                runtime_hidden_read_req_count[i] = 0;
+                runtime_layer_output_write_req_count[i] = 0;
+                runtime_rope_read_req_count[i] = 0;
+                runtime_cache_read_req_count[i] = 0;
+                runtime_cache_write_word_count[i] = 0;
             end
             mem_rd_rsp_valid = 1'b0;
             mem_rd_rsp_data = 32'd0;
@@ -4901,8 +5119,15 @@ module tb_qmap_one_token_layer_scheduler;
 `ifdef QMAP_ONE_TOKEN_TB_FULL_CHAIN
             if (full_chain_mode) begin
                 layer_count = full_chain_layer_count;
-                input_hidden_base_addr = full_input_hidden_base[0];
-                output_hidden_base_addr = full_layer_output_base[full_chain_layer_count - 1];
+                if (runtime_context_mode) begin
+                    token_position = full_chain_runtime_position[POSITION_WIDTH-1 : 0];
+                    input_hidden_base_addr = full_chain_runtime_hidden_a_base_addr;
+                    output_hidden_base_addr = full_chain_runtime_hidden_b_base_addr;
+                end
+                else begin
+                    input_hidden_base_addr = full_input_hidden_base[0];
+                    output_hidden_base_addr = full_layer_output_base[full_chain_layer_count - 1];
+                end
                 kv_cache_base_addr = full_chain_kv_cache_base_addr;
                 for (i = 0; i < full_chain_layer_count; i = i + 1) begin
                     set_layer_packet_bases(i);
@@ -5134,6 +5359,7 @@ module tb_qmap_one_token_layer_scheduler;
             mmio_write_reg(MMIO_REG_LAYER_START, {{(32-LAYER_INDEX_WIDTH){1'b0}}, layer_start_index});
             mmio_write_reg(MMIO_REG_LAYER_COUNT, {{(32-LAYER_COUNT_WIDTH){1'b0}}, layer_count});
             mmio_write_reg(MMIO_REG_POSITION, {{(32-POSITION_WIDTH){1'b0}}, token_position});
+            mmio_write_reg(MMIO_REG_RUNTIME_CTRL, runtime_context_mode ? 32'd1 : 32'd0);
             mmio_write_reg(MMIO_REG_INPUT_TOKEN,
                            embedding_true3_mode ? embedding_token_mem[0] : 32'd0);
             mmio_write_addr64(MMIO_REG_INPUT_HIDDEN_LO, MMIO_REG_INPUT_HIDDEN_HI, input_hidden_base_addr);
@@ -5216,6 +5442,8 @@ module tb_qmap_one_token_layer_scheduler;
                               {{(32-LAYER_COUNT_WIDTH){1'b0}}, layer_count});
             mmio_expect_reg32("position", MMIO_REG_POSITION,
                               {{(32-POSITION_WIDTH){1'b0}}, token_position});
+            mmio_expect_reg32("runtime_ctrl", MMIO_REG_RUNTIME_CTRL,
+                              runtime_context_mode ? 32'd1 : 32'd0);
             mmio_expect_reg32("input_token", MMIO_REG_INPUT_TOKEN,
                               embedding_true3_mode ? embedding_token_mem[0] : 32'd0);
             mmio_expect_reg32("embedding_ctrl", MMIO_REG_EMBEDDING_CTRL,
@@ -5495,7 +5723,7 @@ module tb_qmap_one_token_layer_scheduler;
                 active_write_total_words <= mem_wr_req_len_bytes / MEM_DATA_BYTES;
 `ifdef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
                 if (use_tail_mem) begin
-                    active_write_kind <= classify_tail_write_addr(mem_wr_req_addr);
+                    active_write_kind = classify_tail_write_addr(mem_wr_req_addr);
                     check_tail_write_request(
                         classify_tail_write_addr(mem_wr_req_addr),
                         mem_wr_req_addr,
@@ -5503,11 +5731,11 @@ module tb_qmap_one_token_layer_scheduler;
                     );
                 end
                 else begin
-                    active_write_kind <= classify_write_addr(mem_wr_req_addr);
+                    active_write_kind = classify_write_addr(mem_wr_req_addr);
                     check_write_request(classify_write_addr(mem_wr_req_addr), mem_wr_req_addr, mem_wr_req_len_bytes / MEM_DATA_BYTES);
                 end
 `else
-                active_write_kind <= classify_write_addr(mem_wr_req_addr);
+                active_write_kind = classify_write_addr(mem_wr_req_addr);
                 check_write_request(classify_write_addr(mem_wr_req_addr), mem_wr_req_addr, mem_wr_req_len_bytes / MEM_DATA_BYTES);
 `endif
                 wr_req_accept_count = wr_req_accept_count + 1;
@@ -5535,7 +5763,7 @@ module tb_qmap_one_token_layer_scheduler;
 `ifdef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
                 if (use_tail_mem) begin
                     check_tail_write_word(
-                        active_write_kind,
+                        classify_tail_write_addr(active_write_addr),
                         active_write_index,
                         active_write_addr + (active_write_index * MEM_DATA_BYTES),
                         mem_wr_data,
@@ -5544,7 +5772,7 @@ module tb_qmap_one_token_layer_scheduler;
                 end
                 else begin
                     check_write_word(
-                        active_write_kind,
+                        classify_write_addr(active_write_addr),
                         active_write_index,
                         active_write_addr + (active_write_index * MEM_DATA_BYTES),
                         mem_wr_data,
@@ -5553,7 +5781,7 @@ module tb_qmap_one_token_layer_scheduler;
                 end
 `else
                 check_write_word(
-                    active_write_kind,
+                    classify_write_addr(active_write_addr),
                     active_write_index,
                     active_write_addr + (active_write_index * MEM_DATA_BYTES),
                     mem_wr_data,
@@ -5567,7 +5795,13 @@ module tb_qmap_one_token_layer_scheduler;
                     end
                     write_active <= 1'b0;
                     active_write_words_left <= 0;
-                    pending_write_kind <= active_write_kind;
+`ifdef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+                    pending_write_kind <= use_tail_mem ?
+                        classify_tail_write_addr(active_write_addr) :
+                        classify_completed_write_addr(active_write_addr);
+`else
+                    pending_write_kind <= classify_completed_write_addr(active_write_addr);
+`endif
                     pending_write_layer <= active_write_layer;
                     pending_write_addr <= active_write_addr;
                     write_done_delay <= 3;
@@ -5575,7 +5809,13 @@ module tb_qmap_one_token_layer_scheduler;
                         $fwrite(event_trace_fd, "%0d,write_last,0x%016h,%0d,0x%08h,1\n",
                                 cycle_count,
                                 active_write_addr + (active_write_index * MEM_DATA_BYTES),
-                                active_write_kind, mem_wr_data);
+`ifdef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+                                use_tail_mem ? classify_tail_write_addr(active_write_addr) :
+                                               classify_completed_write_addr(active_write_addr),
+`else
+                                classify_completed_write_addr(active_write_addr),
+`endif
+                                mem_wr_data);
                     end
                 end
                 else begin
@@ -6268,7 +6508,8 @@ module tb_qmap_one_token_layer_scheduler;
                 $display("  mmio expected hidden base    = 0x%016h", tail_final_hidden_base);
 `ifdef QMAP_ONE_TOKEN_TB_FULL_CHAIN
                 if (full_chain_mode) begin
-                    $display("  first layer output base      = 0x%016h", full_layer_output_base[0]);
+                    $display("  first layer output base      = 0x%016h",
+                             full_actual_layer_output_base[0]);
                     $display("  last layer output base       = 0x%016h", tail_final_hidden_base);
                 end
                 else
@@ -6336,7 +6577,7 @@ module tb_qmap_one_token_layer_scheduler;
 `ifdef QMAP_ONE_TOKEN_TB_FULL_CHAIN
             if (full_chain_mode && (full_chain_layer_count > 1) &&
                 (scheduler_last_layer_output_base ===
-                 full_layer_output_base[full_chain_layer_count - 2])) begin
+                 full_actual_layer_output_base[full_chain_layer_count - 2])) begin
                 tail_fail("FAIL: qmap_one_token_top full-chain selected the previous layer output");
             end
             else if (!full_chain_mode &&
@@ -6470,6 +6711,40 @@ module tb_qmap_one_token_layer_scheduler;
                          layer_response_cycle[full_chain_check_index - 1])) begin
                         fail_once("FAIL: full-chain layer consumed hidden data before previous response");
                     end
+                    if (runtime_context_mode) begin
+                        if ((full_actual_input_hidden_base[full_chain_check_index] !==
+                             ((full_chain_check_index[0] == 1'b0) ?
+                              full_chain_runtime_hidden_a_base_addr :
+                              full_chain_runtime_hidden_b_base_addr)) ||
+                            (full_actual_layer_output_base[full_chain_check_index] !==
+                             ((full_chain_check_index[0] == 1'b0) ?
+                              full_chain_runtime_hidden_b_base_addr :
+                              full_chain_runtime_hidden_a_base_addr))) begin
+                            fail_once("FAIL: runtime hidden A/B effective address parity mismatch");
+                        end
+                        if ((runtime_hidden_read_req_count[full_chain_check_index] <= 0) ||
+                            (runtime_layer_output_write_req_count[full_chain_check_index] != 1)) begin
+                            fail_once("FAIL: runtime hidden effective read/write address coverage mismatch");
+                        end
+                        if (runtime_rope_read_req_count[full_chain_check_index] != 2) begin
+                            fail_once("FAIL: runtime RoPE did not issue exactly one cos and one sin row read");
+                        end
+                        if ((runtime_cache_read_req_count[full_chain_check_index] <= 0) ||
+                            (runtime_cache_write_word_count[full_chain_check_index] !=
+                             TOTAL_CACHE_WRITES)) begin
+                            fail_once("FAIL: runtime K/V cache read/write coverage mismatch");
+                        end
+                    end
+                end
+                if (runtime_context_mode &&
+                    ((full_chain_embedding_output_base_addr !==
+                      full_chain_runtime_hidden_a_base_addr) ||
+                     (full_chain_runtime_last_hidden_base_addr !==
+                      full_actual_layer_output_base[full_chain_layer_count - 1]) ||
+                     (tail_descriptor_final_hidden_base !==
+                      full_layer_output_base[full_chain_layer_count - 1]) ||
+                     (tail_final_hidden_base !== full_chain_runtime_last_hidden_base_addr))) begin
+                    fail_once("FAIL: runtime embedding/layer/tail effective hidden handoff mismatch");
                 end
                 if ((tail_scheduler_done_cycle <=
                      layer_response_cycle[full_chain_layer_count - 1]) ||
@@ -6538,6 +6813,14 @@ module tb_qmap_one_token_layer_scheduler;
                          layer_response_cycle[full_chain_layer_count - 1]);
                 $display("  last layer first read  = %0d",
                          first_layer_hidden_read_cycle[full_chain_layer_count - 1]);
+                if (runtime_context_mode) begin
+                    $display("  runtime position       = %0d", full_chain_runtime_position);
+                    $display("  runtime hidden A/B     = 0x%016h / 0x%016h",
+                             full_chain_runtime_hidden_a_base_addr,
+                             full_chain_runtime_hidden_b_base_addr);
+                    $display("  runtime final hidden   = 0x%016h",
+                             full_chain_runtime_last_hidden_base_addr);
+                end
             end
             else if (embedding_true3_mode) begin
                 $display("  embedding response     = %0d, Layer0 first hidden read = %0d",

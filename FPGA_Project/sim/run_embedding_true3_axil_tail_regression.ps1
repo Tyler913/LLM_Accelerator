@@ -98,9 +98,10 @@ $simDir = Join-Path $repoRoot "FPGA_Project\sim"
 $tbPath = Join-Path $simDir "tb_qmap_one_token_layer_scheduler.sv"
 $exporter = Join-Path $repoRoot "Qwen3-0.6B-Base\python_each_module\52_export_embedding_true3_final_chain.py"
 $timingChecker = Join-Path $simDir "check_embedding_true3_axil_tail_timing.py"
-$rtlFiles = @(Get-ChildItem -LiteralPath $rtlDir -Filter "*.sv" -File |
-    Sort-Object FullName |
-    ForEach-Object { $_.FullName })
+. (Join-Path $simDir "load_rtl_manifest.ps1")
+$rtlBuild = Get-RtlBuildManifest -RtlDir $rtlDir
+$rtlFiles = $rtlBuild.SourceFiles
+$rtlIncludeDirs = $rtlBuild.IncludeDirs
 
 $conda = (Get-Command conda -ErrorAction Stop).Source
 $xvlog = (Get-Command xvlog -ErrorAction Stop).Source
@@ -255,7 +256,10 @@ try {
     Push-Location $xsimDir
     try {
         $snapshot = "embedding_true3_axil_tail_xsim"
-        $xvlogArgs = @("--sv", "--relax", "-i", $rtlDir)
+        $xvlogArgs = @("--sv", "--relax")
+        foreach ($includeDir in $rtlIncludeDirs) {
+            $xvlogArgs += @("-i", $includeDir)
+        }
         foreach ($define in @(
             "QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL",
             "QMAP_ONE_TOKEN_TB_USE_TOP",

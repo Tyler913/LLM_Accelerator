@@ -230,6 +230,18 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         help="Optional producer-written hidden-buffer address for input RMSNorm",
     )
     parser.add_argument(
+        "--runtime-rope-cos-base-addr",
+        type=parse_int_auto,
+        default=None,
+        help="Optional persistent rank-2 [MAX_CONTEXT, HEAD_DIM] RoPE cos table base",
+    )
+    parser.add_argument(
+        "--runtime-rope-sin-base-addr",
+        type=parse_int_auto,
+        default=None,
+        help="Optional persistent rank-2 [MAX_CONTEXT, HEAD_DIM] RoPE sin table base",
+    )
+    parser.add_argument(
         "--qkv-npz",
         type=Path,
         default=None,
@@ -331,6 +343,8 @@ def descriptor_base_from_hex(image_hex: Path, slot: int) -> int:
 
 
 def build_plan(args: argparse.Namespace) -> tuple[LayerBases, LayerPrefixes, dict[str, Any]]:
+    if (args.runtime_rope_cos_base_addr is None) != (args.runtime_rope_sin_base_addr is None):
+        raise ValueError("runtime RoPE mode requires both cos and sin base addresses")
     global QKV_QMAP_BASE0, BODY_QMAP_BASE0, LAYER_QMAP_STRIDE
     global QKV_QMAP_STRIDE, BODY_QMAP_STRIDE
     global WEIGHT_WINDOW_BASE0, WEIGHT_WINDOW_STRIDE, SIM_VECTOR_DIR, QMAP_VECTOR_DIR
@@ -614,6 +628,15 @@ def emit_commands(
         "--q-rope-expected-hex",
         frontend["q_rope_expected_hex"],
     )
+    if args.runtime_rope_cos_base_addr is not None:
+        frontend_cmd.extend(
+            [
+                "--runtime-rope-cos-base-addr",
+                hex(args.runtime_rope_cos_base_addr),
+                "--runtime-rope-sin-base-addr",
+                hex(args.runtime_rope_sin_base_addr),
+            ]
+        )
     if not args.dry_run:
         frontend_cmd.extend(
             [
@@ -1116,6 +1139,14 @@ def write_chain_manifest(
             "mlp_up_scale": format_addr(bases.mlp_up_scale),
             "mlp_down_weight": format_addr(bases.mlp_down_weight),
             "mlp_down_scale": format_addr(bases.mlp_down_scale),
+            **(
+                {
+                    "runtime_rope_cos": format_addr(args.runtime_rope_cos_base_addr),
+                    "runtime_rope_sin": format_addr(args.runtime_rope_sin_base_addr),
+                }
+                if args.runtime_rope_cos_base_addr is not None
+                else {}
+            ),
         },
         "prefixes": prefixes.__dict__,
         "files": files,

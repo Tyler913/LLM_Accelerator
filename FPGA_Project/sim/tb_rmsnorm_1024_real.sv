@@ -13,11 +13,11 @@
 //
 //   iverilog -g2012 -o FPGA_Project/sim/tb_rmsnorm_1024_real.vvp \
 //     FPGA_Project/sim/tb_rmsnorm_1024_real.sv \
-//     FPGA_Project/rtl/rmsnorm_1024.sv \
-//     FPGA_Project/rtl/rmsnorm_sum_squares_1024.sv \
-//     FPGA_Project/rtl/fixed_sqrt_u64.sv \
-//     FPGA_Project/rtl/fixed_udiv.sv \
-//     FPGA_Project/rtl/rmsnorm_apply_1024.sv
+//     FPGA_Project/rtl/model/norm/rmsnorm_1024.sv \
+//     FPGA_Project/rtl/model/norm/rmsnorm_sum_squares_1024.sv \
+//     FPGA_Project/rtl/lib/math/fixed_sqrt_u64.sv \
+//     FPGA_Project/rtl/lib/math/fixed_udiv.sv \
+//     FPGA_Project/rtl/model/norm/rmsnorm_apply_1024.sv
 //   vvp FPGA_Project/sim/tb_rmsnorm_1024_real.vvp
 
 module tb_rmsnorm_1024_real;

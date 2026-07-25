@@ -36,6 +36,10 @@ module qmap_attention_frontend_compute_path #(
 
     input  wire logic                         i_start,
     input  wire logic [ADDR_WIDTH-1 : 0]      i_qmap_base_addr,
+    input  wire logic                         i_runtime_context_valid,
+    input  wire logic [LAYER_INDEX_W-1 : 0]   i_runtime_layer_id,
+    input  wire logic [POSITION_INDEX_W-1 : 0] i_runtime_position,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_runtime_kv_cache_base_addr,
 
     output logic                              o_busy,
     output logic                              o_done,
@@ -94,6 +98,13 @@ module qmap_attention_frontend_compute_path #(
     localparam int KV_BYTES       = KV_COUNT * MEM_DATA_BYTES;
     localparam int PARAM_BYTES    = HEAD_DIM * MEM_DATA_BYTES;
     localparam int Q_ROPE_BYTES   = Q_COUNT * MEM_DATA_BYTES;
+    localparam int METADATA_WORDS = 16;
+    localparam int METADATA_BYTES = METADATA_WORDS * MEM_DATA_BYTES;
+    localparam int ROPE_TABLE_BYTES = MAX_CONTEXT * HEAD_DIM * MEM_DATA_BYTES;
+    localparam int KV_CACHE_BYTES = 2 * NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM * MEM_DATA_BYTES;
+    localparam int KV_KIND_STRIDE_BYTES = NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM * MEM_DATA_BYTES;
+    localparam int KV_HEAD_STRIDE_BYTES = MAX_CONTEXT * HEAD_DIM * MEM_DATA_BYTES;
+    localparam int KV_POSITION_STRIDE_BYTES = HEAD_DIM * MEM_DATA_BYTES;
     localparam logic [15 : 0] MAX_READ_BYTES_U16 = MAX_READ_BYTES;
     localparam logic [15 : 0] Q_ROPE_BYTES_U16 = Q_ROPE_BYTES;
 
@@ -154,6 +165,10 @@ module qmap_attention_frontend_compute_path #(
     logic [DESCRIPTOR_SLOTS*32-1 : 0] reader_desc_dim1_flat;
     logic [DESCRIPTOR_SLOTS*32-1 : 0] reader_desc_dim2_flat;
     logic [DESCRIPTOR_SLOTS*32-1 : 0] reader_desc_dim3_flat;
+    logic [DESCRIPTOR_SLOTS*64-1 : 0] reader_desc_stride0_bytes_flat;
+    logic [DESCRIPTOR_SLOTS*64-1 : 0] reader_desc_stride1_bytes_flat;
+    logic [DESCRIPTOR_SLOTS*64-1 : 0] reader_desc_stride2_bytes_flat;
+    logic [DESCRIPTOR_SLOTS*64-1 : 0] reader_desc_stride3_bytes_flat;
     logic [DESCRIPTOR_SLOTS*32-1 : 0] reader_desc_aux1_flat;
     logic [DESCRIPTOR_SLOTS*32-1 : 0] reader_desc_aux3_flat;
 
@@ -168,6 +183,10 @@ module qmap_attention_frontend_compute_path #(
     logic [31 : 0] desc_dim1 [0 : DESCRIPTOR_SLOTS-1];
     logic [31 : 0] desc_dim2 [0 : DESCRIPTOR_SLOTS-1];
     logic [31 : 0] desc_dim3 [0 : DESCRIPTOR_SLOTS-1];
+    logic [63 : 0] desc_stride0_bytes [0 : DESCRIPTOR_SLOTS-1];
+    logic [63 : 0] desc_stride1_bytes [0 : DESCRIPTOR_SLOTS-1];
+    logic [63 : 0] desc_stride2_bytes [0 : DESCRIPTOR_SLOTS-1];
+    logic [63 : 0] desc_stride3_bytes [0 : DESCRIPTOR_SLOTS-1];
     logic [31 : 0] desc_aux1 [0 : DESCRIPTOR_SLOTS-1];
     logic [31 : 0] desc_aux3 [0 : DESCRIPTOR_SLOTS-1];
 
@@ -219,6 +238,14 @@ module qmap_attention_frontend_compute_path #(
     logic [31 : 0] qrope_write_data_word;
     logic [LAYER_INDEX_W-1 : 0] metadata_layer_id;
     logic [POSITION_INDEX_W-1 : 0] metadata_position;
+    logic active_runtime_context_valid;
+    logic [LAYER_INDEX_W-1 : 0] active_runtime_layer_id;
+    logic [POSITION_INDEX_W-1 : 0] active_runtime_position;
+    logic [ADDR_WIDTH-1 : 0] active_runtime_kv_cache_base_addr;
+    logic [LAYER_INDEX_W-1 : 0] effective_layer_id;
+    logic [POSITION_INDEX_W-1 : 0] effective_position;
+    logic [ADDR_WIDTH-1 : 0] effective_kv_cache_base_addr;
+    logic [63 : 0] runtime_rope_row_offset_bytes;
 
     genvar desc_index;
     generate
@@ -234,6 +261,10 @@ module qmap_attention_frontend_compute_path #(
             assign desc_dim1[desc_index]         = reader_desc_dim1_flat[desc_index*32 +: 32];
             assign desc_dim2[desc_index]         = reader_desc_dim2_flat[desc_index*32 +: 32];
             assign desc_dim3[desc_index]         = reader_desc_dim3_flat[desc_index*32 +: 32];
+            assign desc_stride0_bytes[desc_index] = reader_desc_stride0_bytes_flat[desc_index*64 +: 64];
+            assign desc_stride1_bytes[desc_index] = reader_desc_stride1_bytes_flat[desc_index*64 +: 64];
+            assign desc_stride2_bytes[desc_index] = reader_desc_stride2_bytes_flat[desc_index*64 +: 64];
+            assign desc_stride3_bytes[desc_index] = reader_desc_stride3_bytes_flat[desc_index*64 +: 64];
             assign desc_aux1[desc_index]         = reader_desc_aux1_flat[desc_index*32 +: 32];
             assign desc_aux3[desc_index]         = reader_desc_aux3_flat[desc_index*32 +: 32];
         end
@@ -282,6 +313,10 @@ module qmap_attention_frontend_compute_path #(
         .o_desc_dim1_flat(reader_desc_dim1_flat),
         .o_desc_dim2_flat(reader_desc_dim2_flat),
         .o_desc_dim3_flat(reader_desc_dim3_flat),
+        .o_desc_stride0_bytes_flat(reader_desc_stride0_bytes_flat),
+        .o_desc_stride1_bytes_flat(reader_desc_stride1_bytes_flat),
+        .o_desc_stride2_bytes_flat(reader_desc_stride2_bytes_flat),
+        .o_desc_stride3_bytes_flat(reader_desc_stride3_bytes_flat),
         .o_desc_aux0_flat(),
         .o_desc_aux1_flat(reader_desc_aux1_flat),
         .o_desc_aux2_flat(),
@@ -304,9 +339,9 @@ module qmap_attention_frontend_compute_path #(
         .i_clk(i_clk),
         .i_rst_n(i_rst_n),
         .i_start(stage_start),
-        .i_cache_base_addr(desc_base_addr[SLOT_KV_CACHE]),
-        .i_layer_id(metadata_layer_id),
-        .i_position(metadata_position),
+        .i_cache_base_addr(effective_kv_cache_base_addr),
+        .i_layer_id(effective_layer_id),
+        .i_position(effective_position),
         .i_q_flat(q_flat),
         .i_k_flat(k_flat),
         .i_v_flat(v_flat),
@@ -340,6 +375,12 @@ module qmap_attention_frontend_compute_path #(
     assign o_read_slot_debug = active_read_slot;
     assign metadata_layer_id = desc_aux1[SLOT_METADATA][LAYER_INDEX_W-1 : 0];
     assign metadata_position = desc_aux3[SLOT_METADATA][POSITION_INDEX_W-1 : 0];
+    assign effective_layer_id = active_runtime_context_valid ? active_runtime_layer_id : metadata_layer_id;
+    assign effective_position = active_runtime_context_valid ? active_runtime_position : metadata_position;
+    assign effective_kv_cache_base_addr =
+        active_runtime_context_valid ? active_runtime_kv_cache_base_addr : desc_base_addr[SLOT_KV_CACHE];
+    assign runtime_rope_row_offset_bytes =
+        active_runtime_context_valid ? (active_runtime_position * PARAM_BYTES) : 64'd0;
     assign o_cache_write_count = stage_cache_write_count;
     assign o_saturation = stage_saturation;
     assign o_norm_saturation = stage_norm_saturation;
@@ -375,11 +416,11 @@ module qmap_attention_frontend_compute_path #(
                 current_read_total_bytes = PARAM_BYTES;
             end
             R_COS: begin
-                current_read_base_addr = desc_base_addr[SLOT_COS];
+                current_read_base_addr = desc_base_addr[SLOT_COS] + runtime_rope_row_offset_bytes;
                 current_read_total_bytes = PARAM_BYTES;
             end
             R_SIN: begin
-                current_read_base_addr = desc_base_addr[SLOT_SIN];
+                current_read_base_addr = desc_base_addr[SLOT_SIN] + runtime_rope_row_offset_bytes;
                 current_read_total_bytes = PARAM_BYTES;
             end
             default: begin
@@ -472,6 +513,7 @@ module qmap_attention_frontend_compute_path #(
             (desc_role[SLOT_SIN] != `QMAP_ROLE_ROPE_TABLE) ||
             (desc_role[SLOT_KV_CACHE] != `QMAP_ROLE_KV_CACHE) ||
             (desc_role[SLOT_Q_ROPE] != `QMAP_ROLE_OUTPUT) ||
+            (desc_dtype[SLOT_METADATA] != `QMAP_DTYPE_U32) ||
             (desc_dtype[SLOT_Q_FLAT] != `QMAP_DTYPE_I32_Q12_12) ||
             (desc_dtype[SLOT_K_FLAT] != `QMAP_DTYPE_I32_Q12_12) ||
             (desc_dtype[SLOT_V_FLAT] != `QMAP_DTYPE_I32_Q12_12) ||
@@ -479,16 +521,17 @@ module qmap_attention_frontend_compute_path #(
             (desc_dtype[SLOT_K_GAMMA] != `QMAP_DTYPE_I16_Q8_7) ||
             (desc_dtype[SLOT_COS] != `QMAP_DTYPE_I16_Q1_15) ||
             (desc_dtype[SLOT_SIN] != `QMAP_DTYPE_I16_Q1_15) ||
+            (desc_dtype[SLOT_KV_CACHE] != `QMAP_DTYPE_I32_Q12_12) ||
             (desc_dtype[SLOT_Q_ROPE] != `QMAP_DTYPE_I32_Q12_12) ||
+            (desc_rank[SLOT_METADATA] != 32'd1) ||
             (desc_rank[SLOT_Q_FLAT] != 32'd1) ||
             (desc_rank[SLOT_K_FLAT] != 32'd1) ||
             (desc_rank[SLOT_V_FLAT] != 32'd1) ||
             (desc_rank[SLOT_Q_GAMMA] != 32'd1) ||
             (desc_rank[SLOT_K_GAMMA] != 32'd1) ||
-            (desc_rank[SLOT_COS] != 32'd1) ||
-            (desc_rank[SLOT_SIN] != 32'd1) ||
             (desc_rank[SLOT_Q_ROPE] != 32'd1) ||
             (desc_rank[SLOT_KV_CACHE] != 32'd4) ||
+            (desc_element_bits[SLOT_METADATA] != 32) ||
             (desc_element_bits[SLOT_Q_FLAT] != IN_WIDTH) ||
             (desc_element_bits[SLOT_K_FLAT] != IN_WIDTH) ||
             (desc_element_bits[SLOT_V_FLAT] != IN_WIDTH) ||
@@ -496,30 +539,138 @@ module qmap_attention_frontend_compute_path #(
             (desc_element_bits[SLOT_K_GAMMA] != GAMMA_WIDTH) ||
             (desc_element_bits[SLOT_COS] != TRIG_WIDTH) ||
             (desc_element_bits[SLOT_SIN] != TRIG_WIDTH) ||
+            (desc_element_bits[SLOT_KV_CACHE] != OUT_WIDTH) ||
             (desc_element_bits[SLOT_Q_ROPE] != OUT_WIDTH) ||
+            (desc_dim0[SLOT_METADATA] != METADATA_WORDS) ||
+            (desc_dim1[SLOT_METADATA] != 32'd0) ||
+            (desc_dim2[SLOT_METADATA] != 32'd0) ||
+            (desc_dim3[SLOT_METADATA] != 32'd0) ||
             (desc_dim0[SLOT_Q_FLAT] != Q_COUNT) ||
+            (desc_dim1[SLOT_Q_FLAT] != 32'd0) ||
+            (desc_dim2[SLOT_Q_FLAT] != 32'd0) ||
+            (desc_dim3[SLOT_Q_FLAT] != 32'd0) ||
             (desc_dim0[SLOT_K_FLAT] != KV_COUNT) ||
+            (desc_dim1[SLOT_K_FLAT] != 32'd0) ||
+            (desc_dim2[SLOT_K_FLAT] != 32'd0) ||
+            (desc_dim3[SLOT_K_FLAT] != 32'd0) ||
             (desc_dim0[SLOT_V_FLAT] != KV_COUNT) ||
+            (desc_dim1[SLOT_V_FLAT] != 32'd0) ||
+            (desc_dim2[SLOT_V_FLAT] != 32'd0) ||
+            (desc_dim3[SLOT_V_FLAT] != 32'd0) ||
             (desc_dim0[SLOT_Q_GAMMA] != HEAD_DIM) ||
+            (desc_dim1[SLOT_Q_GAMMA] != 32'd0) ||
+            (desc_dim2[SLOT_Q_GAMMA] != 32'd0) ||
+            (desc_dim3[SLOT_Q_GAMMA] != 32'd0) ||
             (desc_dim0[SLOT_K_GAMMA] != HEAD_DIM) ||
-            (desc_dim0[SLOT_COS] != HEAD_DIM) ||
-            (desc_dim0[SLOT_SIN] != HEAD_DIM) ||
+            (desc_dim1[SLOT_K_GAMMA] != 32'd0) ||
+            (desc_dim2[SLOT_K_GAMMA] != 32'd0) ||
+            (desc_dim3[SLOT_K_GAMMA] != 32'd0) ||
             (desc_dim0[SLOT_Q_ROPE] != Q_COUNT) ||
+            (desc_dim1[SLOT_Q_ROPE] != 32'd0) ||
+            (desc_dim2[SLOT_Q_ROPE] != 32'd0) ||
+            (desc_dim3[SLOT_Q_ROPE] != 32'd0) ||
             (desc_dim0[SLOT_KV_CACHE] != 32'd2) ||
             (desc_dim1[SLOT_KV_CACHE] != NUM_KV_HEADS) ||
             (desc_dim2[SLOT_KV_CACHE] != MAX_CONTEXT) ||
             (desc_dim3[SLOT_KV_CACHE] != HEAD_DIM) ||
+            (desc_stride0_bytes[SLOT_METADATA] != 64'd4) ||
+            (desc_stride1_bytes[SLOT_METADATA] != 64'd0) ||
+            (desc_stride2_bytes[SLOT_METADATA] != 64'd0) ||
+            (desc_stride3_bytes[SLOT_METADATA] != 64'd0) ||
+            (desc_stride0_bytes[SLOT_Q_FLAT] != 64'd4) ||
+            (desc_stride1_bytes[SLOT_Q_FLAT] != 64'd0) ||
+            (desc_stride2_bytes[SLOT_Q_FLAT] != 64'd0) ||
+            (desc_stride3_bytes[SLOT_Q_FLAT] != 64'd0) ||
+            (desc_stride0_bytes[SLOT_K_FLAT] != 64'd4) ||
+            (desc_stride1_bytes[SLOT_K_FLAT] != 64'd0) ||
+            (desc_stride2_bytes[SLOT_K_FLAT] != 64'd0) ||
+            (desc_stride3_bytes[SLOT_K_FLAT] != 64'd0) ||
+            (desc_stride0_bytes[SLOT_V_FLAT] != 64'd4) ||
+            (desc_stride1_bytes[SLOT_V_FLAT] != 64'd0) ||
+            (desc_stride2_bytes[SLOT_V_FLAT] != 64'd0) ||
+            (desc_stride3_bytes[SLOT_V_FLAT] != 64'd0) ||
+            (desc_stride0_bytes[SLOT_Q_GAMMA] != 64'd4) ||
+            (desc_stride1_bytes[SLOT_Q_GAMMA] != 64'd0) ||
+            (desc_stride2_bytes[SLOT_Q_GAMMA] != 64'd0) ||
+            (desc_stride3_bytes[SLOT_Q_GAMMA] != 64'd0) ||
+            (desc_stride0_bytes[SLOT_K_GAMMA] != 64'd4) ||
+            (desc_stride1_bytes[SLOT_K_GAMMA] != 64'd0) ||
+            (desc_stride2_bytes[SLOT_K_GAMMA] != 64'd0) ||
+            (desc_stride3_bytes[SLOT_K_GAMMA] != 64'd0) ||
+            (desc_stride0_bytes[SLOT_KV_CACHE] != KV_KIND_STRIDE_BYTES) ||
+            (desc_stride1_bytes[SLOT_KV_CACHE] != KV_HEAD_STRIDE_BYTES) ||
+            (desc_stride2_bytes[SLOT_KV_CACHE] != KV_POSITION_STRIDE_BYTES) ||
+            (desc_stride3_bytes[SLOT_KV_CACHE] != 64'd4) ||
+            (desc_stride0_bytes[SLOT_Q_ROPE] != 64'd4) ||
+            (desc_stride1_bytes[SLOT_Q_ROPE] != 64'd0) ||
+            (desc_stride2_bytes[SLOT_Q_ROPE] != 64'd0) ||
+            (desc_stride3_bytes[SLOT_Q_ROPE] != 64'd0) ||
+            (desc_nbytes[SLOT_METADATA] != METADATA_BYTES) ||
             (desc_nbytes[SLOT_Q_FLAT] != Q_BYTES) ||
             (desc_nbytes[SLOT_K_FLAT] != KV_BYTES) ||
             (desc_nbytes[SLOT_V_FLAT] != KV_BYTES) ||
             (desc_nbytes[SLOT_Q_GAMMA] != PARAM_BYTES) ||
             (desc_nbytes[SLOT_K_GAMMA] != PARAM_BYTES) ||
-            (desc_nbytes[SLOT_COS] != PARAM_BYTES) ||
-            (desc_nbytes[SLOT_SIN] != PARAM_BYTES) ||
+            (desc_nbytes[SLOT_KV_CACHE] != KV_CACHE_BYTES) ||
             (desc_nbytes[SLOT_Q_ROPE] != Q_ROPE_BYTES) ||
             (desc_aux1[SLOT_METADATA] >= NUM_LAYERS) ||
             (desc_aux3[SLOT_METADATA] >= MAX_CONTEXT)) begin
             validate_error = 1'b1;
+        end
+
+        if (active_runtime_context_valid) begin
+            if ((active_runtime_layer_id >= NUM_LAYERS) ||
+                (active_runtime_position >= MAX_CONTEXT) ||
+                (active_runtime_kv_cache_base_addr[1 : 0] != 2'b00) ||
+                (desc_base_addr[SLOT_COS][1 : 0] != 2'b00) ||
+                (desc_base_addr[SLOT_SIN][1 : 0] != 2'b00) ||
+                (desc_aux1[SLOT_METADATA] != active_runtime_layer_id) ||
+                (desc_rank[SLOT_COS] != 32'd2) ||
+                (desc_rank[SLOT_SIN] != 32'd2) ||
+                (desc_dim0[SLOT_COS] != MAX_CONTEXT) ||
+                (desc_dim1[SLOT_COS] != HEAD_DIM) ||
+                (desc_dim2[SLOT_COS] != 32'd0) ||
+                (desc_dim3[SLOT_COS] != 32'd0) ||
+                (desc_dim0[SLOT_SIN] != MAX_CONTEXT) ||
+                (desc_dim1[SLOT_SIN] != HEAD_DIM) ||
+                (desc_dim2[SLOT_SIN] != 32'd0) ||
+                (desc_dim3[SLOT_SIN] != 32'd0) ||
+                (desc_nbytes[SLOT_COS] != ROPE_TABLE_BYTES) ||
+                (desc_nbytes[SLOT_SIN] != ROPE_TABLE_BYTES) ||
+                (desc_stride0_bytes[SLOT_COS] != PARAM_BYTES) ||
+                (desc_stride1_bytes[SLOT_COS] != 64'd4) ||
+                (desc_stride2_bytes[SLOT_COS] != 64'd0) ||
+                (desc_stride3_bytes[SLOT_COS] != 64'd0) ||
+                (desc_stride0_bytes[SLOT_SIN] != PARAM_BYTES) ||
+                (desc_stride1_bytes[SLOT_SIN] != 64'd4) ||
+                (desc_stride2_bytes[SLOT_SIN] != 64'd0) ||
+                (desc_stride3_bytes[SLOT_SIN] != 64'd0)) begin
+                validate_error = 1'b1;
+            end
+        end
+        else begin
+            if ((desc_rank[SLOT_COS] != 32'd1) ||
+                (desc_rank[SLOT_SIN] != 32'd1) ||
+                (desc_dim0[SLOT_COS] != HEAD_DIM) ||
+                (desc_dim1[SLOT_COS] != 32'd0) ||
+                (desc_dim2[SLOT_COS] != 32'd0) ||
+                (desc_dim3[SLOT_COS] != 32'd0) ||
+                (desc_dim0[SLOT_SIN] != HEAD_DIM) ||
+                (desc_dim1[SLOT_SIN] != 32'd0) ||
+                (desc_dim2[SLOT_SIN] != 32'd0) ||
+                (desc_dim3[SLOT_SIN] != 32'd0) ||
+                (desc_nbytes[SLOT_COS] != PARAM_BYTES) ||
+                (desc_nbytes[SLOT_SIN] != PARAM_BYTES) ||
+                (desc_stride0_bytes[SLOT_COS] != 64'd4) ||
+                (desc_stride1_bytes[SLOT_COS] != 64'd0) ||
+                (desc_stride2_bytes[SLOT_COS] != 64'd0) ||
+                (desc_stride3_bytes[SLOT_COS] != 64'd0) ||
+                (desc_stride0_bytes[SLOT_SIN] != 64'd4) ||
+                (desc_stride1_bytes[SLOT_SIN] != 64'd0) ||
+                (desc_stride2_bytes[SLOT_SIN] != 64'd0) ||
+                (desc_stride3_bytes[SLOT_SIN] != 64'd0)) begin
+                validate_error = 1'b1;
+            end
         end
     end
 
@@ -556,6 +707,10 @@ module qmap_attention_frontend_compute_path #(
             cache_wr_data_reg <= 32'd0;
             qrope_write_req_seen <= 1'b0;
             qrope_write_word_index <= 32'd0;
+            active_runtime_context_valid <= 1'b0;
+            active_runtime_layer_id <= '0;
+            active_runtime_position <= '0;
+            active_runtime_kv_cache_base_addr <= '0;
             o_done <= 1'b0;
             o_error <= 1'b0;
             o_q_rope_write_word_count <= 32'd0;
@@ -602,6 +757,10 @@ module qmap_attention_frontend_compute_path #(
                         stage_error_seen <= 1'b0;
                         qrope_write_req_seen <= 1'b0;
                         qrope_write_word_index <= 32'd0;
+                        active_runtime_context_valid <= (i_runtime_context_valid === 1'b1);
+                        active_runtime_layer_id <= i_runtime_layer_id;
+                        active_runtime_position <= i_runtime_position;
+                        active_runtime_kv_cache_base_addr <= i_runtime_kv_cache_base_addr;
                         o_error <= 1'b0;
                         o_q_rope_write_word_count <= 32'd0;
                         o_mem_read_burst_count <= 32'd0;

@@ -27,7 +27,7 @@ keeps `xparameters.h` simple.
 
 ## New RTL seam
 
-`FPGA_Project/rtl/qmap_one_token_axi_top.sv` is the BD-facing shell. It exposes:
+`FPGA_Project/rtl/top/one_token/qmap_one_token_axi_top.sv` is the BD-facing shell. It exposes:
 
 - `S_AXI`: 32-bit AXI4-Lite slave for `qmap_one_token_control_regs.sv`.
 - `M_AXI`: 32-bit AXI4 master for PL-DDR reads/writes, using the existing
@@ -68,7 +68,7 @@ before implementation or XSA export.
 ## Suggested BD wiring sequence
 
 1. Add/sync RTL sources.
-   - Include `FPGA_Project/rtl/qmap_one_token_axi_top.sv` plus the existing RTL
+   - Include `FPGA_Project/rtl/top/one_token/qmap_one_token_axi_top.sv` plus the existing RTL
      dependencies already used by local xsim.
    - Set `qmap_one_token_axi_top` as a module-reference BD cell, or package it as
      custom IP only after the module-reference path validates.

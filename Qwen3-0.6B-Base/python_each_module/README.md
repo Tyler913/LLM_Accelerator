@@ -105,5 +105,13 @@ Script map:
 - `44_export_qmap_mlp_residual_add_image.py`: wraps
   `post_attn_hidden[1024]`, `down_out[1024]`, layer-output scratch, and
   expected layer-output debug data into the next QMAP per-layer body packet
+- `56_export_persistent_multitoken_layer_golden.py`: loads the checkpoint once,
+  quantizes one decoder layer once, then runs a token-id sequence from position
+  zero through the exact fixed-point embedding/RMSNorm/QKV/RoPE, retained K/V,
+  attention, output projection, residual, and MLP arithmetic. It emits physical
+  K/V write address/data traces plus word32 seam vectors for every position.
+  Its root `layer_output_q14_10_words32.hex` can be passed back with
+  `--input-hidden-hex --layer-id N+1` to validate the same two-token sequence in
+  the next layer without invoking the full 28-layer artifact exporter.
 - `run_all_module_validations.py`: runs the core validation scripts `01`-`10`
   in order

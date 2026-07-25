@@ -42,10 +42,13 @@ module qmap_post_attention_residual_norm_compute_path #(
 
     input  wire logic                         i_start,
     input  wire logic [ADDR_WIDTH-1 : 0]      i_qmap_base_addr,
+    input  wire logic                         i_residual_base_override_valid,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_residual_base_override_addr,
 
     output logic                              o_busy,
     output logic                              o_done,
     output logic                              o_error,
+    output logic [ADDR_WIDTH-1 : 0]           o_effective_residual_base_addr,
     output logic                              o_residual_saturation,
     output logic                              o_norm_saturation,
     output logic [31 : 0]                     o_residual_count,
@@ -191,6 +194,8 @@ module qmap_post_attention_residual_norm_compute_path #(
     logic [31 : 0] element_index;
     logic [ADDR_WIDTH-1 : 0] active_read_base_addr;
     logic [ADDR_WIDTH-1 : 0] active_write_base_addr;
+    logic residual_base_override_valid_reg;
+    logic [ADDR_WIDTH-1 : 0] residual_base_override_addr_reg;
     logic [31 : 0] write_data_word;
     logic read_protocol_error;
     logic validate_error;
@@ -359,13 +364,17 @@ module qmap_post_attention_residual_norm_compute_path #(
         ((read_chunk_index * CHUNK_WORDS) + read_word_index);
 
     assign read_protocol_error = (i_mem_rd_rsp_last != (read_word_index == (CHUNK_WORDS - 1)));
+    assign o_effective_residual_base_addr =
+        (residual_base_override_valid_reg === 1'b1) ?
+        residual_base_override_addr_reg :
+        desc_base_addr[SLOT_RESIDUAL][ADDR_WIDTH-1 : 0];
 
     always @* begin
         case (active_read_slot)
-            R_RESIDUAL: active_read_base_addr = desc_base_addr[SLOT_RESIDUAL];
+            R_RESIDUAL: active_read_base_addr = o_effective_residual_base_addr;
             R_O_PROJ:   active_read_base_addr = desc_base_addr[SLOT_O_PROJ];
             R_GAMMA:    active_read_base_addr = desc_base_addr[SLOT_GAMMA];
-            default:    active_read_base_addr = desc_base_addr[SLOT_RESIDUAL];
+            default:    active_read_base_addr = o_effective_residual_base_addr;
         endcase
     end
 
@@ -460,6 +469,8 @@ module qmap_post_attention_residual_norm_compute_path #(
             (desc_nbytes[SLOT_NORM] != VECTOR_BYTES) ||
             (desc_nbytes[SLOT_EXPECTED_HIDDEN] != VECTOR_BYTES) ||
             (desc_nbytes[SLOT_EXPECTED_NORM] != VECTOR_BYTES) ||
+            (o_effective_residual_base_addr == '0) ||
+            (o_effective_residual_base_addr[1 : 0] != 2'b00) ||
             ((desc_flags[SLOT_RESIDUAL] & `QMAP_TENSOR_F_READ_ONLY) == 32'd0) ||
             ((desc_flags[SLOT_O_PROJ] & `QMAP_TENSOR_F_READ_ONLY) == 32'd0) ||
             ((desc_flags[SLOT_GAMMA] & `QMAP_TENSOR_F_READ_ONLY) == 32'd0) ||
@@ -496,6 +507,8 @@ module qmap_post_attention_residual_norm_compute_path #(
             residual_flat <= '0;
             o_proj_flat <= '0;
             gamma_flat <= '0;
+            residual_base_override_valid_reg <= 1'b0;
+            residual_base_override_addr_reg <= '0;
             o_done <= 1'b0;
             o_error <= 1'b0;
             o_residual_saturation <= 1'b0;
@@ -556,6 +569,9 @@ module qmap_post_attention_residual_norm_compute_path #(
                         read_chunk_index <= 32'd0;
                         read_word_index <= 32'd0;
                         write_word_index <= 32'd0;
+                        residual_base_override_valid_reg <=
+                            (i_residual_base_override_valid === 1'b1);
+                        residual_base_override_addr_reg <= i_residual_base_override_addr;
                         state <= S_READER_START;
                     end
                 end

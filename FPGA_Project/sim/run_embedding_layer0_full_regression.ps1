@@ -60,9 +60,10 @@ $tbPath = Join-Path $simDir "tb_qmap_one_token_embedding_layer0_frontend.sv"
 $exporter = Join-Path $repoRoot "Qwen3-0.6B-Base\python_each_module\51_export_embedding_layer0_full_chain.py"
 $timingChecker = Join-Path $simDir "check_embedding_layer0_full_timing.py"
 $sourceVectorDir = Join-Path $simDir "vectors"
-$rtlFiles = @(Get-ChildItem -LiteralPath $rtlDir -Filter "*.sv" -File |
-    Sort-Object FullName |
-    ForEach-Object { $_.FullName })
+. (Join-Path $simDir "load_rtl_manifest.ps1")
+$rtlBuild = Get-RtlBuildManifest -RtlDir $rtlDir
+$rtlFiles = $rtlBuild.SourceFiles
+$rtlIncludeDirs = $rtlBuild.IncludeDirs
 
 $conda = (Get-Command conda -ErrorAction Stop).Source
 $xvlog = (Get-Command xvlog -ErrorAction Stop).Source
@@ -99,8 +100,11 @@ try {
     Push-Location $xsimDir
     try {
         $snapshot = "embedding_layer0_full_xsim"
-        $xvlogArgs = @("--sv", "--relax", "-i", $rtlDir,
-            "--log", (Join-Path $xsimDir "xvlog.log")) + $rtlFiles + @($tbPath)
+        $xvlogArgs = @("--sv", "--relax")
+        foreach ($includeDir in $rtlIncludeDirs) {
+            $xvlogArgs += @("-i", $includeDir)
+        }
+        $xvlogArgs += @("--log", (Join-Path $xsimDir "xvlog.log")) + $rtlFiles + @($tbPath)
         Write-Host "[xvlog]  compile complete Layer 0 chain"
         Invoke-LoggedCommand -Executable $xvlog -Arguments $xvlogArgs `
             -LogPath (Join-Path $xsimDir "xvlog_console.log") | Out-Null

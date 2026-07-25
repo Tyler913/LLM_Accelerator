@@ -31,14 +31,18 @@ module tb_qmap_post_attention_residual_norm_compute_path;
     localparam int SLOT_GAMMA = 3;
     localparam int SLOT_HIDDEN = 4;
     localparam int SLOT_NORM = 5;
+    localparam int SLOT_EXPECTED_HIDDEN = 6;
     localparam int REGION_QMAP = 0;
 
     logic clk;
     logic rst_n;
     logic start;
+    logic residual_base_override_valid;
+    logic [ADDR_WIDTH-1 : 0] residual_base_override_addr;
     logic busy;
     logic done;
     logic error;
+    logic [ADDR_WIDTH-1 : 0] effective_residual_base_addr;
     logic residual_saturation;
     logic norm_saturation;
     logic [31 : 0] residual_count;
@@ -100,6 +104,7 @@ module tb_qmap_post_attention_residual_norm_compute_path;
     integer done_seen_count;
     integer last_done_cycle;
     integer normal_done_cycle;
+    integer runtime_done_cycle;
     integer invalid_done_cycle;
     integer spurious_start_seen_busy;
     integer write_mismatch_count;
@@ -114,6 +119,7 @@ module tb_qmap_post_attention_residual_norm_compute_path;
     integer mem_gamma_req_count;
     integer mem_wr_req_count;
     integer mem_wr_word_count_total;
+    integer current_run_write_req_base;
 
     integer normal_residual_count;
     integer normal_stage_cycle_count;
@@ -131,6 +137,8 @@ module tb_qmap_post_attention_residual_norm_compute_path;
 
     logic [ADDR_WIDTH-1 : 0] qmap_base_addr;
     logic [ADDR_WIDTH-1 : 0] residual_base_addr;
+    logic [ADDR_WIDTH-1 : 0] runtime_residual_base_addr;
+    logic [ADDR_WIDTH-1 : 0] expected_residual_base_addr;
     logic [ADDR_WIDTH-1 : 0] o_proj_base_addr;
     logic [ADDR_WIDTH-1 : 0] gamma_base_addr;
     logic [ADDR_WIDTH-1 : 0] hidden_base_addr;
@@ -178,9 +186,12 @@ module tb_qmap_post_attention_residual_norm_compute_path;
         .i_rst_n(rst_n),
         .i_start(start),
         .i_qmap_base_addr(qmap_base_addr),
+        .i_residual_base_override_valid(residual_base_override_valid),
+        .i_residual_base_override_addr(residual_base_override_addr),
         .o_busy(busy),
         .o_done(done),
         .o_error(error),
+        .o_effective_residual_base_addr(effective_residual_base_addr),
         .o_residual_saturation(residual_saturation),
         .o_norm_saturation(norm_saturation),
         .o_residual_count(residual_count),
@@ -290,6 +301,8 @@ module tb_qmap_post_attention_residual_norm_compute_path;
             $readmemh({vector_dir, "/", prefix, "_norm_saturation.hex"}, expected_norm_saturation_mem);
 
             residual_base_addr = descriptor_base_addr(SLOT_RESIDUAL);
+            runtime_residual_base_addr = descriptor_base_addr(SLOT_EXPECTED_HIDDEN);
+            expected_residual_base_addr = residual_base_addr;
             o_proj_base_addr = descriptor_base_addr(SLOT_O_PROJ);
             gamma_base_addr = descriptor_base_addr(SLOT_GAMMA);
             hidden_base_addr = descriptor_base_addr(SLOT_HIDDEN);
@@ -304,9 +317,10 @@ module tb_qmap_post_attention_residual_norm_compute_path;
             active_read_index = (mem_rd_req_addr - qmap_base_addr) >> 2;
             active_words_left = mem_rd_req_len_bytes / MEM_DATA_BYTES;
 
-            if ((mem_rd_req_addr >= residual_base_addr) &&
-                (mem_rd_req_addr < (residual_base_addr + VECTOR_BYTES))) begin
-                expected_addr = residual_base_addr + (mem_residual_req_count * MAX_READ_BYTES);
+            if ((mem_rd_req_addr >= expected_residual_base_addr) &&
+                (mem_rd_req_addr < (expected_residual_base_addr + VECTOR_BYTES))) begin
+                expected_addr = expected_residual_base_addr +
+                                ((mem_residual_req_count % VECTOR_BURSTS) * MAX_READ_BYTES);
                 if ((mem_rd_req_addr !== expected_addr) || (mem_rd_req_len_bytes != MAX_READ_BYTES)) begin
                     $display("FAIL: residual read request mismatch idx=%0d addr=0x%016h expected=0x%016h len=%0d",
                              mem_residual_req_count, mem_rd_req_addr, expected_addr, mem_rd_req_len_bytes);
@@ -316,7 +330,8 @@ module tb_qmap_post_attention_residual_norm_compute_path;
             end
             else if ((mem_rd_req_addr >= o_proj_base_addr) &&
                      (mem_rd_req_addr < (o_proj_base_addr + VECTOR_BYTES))) begin
-                expected_addr = o_proj_base_addr + (mem_o_proj_req_count * MAX_READ_BYTES);
+                expected_addr = o_proj_base_addr +
+                                ((mem_o_proj_req_count % VECTOR_BURSTS) * MAX_READ_BYTES);
                 if ((mem_rd_req_addr !== expected_addr) || (mem_rd_req_len_bytes != MAX_READ_BYTES)) begin
                     $display("FAIL: o_proj read request mismatch idx=%0d addr=0x%016h expected=0x%016h len=%0d",
                              mem_o_proj_req_count, mem_rd_req_addr, expected_addr, mem_rd_req_len_bytes);
@@ -326,7 +341,8 @@ module tb_qmap_post_attention_residual_norm_compute_path;
             end
             else if ((mem_rd_req_addr >= gamma_base_addr) &&
                      (mem_rd_req_addr < (gamma_base_addr + VECTOR_BYTES))) begin
-                expected_addr = gamma_base_addr + (mem_gamma_req_count * MAX_READ_BYTES);
+                expected_addr = gamma_base_addr +
+                                ((mem_gamma_req_count % VECTOR_BURSTS) * MAX_READ_BYTES);
                 if ((mem_rd_req_addr !== expected_addr) || (mem_rd_req_len_bytes != MAX_READ_BYTES)) begin
                     $display("FAIL: gamma read request mismatch idx=%0d addr=0x%016h expected=0x%016h len=%0d",
                              mem_gamma_req_count, mem_rd_req_addr, expected_addr, mem_rd_req_len_bytes);
@@ -352,7 +368,7 @@ module tb_qmap_post_attention_residual_norm_compute_path;
 
     task check_write_request;
         begin
-            if (mem_wr_req_count == 0) begin
+            if ((mem_wr_req_count - current_run_write_req_base) == 0) begin
                 if ((mem_wr_req_addr !== hidden_base_addr) || (mem_wr_req_len_bytes != VECTOR_BYTES)) begin
                     $display("FAIL: hidden write request mismatch addr=0x%016h expected=0x%016h len=%0d",
                              mem_wr_req_addr, hidden_base_addr, mem_wr_req_len_bytes);
@@ -360,7 +376,7 @@ module tb_qmap_post_attention_residual_norm_compute_path;
                 end
                 active_write_kind = 0;
             end
-            else if (mem_wr_req_count == 1) begin
+            else if ((mem_wr_req_count - current_run_write_req_base) == 1) begin
                 if ((mem_wr_req_addr !== norm_base_addr) || (mem_wr_req_len_bytes != VECTOR_BYTES)) begin
                     $display("FAIL: norm write request mismatch addr=0x%016h expected=0x%016h len=%0d",
                              mem_wr_req_addr, norm_base_addr, mem_wr_req_len_bytes);
@@ -462,6 +478,10 @@ module tb_qmap_post_attention_residual_norm_compute_path;
     task run_success;
         integer prior_done_count;
         begin
+            residual_base_override_valid = 1'b0;
+            residual_base_override_addr = '0;
+            expected_residual_base_addr = residual_base_addr;
+            current_run_write_req_base = mem_wr_req_count;
             prior_done_count = done_seen_count;
             pulse_start();
 
@@ -487,6 +507,147 @@ module tb_qmap_post_attention_residual_norm_compute_path;
             normal_inv_rms = inv_rms;
             normal_residual_saturation = residual_saturation;
             normal_norm_saturation = norm_saturation;
+            if (effective_residual_base_addr !== residual_base_addr) begin
+                $display("FAIL: legacy effective residual base mismatch actual=0x%016h expected=0x%016h",
+                         effective_residual_base_addr, residual_base_addr);
+                mismatch_count = mismatch_count + 1;
+            end
+        end
+    endtask
+
+    task run_success_runtime_override;
+        integer prior_done_count;
+        integer source_word_index;
+        integer runtime_word_index;
+        integer word_index;
+        integer residual_req_count_before;
+        integer o_proj_req_count_before;
+        integer gamma_req_count_before;
+        integer write_req_count_before;
+        integer write_word_count_before;
+        integer desc_base_lo_word_index;
+        integer desc_base_hi_word_index;
+        logic [31 : 0] saved_desc_base_lo;
+        logic [31 : 0] saved_desc_base_hi;
+        begin
+            source_word_index = (residual_base_addr - qmap_base_addr) >> 2;
+            runtime_word_index = (runtime_residual_base_addr - qmap_base_addr) >> 2;
+            for (word_index = 0 ; word_index < VECTOR_WORDS ; word_index = word_index + 1) begin
+                qmap_mem[runtime_word_index + word_index] = qmap_mem[source_word_index + word_index];
+            end
+
+            desc_base_lo_word_index = DESCRIPTOR_TABLE_WORD_OFFSET +
+                                      (SLOT_RESIDUAL * DESCRIPTOR_WORDS) + DESC_BASE_LO_WORD;
+            desc_base_hi_word_index = DESCRIPTOR_TABLE_WORD_OFFSET +
+                                      (SLOT_RESIDUAL * DESCRIPTOR_WORDS) + DESC_BASE_HI_WORD;
+            saved_desc_base_lo = qmap_mem[desc_base_lo_word_index];
+            saved_desc_base_hi = qmap_mem[desc_base_hi_word_index];
+            qmap_mem[desc_base_lo_word_index] = 32'd0;
+            qmap_mem[desc_base_hi_word_index] = 32'd0;
+
+            residual_base_override_valid = 1'b1;
+            residual_base_override_addr = runtime_residual_base_addr;
+            expected_residual_base_addr = runtime_residual_base_addr;
+            current_run_write_req_base = mem_wr_req_count;
+            residual_req_count_before = mem_residual_req_count;
+            o_proj_req_count_before = mem_o_proj_req_count;
+            gamma_req_count_before = mem_gamma_req_count;
+            write_req_count_before = mem_wr_req_count;
+            write_word_count_before = mem_wr_word_count_total;
+            prior_done_count = done_seen_count;
+
+            pulse_start();
+            residual_base_override_valid = 1'b0;
+            residual_base_override_addr = '0;
+
+            if (effective_residual_base_addr !== runtime_residual_base_addr) begin
+                $display("FAIL: runtime residual override was not latched actual=0x%016h expected=0x%016h",
+                         effective_residual_base_addr, runtime_residual_base_addr);
+                mismatch_count = mismatch_count + 1;
+            end
+
+            wait_for_next_done(prior_done_count, 220000);
+            runtime_done_cycle = last_done_cycle;
+
+            if (error != 1'b0) begin
+                $display("FAIL: valid runtime residual override asserted error");
+                mismatch_count = mismatch_count + 1;
+            end
+            if (effective_residual_base_addr !== runtime_residual_base_addr) begin
+                $display("FAIL: runtime effective residual base changed actual=0x%016h expected=0x%016h",
+                         effective_residual_base_addr, runtime_residual_base_addr);
+                mismatch_count = mismatch_count + 1;
+            end
+            if (((mem_residual_req_count - residual_req_count_before) != VECTOR_BURSTS) ||
+                ((mem_o_proj_req_count - o_proj_req_count_before) != VECTOR_BURSTS) ||
+                ((mem_gamma_req_count - gamma_req_count_before) != VECTOR_BURSTS)) begin
+                $display("FAIL: runtime input burst deltas residual/o/gamma=%0d/%0d/%0d expected=%0d",
+                         mem_residual_req_count - residual_req_count_before,
+                         mem_o_proj_req_count - o_proj_req_count_before,
+                         mem_gamma_req_count - gamma_req_count_before,
+                         VECTOR_BURSTS);
+                mismatch_count = mismatch_count + 1;
+            end
+            if (((mem_wr_req_count - write_req_count_before) != 2) ||
+                ((mem_wr_word_count_total - write_word_count_before) != (2 * VECTOR_WORDS))) begin
+                $display("FAIL: runtime write deltas req=%0d words=%0d expected=2/%0d",
+                         mem_wr_req_count - write_req_count_before,
+                         mem_wr_word_count_total - write_word_count_before,
+                         2 * VECTOR_WORDS);
+                mismatch_count = mismatch_count + 1;
+            end
+
+            qmap_mem[desc_base_lo_word_index] = saved_desc_base_lo;
+            qmap_mem[desc_base_hi_word_index] = saved_desc_base_hi;
+            expected_residual_base_addr = residual_base_addr;
+        end
+    endtask
+
+    task run_invalid_runtime_base;
+        input logic [ADDR_WIDTH-1 : 0] bad_base_addr;
+        input integer case_id;
+        integer prior_done_count;
+        integer residual_req_count_before;
+        integer o_proj_req_count_before;
+        integer gamma_req_count_before;
+        integer write_req_count_before;
+        integer write_word_count_before;
+        begin
+            residual_base_override_valid = 1'b1;
+            residual_base_override_addr = bad_base_addr;
+            expected_residual_base_addr = bad_base_addr;
+            residual_req_count_before = mem_residual_req_count;
+            o_proj_req_count_before = mem_o_proj_req_count;
+            gamma_req_count_before = mem_gamma_req_count;
+            write_req_count_before = mem_wr_req_count;
+            write_word_count_before = mem_wr_word_count_total;
+            prior_done_count = done_seen_count;
+
+            pulse_start();
+            wait_for_next_done(prior_done_count, 220000);
+
+            if (error != 1'b1) begin
+                $display("FAIL: invalid runtime residual base case %0d did not assert error addr=0x%016h",
+                         case_id, bad_base_addr);
+                mismatch_count = mismatch_count + 1;
+            end
+            if (effective_residual_base_addr !== bad_base_addr) begin
+                $display("FAIL: invalid runtime effective base mismatch case=%0d actual=0x%016h expected=0x%016h",
+                         case_id, effective_residual_base_addr, bad_base_addr);
+                mismatch_count = mismatch_count + 1;
+            end
+            if ((mem_residual_req_count != residual_req_count_before) ||
+                (mem_o_proj_req_count != o_proj_req_count_before) ||
+                (mem_gamma_req_count != gamma_req_count_before) ||
+                (mem_wr_req_count != write_req_count_before) ||
+                (mem_wr_word_count_total != write_word_count_before)) begin
+                $display("FAIL: invalid runtime residual base case %0d performed payload I/O", case_id);
+                mismatch_count = mismatch_count + 1;
+            end
+
+            residual_base_override_valid = 1'b0;
+            residual_base_override_addr = '0;
+            expected_residual_base_addr = residual_base_addr;
         end
     endtask
 
@@ -497,6 +658,9 @@ module tb_qmap_post_attention_residual_norm_compute_path;
         integer saved_write_req_count;
         integer saved_write_word_count;
         begin
+            residual_base_override_valid = 1'b0;
+            residual_base_override_addr = '0;
+            expected_residual_base_addr = residual_base_addr;
             prior_done_count = done_seen_count;
             saved_write_req_count = mem_wr_req_count;
             saved_write_word_count = mem_wr_word_count_total;
@@ -769,12 +933,15 @@ module tb_qmap_post_attention_residual_norm_compute_path;
         load_vectors();
 
         start = 1'b0;
+        residual_base_override_valid = 1'b0;
+        residual_base_override_addr = '0;
         rst_n = 1'b0;
         mismatch_count = 0;
         print_count = 0;
         done_seen_count = 0;
         last_done_cycle = -1;
         normal_done_cycle = 0;
+        runtime_done_cycle = 0;
         invalid_done_cycle = 0;
         spurious_start_seen_busy = 0;
         write_mismatch_count = 0;
@@ -788,12 +955,16 @@ module tb_qmap_post_attention_residual_norm_compute_path;
         mem_gamma_req_count = 0;
         mem_wr_req_count = 0;
         mem_wr_word_count_total = 0;
+        current_run_write_req_base = 0;
 
         repeat (8) @(posedge clk);
         @(negedge clk);
         rst_n = 1'b1;
 
         run_success();
+        run_success_runtime_override();
+        run_invalid_runtime_base('0, 0);
+        run_invalid_runtime_base(runtime_residual_base_addr + 2, 1);
         run_invalid_bad_gamma_dtype();
 
         $fclose(trace_fd);
@@ -817,11 +988,12 @@ module tb_qmap_post_attention_residual_norm_compute_path;
         $display("  write mismatches      = %0d", write_mismatch_count);
         $display("  max_abs hidden/norm   = %0d / %0d", hidden_max_abs_diff, norm_max_abs_diff);
         $display("  spurious start covered= %0d", spurious_start_seen_busy);
-        $display("  done cycles normal/bad= %0d / %0d", normal_done_cycle, invalid_done_cycle);
+        $display("  done cycles legacy/runtime/bad = %0d / %0d / %0d",
+                 normal_done_cycle, runtime_done_cycle, invalid_done_cycle);
         $display("  trace                 = %s", tracefile);
 
-        if (done_seen_count != 2) begin
-            $display("FAIL: done pulse count mismatch actual=%0d expected=2", done_seen_count);
+        if (done_seen_count != 5) begin
+            $display("FAIL: done pulse count mismatch actual=%0d expected=5", done_seen_count);
             mismatch_count = mismatch_count + 1;
         end
         if (normal_residual_count != INPUT_SIZE) begin
@@ -833,25 +1005,25 @@ module tb_qmap_post_attention_residual_norm_compute_path;
                      normal_hidden_write_count, normal_norm_write_count, VECTOR_WORDS);
             mismatch_count = mismatch_count + 1;
         end
-        if ((mem_residual_req_count != VECTOR_BURSTS) ||
-            (mem_o_proj_req_count != VECTOR_BURSTS) ||
-            (mem_gamma_req_count != VECTOR_BURSTS)) begin
+        if ((mem_residual_req_count != (2 * VECTOR_BURSTS)) ||
+            (mem_o_proj_req_count != (2 * VECTOR_BURSTS)) ||
+            (mem_gamma_req_count != (2 * VECTOR_BURSTS))) begin
             $display("FAIL: input burst counts mismatch residual=%0d o_proj=%0d gamma=%0d expected=%0d",
-                     mem_residual_req_count, mem_o_proj_req_count, mem_gamma_req_count, VECTOR_BURSTS);
+                     mem_residual_req_count, mem_o_proj_req_count, mem_gamma_req_count, 2 * VECTOR_BURSTS);
             mismatch_count = mismatch_count + 1;
         end
-        if (mem_qmap_req_count != 18) begin
-            $display("FAIL: QMAP reader request count mismatch actual=%0d expected=18", mem_qmap_req_count);
+        if (mem_qmap_req_count != 45) begin
+            $display("FAIL: QMAP reader request count mismatch actual=%0d expected=45", mem_qmap_req_count);
             mismatch_count = mismatch_count + 1;
         end
-        if ((mem_req_fire_count != 30) || (mem_rsp_fire_count != 3616)) begin
-            $display("FAIL: memory read count mismatch req=%0d rsp=%0d expected=30/3616",
+        if ((mem_req_fire_count != 69) || (mem_rsp_fire_count != 7504)) begin
+            $display("FAIL: memory read count mismatch req=%0d rsp=%0d expected=69/7504",
                      mem_req_fire_count, mem_rsp_fire_count);
             mismatch_count = mismatch_count + 1;
         end
-        if ((mem_wr_req_count != 2) || (mem_wr_word_count_total != (2 * VECTOR_WORDS))) begin
-            $display("FAIL: write count mismatch req=%0d words=%0d expected=2/%0d",
-                     mem_wr_req_count, mem_wr_word_count_total, 2 * VECTOR_WORDS);
+        if ((mem_wr_req_count != 4) || (mem_wr_word_count_total != (4 * VECTOR_WORDS))) begin
+            $display("FAIL: write count mismatch req=%0d words=%0d expected=4/%0d",
+                     mem_wr_req_count, mem_wr_word_count_total, 4 * VECTOR_WORDS);
             mismatch_count = mismatch_count + 1;
         end
         if ((normal_dut_read_bursts != 21) || (normal_dut_read_words != 3344) ||

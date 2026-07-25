@@ -7,7 +7,7 @@
 //
 //   iverilog -g2012 -o FPGA_Project/sim/tb_rmsnorm_apply_1024.vvp \
 //     FPGA_Project/sim/tb_rmsnorm_apply_1024.sv \
-//     FPGA_Project/rtl/rmsnorm_apply_1024.sv
+//     FPGA_Project/rtl/model/norm/rmsnorm_apply_1024.sv
 //   vvp FPGA_Project/sim/tb_rmsnorm_apply_1024.vvp
 
 module tb_rmsnorm_apply_1024;

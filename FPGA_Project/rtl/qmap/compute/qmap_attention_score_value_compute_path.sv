@@ -40,6 +40,10 @@ module qmap_attention_score_value_compute_path #(
 
     input  wire logic                         i_start,
     input  wire logic [ADDR_WIDTH-1 : 0]      i_qmap_base_addr,
+    input  wire logic                         i_runtime_context_valid,
+    input  wire logic [LAYER_INDEX_W-1 : 0]  i_runtime_layer_id,
+    input  wire logic [POSITION_INDEX_W-1 : 0] i_runtime_position,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_runtime_kv_cache_base_addr,
 
     output logic                              o_busy,
     output logic                              o_done,
@@ -90,6 +94,9 @@ module qmap_attention_score_value_compute_path #(
     localparam int CHUNK_WORDS    = MAX_READ_BYTES / MEM_DATA_BYTES;
     localparam int Q_COUNT        = NUM_Q_HEADS * HEAD_DIM;
     localparam int KV_CACHE_BYTES = 2 * NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM * MEM_DATA_BYTES;
+    localparam int KV_KIND_STRIDE_BYTES = NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM * MEM_DATA_BYTES;
+    localparam int KV_HEAD_STRIDE_BYTES = MAX_CONTEXT * HEAD_DIM * MEM_DATA_BYTES;
+    localparam int KV_POSITION_STRIDE_BYTES = HEAD_DIM * MEM_DATA_BYTES;
     localparam int Q_BYTES        = Q_COUNT * MEM_DATA_BYTES;
     localparam int EXP_LUT_BYTES  = EXP_LUT_SIZE * MEM_DATA_BYTES;
     localparam int ATTN_OUT_BYTES = Q_COUNT * MEM_DATA_BYTES;
@@ -148,6 +155,10 @@ module qmap_attention_score_value_compute_path #(
     logic [DESCRIPTOR_SLOTS*32-1 : 0] reader_desc_dim1_flat;
     logic [DESCRIPTOR_SLOTS*32-1 : 0] reader_desc_dim2_flat;
     logic [DESCRIPTOR_SLOTS*32-1 : 0] reader_desc_dim3_flat;
+    logic [DESCRIPTOR_SLOTS*64-1 : 0] reader_desc_stride0_bytes_flat;
+    logic [DESCRIPTOR_SLOTS*64-1 : 0] reader_desc_stride1_bytes_flat;
+    logic [DESCRIPTOR_SLOTS*64-1 : 0] reader_desc_stride2_bytes_flat;
+    logic [DESCRIPTOR_SLOTS*64-1 : 0] reader_desc_stride3_bytes_flat;
     logic [DESCRIPTOR_SLOTS*32-1 : 0] reader_desc_aux0_flat;
     logic [DESCRIPTOR_SLOTS*32-1 : 0] reader_desc_aux1_flat;
     logic [DESCRIPTOR_SLOTS*32-1 : 0] reader_desc_aux2_flat;
@@ -164,6 +175,10 @@ module qmap_attention_score_value_compute_path #(
     logic [31 : 0] desc_dim1 [0 : DESCRIPTOR_SLOTS-1];
     logic [31 : 0] desc_dim2 [0 : DESCRIPTOR_SLOTS-1];
     logic [31 : 0] desc_dim3 [0 : DESCRIPTOR_SLOTS-1];
+    logic [63 : 0] desc_stride0_bytes [0 : DESCRIPTOR_SLOTS-1];
+    logic [63 : 0] desc_stride1_bytes [0 : DESCRIPTOR_SLOTS-1];
+    logic [63 : 0] desc_stride2_bytes [0 : DESCRIPTOR_SLOTS-1];
+    logic [63 : 0] desc_stride3_bytes [0 : DESCRIPTOR_SLOTS-1];
     logic [31 : 0] desc_aux0 [0 : DESCRIPTOR_SLOTS-1];
     logic [31 : 0] desc_aux1 [0 : DESCRIPTOR_SLOTS-1];
     logic [31 : 0] desc_aux2 [0 : DESCRIPTOR_SLOTS-1];
@@ -236,6 +251,12 @@ module qmap_attention_score_value_compute_path #(
     logic [LAYER_INDEX_W-1 : 0] metadata_layer_id;
     logic [CACHE_LENGTH_W-1 : 0] metadata_cache_length;
     logic signed [SCALE_WIDTH-1 : 0] metadata_score_scale_q0_31;
+    logic runtime_context_valid_reg;
+    logic [LAYER_INDEX_W-1 : 0] runtime_layer_id_reg;
+    logic [POSITION_INDEX_W-1 : 0] runtime_position_reg;
+    logic [ADDR_WIDTH-1 : 0] runtime_kv_cache_base_addr_reg;
+    logic [CACHE_LENGTH_W-1 : 0] runtime_cache_length;
+    logic [ADDR_WIDTH-1 : 0] effective_kv_cache_base_addr;
 
     logic [KV_HEAD_INDEX_W-1 : 0] cache_req_head;
     logic [POSITION_INDEX_W-1 : 0] cache_req_position;
@@ -266,6 +287,10 @@ module qmap_attention_score_value_compute_path #(
             assign desc_dim1[desc_index]         = reader_desc_dim1_flat[desc_index*32 +: 32];
             assign desc_dim2[desc_index]         = reader_desc_dim2_flat[desc_index*32 +: 32];
             assign desc_dim3[desc_index]         = reader_desc_dim3_flat[desc_index*32 +: 32];
+            assign desc_stride0_bytes[desc_index] = reader_desc_stride0_bytes_flat[desc_index*64 +: 64];
+            assign desc_stride1_bytes[desc_index] = reader_desc_stride1_bytes_flat[desc_index*64 +: 64];
+            assign desc_stride2_bytes[desc_index] = reader_desc_stride2_bytes_flat[desc_index*64 +: 64];
+            assign desc_stride3_bytes[desc_index] = reader_desc_stride3_bytes_flat[desc_index*64 +: 64];
             assign desc_aux0[desc_index]         = reader_desc_aux0_flat[desc_index*32 +: 32];
             assign desc_aux1[desc_index]         = reader_desc_aux1_flat[desc_index*32 +: 32];
             assign desc_aux2[desc_index]         = reader_desc_aux2_flat[desc_index*32 +: 32];
@@ -316,6 +341,10 @@ module qmap_attention_score_value_compute_path #(
         .o_desc_dim1_flat(reader_desc_dim1_flat),
         .o_desc_dim2_flat(reader_desc_dim2_flat),
         .o_desc_dim3_flat(reader_desc_dim3_flat),
+        .o_desc_stride0_bytes_flat(reader_desc_stride0_bytes_flat),
+        .o_desc_stride1_bytes_flat(reader_desc_stride1_bytes_flat),
+        .o_desc_stride2_bytes_flat(reader_desc_stride2_bytes_flat),
+        .o_desc_stride3_bytes_flat(reader_desc_stride3_bytes_flat),
         .o_desc_aux0_flat(reader_desc_aux0_flat),
         .o_desc_aux1_flat(reader_desc_aux1_flat),
         .o_desc_aux2_flat(reader_desc_aux2_flat),
@@ -431,7 +460,7 @@ module qmap_attention_score_value_compute_path #(
         .POSITION_INDEX_W(POSITION_INDEX_W),
         .DIM_INDEX_W(DIM_INDEX_W)
     ) cache_addr_gen (
-        .i_base_addr(desc_base_addr[SLOT_KV_CACHE]),
+        .i_base_addr(effective_kv_cache_base_addr),
         .i_layer_id(metadata_layer_id),
         .i_kv_kind(active_cache_kind),
         .i_head_id(cache_req_head),
@@ -451,9 +480,21 @@ module qmap_attention_score_value_compute_path #(
     assign o_k_read_count = score_k_response_count;
     assign o_v_read_count = value_v_response_count;
 
-    assign metadata_layer_id = desc_aux1[SLOT_METADATA][LAYER_INDEX_W-1 : 0];
-    assign metadata_cache_length = desc_aux2[SLOT_METADATA][CACHE_LENGTH_W-1 : 0];
+    assign runtime_cache_length =
+        {{(CACHE_LENGTH_W-POSITION_INDEX_W){1'b0}}, runtime_position_reg} + 1'b1;
+    assign metadata_layer_id =
+        runtime_context_valid_reg ?
+        runtime_layer_id_reg :
+        desc_aux1[SLOT_METADATA][LAYER_INDEX_W-1 : 0];
+    assign metadata_cache_length =
+        runtime_context_valid_reg ?
+        runtime_cache_length :
+        desc_aux2[SLOT_METADATA][CACHE_LENGTH_W-1 : 0];
     assign metadata_score_scale_q0_31 = desc_aux0[SLOT_METADATA];
+    assign effective_kv_cache_base_addr =
+        runtime_context_valid_reg ?
+        runtime_kv_cache_base_addr_reg :
+        desc_base_addr[SLOT_KV_CACHE];
 
     assign cache_req_head =
         (active_cache_kind == 1'b0) ? score_k_req_kv_head : value_v_req_kv_head;
@@ -576,32 +617,78 @@ module qmap_attention_score_value_compute_path #(
             (desc_role[SLOT_KV_CACHE] != `QMAP_ROLE_KV_CACHE) ||
             (desc_role[SLOT_EXP_LUT] != `QMAP_ROLE_PARAMETER) ||
             (desc_role[SLOT_ATTN_OUT] != `QMAP_ROLE_OUTPUT) ||
+            (desc_dtype[SLOT_METADATA] != `QMAP_DTYPE_U32) ||
             (desc_dtype[SLOT_Q_ROPE] != `QMAP_DTYPE_I32_Q12_12) ||
             (desc_dtype[SLOT_KV_CACHE] != `QMAP_DTYPE_I32_Q12_12) ||
             (desc_dtype[SLOT_EXP_LUT] != `QMAP_DTYPE_U32_Q0_20) ||
             (desc_dtype[SLOT_ATTN_OUT] != `QMAP_DTYPE_I32_Q12_12) ||
+            (desc_rank[SLOT_METADATA] != 32'd1) ||
             (desc_rank[SLOT_Q_ROPE] != 32'd1) ||
             (desc_rank[SLOT_KV_CACHE] != 32'd4) ||
             (desc_rank[SLOT_EXP_LUT] != 32'd1) ||
             (desc_rank[SLOT_ATTN_OUT] != 32'd1) ||
+            (desc_element_bits[SLOT_METADATA] != 32'd32) ||
             (desc_element_bits[SLOT_Q_ROPE] != IN_WIDTH) ||
             (desc_element_bits[SLOT_KV_CACHE] != IN_WIDTH) ||
             (desc_element_bits[SLOT_EXP_LUT] != EXP_WIDTH) ||
             (desc_element_bits[SLOT_ATTN_OUT] != OUT_WIDTH) ||
+            (desc_dim0[SLOT_METADATA] != 32'd16) ||
+            (desc_dim1[SLOT_METADATA] != 32'd0) ||
+            (desc_dim2[SLOT_METADATA] != 32'd0) ||
+            (desc_dim3[SLOT_METADATA] != 32'd0) ||
             (desc_dim0[SLOT_Q_ROPE] != Q_COUNT) ||
+            (desc_dim1[SLOT_Q_ROPE] != 32'd0) ||
+            (desc_dim2[SLOT_Q_ROPE] != 32'd0) ||
+            (desc_dim3[SLOT_Q_ROPE] != 32'd0) ||
             (desc_dim0[SLOT_KV_CACHE] != 32'd2) ||
             (desc_dim1[SLOT_KV_CACHE] != NUM_KV_HEADS) ||
             (desc_dim2[SLOT_KV_CACHE] != MAX_CONTEXT) ||
             (desc_dim3[SLOT_KV_CACHE] != HEAD_DIM) ||
             (desc_dim0[SLOT_EXP_LUT] != EXP_LUT_SIZE) ||
+            (desc_dim1[SLOT_EXP_LUT] != 32'd0) ||
+            (desc_dim2[SLOT_EXP_LUT] != 32'd0) ||
+            (desc_dim3[SLOT_EXP_LUT] != 32'd0) ||
             (desc_dim0[SLOT_ATTN_OUT] != Q_COUNT) ||
+            (desc_dim1[SLOT_ATTN_OUT] != 32'd0) ||
+            (desc_dim2[SLOT_ATTN_OUT] != 32'd0) ||
+            (desc_dim3[SLOT_ATTN_OUT] != 32'd0) ||
+            (desc_stride0_bytes[SLOT_METADATA] != 64'd4) ||
+            (desc_stride1_bytes[SLOT_METADATA] != 64'd0) ||
+            (desc_stride2_bytes[SLOT_METADATA] != 64'd0) ||
+            (desc_stride3_bytes[SLOT_METADATA] != 64'd0) ||
+            (desc_stride0_bytes[SLOT_Q_ROPE] != 64'd4) ||
+            (desc_stride1_bytes[SLOT_Q_ROPE] != 64'd0) ||
+            (desc_stride2_bytes[SLOT_Q_ROPE] != 64'd0) ||
+            (desc_stride3_bytes[SLOT_Q_ROPE] != 64'd0) ||
+            (desc_stride0_bytes[SLOT_KV_CACHE] != KV_KIND_STRIDE_BYTES) ||
+            (desc_stride1_bytes[SLOT_KV_CACHE] != KV_HEAD_STRIDE_BYTES) ||
+            (desc_stride2_bytes[SLOT_KV_CACHE] != KV_POSITION_STRIDE_BYTES) ||
+            (desc_stride3_bytes[SLOT_KV_CACHE] != 64'd4) ||
+            (desc_stride0_bytes[SLOT_EXP_LUT] != 64'd4) ||
+            (desc_stride1_bytes[SLOT_EXP_LUT] != 64'd0) ||
+            (desc_stride2_bytes[SLOT_EXP_LUT] != 64'd0) ||
+            (desc_stride3_bytes[SLOT_EXP_LUT] != 64'd0) ||
+            (desc_stride0_bytes[SLOT_ATTN_OUT] != 64'd4) ||
+            (desc_stride1_bytes[SLOT_ATTN_OUT] != 64'd0) ||
+            (desc_stride2_bytes[SLOT_ATTN_OUT] != 64'd0) ||
+            (desc_stride3_bytes[SLOT_ATTN_OUT] != 64'd0) ||
+            (desc_base_addr[SLOT_Q_ROPE][1 : 0] != 2'b00) ||
+            (desc_base_addr[SLOT_EXP_LUT][1 : 0] != 2'b00) ||
+            (desc_base_addr[SLOT_ATTN_OUT][1 : 0] != 2'b00) ||
+            (effective_kv_cache_base_addr[1 : 0] != 2'b00) ||
+            (desc_nbytes[SLOT_METADATA] != 64'd64) ||
             (desc_nbytes[SLOT_Q_ROPE] != Q_BYTES) ||
             (desc_nbytes[SLOT_KV_CACHE] != KV_CACHE_BYTES) ||
             (desc_nbytes[SLOT_EXP_LUT] != EXP_LUT_BYTES) ||
             (desc_nbytes[SLOT_ATTN_OUT] != ATTN_OUT_BYTES) ||
-            (desc_aux1[SLOT_METADATA] >= NUM_LAYERS) ||
-            (desc_aux2[SLOT_METADATA] == 32'd0) ||
-            (desc_aux2[SLOT_METADATA] > MAX_CONTEXT)) begin
+            ((!runtime_context_valid_reg) &&
+             ((desc_aux1[SLOT_METADATA] >= NUM_LAYERS) ||
+              (desc_aux2[SLOT_METADATA] == 32'd0) ||
+              (desc_aux2[SLOT_METADATA] > MAX_CONTEXT))) ||
+            (runtime_context_valid_reg &&
+             ((runtime_layer_id_reg >= NUM_LAYERS) ||
+              (runtime_position_reg >= MAX_CONTEXT) ||
+              (desc_aux1[SLOT_METADATA] != runtime_layer_id_reg)))) begin
             validate_error = 1'b1;
         end
     end
@@ -631,6 +718,10 @@ module qmap_attention_score_value_compute_path #(
             value_error_seen <= 1'b0;
             value_saturation_seen <= 1'b0;
             attn_write_word_index <= 32'd0;
+            runtime_context_valid_reg <= 1'b0;
+            runtime_layer_id_reg <= '0;
+            runtime_position_reg <= '0;
+            runtime_kv_cache_base_addr_reg <= '0;
             o_done <= 1'b0;
             o_error <= 1'b0;
             o_attn_out_capture_count <= 32'd0;
@@ -682,6 +773,10 @@ module qmap_attention_score_value_compute_path #(
                         value_error_seen <= 1'b0;
                         value_saturation_seen <= 1'b0;
                         attn_write_word_index <= 32'd0;
+                        runtime_context_valid_reg <= (i_runtime_context_valid === 1'b1);
+                        runtime_layer_id_reg <= i_runtime_layer_id;
+                        runtime_position_reg <= i_runtime_position;
+                        runtime_kv_cache_base_addr_reg <= i_runtime_kv_cache_base_addr;
                         o_error <= 1'b0;
                         o_attn_out_capture_count <= 32'd0;
                         o_attn_out_write_word_count <= 32'd0;

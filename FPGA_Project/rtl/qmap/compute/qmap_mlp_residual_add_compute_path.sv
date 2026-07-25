@@ -28,10 +28,13 @@ module qmap_mlp_residual_add_compute_path #(
 
     input  wire logic                         i_start,
     input  wire logic [ADDR_WIDTH-1 : 0]      i_qmap_base_addr,
+    input  wire logic                         i_output_base_override_valid,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_output_base_override_addr,
 
     output logic                              o_busy,
     output logic                              o_done,
     output logic                              o_error,
+    output logic [ADDR_WIDTH-1 : 0]           o_effective_output_base_addr,
     output logic                              o_saturation,
     output logic [31 : 0]                     o_output_count,
     output logic [31 : 0]                     o_stage_cycle_count,
@@ -163,6 +166,8 @@ module qmap_mlp_residual_add_compute_path #(
     logic [31 : 0] write_data_word;
     logic read_protocol_error;
     logic validate_error;
+    logic output_base_override_valid_reg;
+    logic [ADDR_WIDTH-1 : 0] output_base_override_addr_reg;
 
     logic stage_start;
     logic stage_busy;
@@ -271,6 +276,10 @@ module qmap_mlp_residual_add_compute_path #(
     assign o_busy = (state != S_IDLE) && (state != S_DONE);
     assign o_state_debug = {4'd0, state};
     assign o_read_slot_debug = {1'b0, active_read_slot};
+    assign o_effective_output_base_addr =
+        (output_base_override_valid_reg === 1'b1) ?
+        output_base_override_addr_reg :
+        desc_base_addr[SLOT_OUTPUT];
 
     assign reader_req_ready = (state == S_READER_WAIT) ? i_mem_rd_req_ready : 1'b0;
     assign reader_rsp_valid = (state == S_READER_WAIT) ? i_mem_rd_rsp_valid : 1'b0;
@@ -294,7 +303,7 @@ module qmap_mlp_residual_add_compute_path #(
         1'b0;
 
     assign o_mem_wr_req_valid = (state == S_WRITE_REQ);
-    assign o_mem_wr_req_addr = desc_base_addr[SLOT_OUTPUT];
+    assign o_mem_wr_req_addr = o_effective_output_base_addr;
     assign o_mem_wr_req_len_bytes = VECTOR_BYTES_U16;
     assign o_mem_wr_data_valid = (state == S_WRITE_DATA);
     assign o_mem_wr_data = write_data_word;
@@ -398,7 +407,9 @@ module qmap_mlp_residual_add_compute_path #(
             (desc_aux2[SLOT_OUTPUT] != INPUT_SIZE) ||
             (desc_aux0[SLOT_EXPECTED] != `QMAP_STAGE_ID_MLP_RESIDUAL_ADD) ||
             (desc_aux1[SLOT_EXPECTED] != desc_aux1[SLOT_METADATA]) ||
-            (desc_aux2[SLOT_EXPECTED] != INPUT_SIZE)) begin
+            (desc_aux2[SLOT_EXPECTED] != INPUT_SIZE) ||
+            (o_effective_output_base_addr == '0) ||
+            (o_effective_output_base_addr[1:0] != 2'b00)) begin
             validate_error = 1'b1;
         end
     end
@@ -412,6 +423,8 @@ module qmap_mlp_residual_add_compute_path #(
             write_word_index <= 32'd0;
             post_attn_hidden_flat <= '0;
             down_out_flat <= '0;
+            output_base_override_valid_reg <= 1'b0;
+            output_base_override_addr_reg <= '0;
             o_done <= 1'b0;
             o_error <= 1'b0;
             o_saturation <= 1'b0;
@@ -443,6 +456,9 @@ module qmap_mlp_residual_add_compute_path #(
             case (state)
                 S_IDLE: begin
                     if (i_start) begin
+                        output_base_override_valid_reg <=
+                            (i_output_base_override_valid === 1'b1);
+                        output_base_override_addr_reg <= i_output_base_override_addr;
                         active_read_slot <= R_POST_ATTN;
                         read_chunk_index <= 32'd0;
                         read_word_index <= 32'd0;

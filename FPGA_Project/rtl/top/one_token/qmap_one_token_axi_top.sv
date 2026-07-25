@@ -190,6 +190,10 @@ module qmap_one_token_axi_top #(
     logic mem_rd_error;
     logic axi_read_busy;
     logic axi_write_busy;
+    logic axi_read_busy_d;
+    logic axi_write_busy_d;
+    logic run_busy_d;
+    logic mem_error_sticky;
 
     logic [LAYER_INDEX_WIDTH-1:0] active_layer_index;
     logic [LAYER_COUNT_WIDTH-1:0] layers_started;
@@ -227,7 +231,12 @@ module qmap_one_token_axi_top #(
     logic tail_done_pulse;
     logic tail_active;
 
-    assign o_mem_error = mem_rd_error || mem_wr_error;
+    // The per-request masters clear their error flags when they accept the
+    // next request. Preserve any completed-request failure for the full run so
+    // software cannot miss an early AXI error after later traffic succeeds.
+    assign o_mem_error = mem_error_sticky ||
+                         (axi_read_busy && mem_rd_error) ||
+                         (axi_write_busy && mem_wr_error);
     assign o_status = {
         phase_debug,
         state_debug,
@@ -242,6 +251,26 @@ module qmap_one_token_axi_top #(
     };
     assign o_best_token_id = {{(32-TOKEN_ID_WIDTH){1'b0}}, tail_best_token_id};
     assign o_best_score_low32 = tail_best_score_q26[31 : 0];
+
+    always @(posedge aclk) begin
+        if (!aresetn) begin
+            axi_read_busy_d  <= 1'b0;
+            axi_write_busy_d <= 1'b0;
+            run_busy_d       <= 1'b0;
+            mem_error_sticky <= 1'b0;
+        end else begin
+            axi_read_busy_d  <= axi_read_busy;
+            axi_write_busy_d <= axi_write_busy;
+            run_busy_d       <= o_busy;
+
+            if (!run_busy_d && o_busy) begin
+                mem_error_sticky <= 1'b0;
+            end else if ((axi_read_busy_d && !axi_read_busy && mem_rd_error) ||
+                         (axi_write_busy_d && !axi_write_busy && mem_wr_error)) begin
+                mem_error_sticky <= 1'b1;
+            end
+        end
+    end
 
     qmap_one_token_axil_top #(
         .AXI_ADDR_WIDTH    (AXI_ADDR_WIDTH),

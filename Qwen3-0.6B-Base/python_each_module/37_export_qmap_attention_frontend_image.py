@@ -222,12 +222,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--q-base-addr", type=lambda text: int(text.replace("_", ""), 0), default=None)
     parser.add_argument("--k-base-addr", type=lambda text: int(text.replace("_", ""), 0), default=None)
     parser.add_argument("--v-base-addr", type=lambda text: int(text.replace("_", ""), 0), default=None)
+    parser.add_argument(
+        "--runtime-rope-cos-base-addr",
+        type=lambda text: int(text.replace("_", ""), 0),
+        default=None,
+        help="External persistent [MAX_CONTEXT, HEAD_DIM] cos table base",
+    )
+    parser.add_argument(
+        "--runtime-rope-sin-base-addr",
+        type=lambda text: int(text.replace("_", ""), 0),
+        default=None,
+        help="External persistent [MAX_CONTEXT, HEAD_DIM] sin table base",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     qmap_base = args.qmap_base
+    runtime_rope_table = (args.runtime_rope_cos_base_addr is not None) or (
+        args.runtime_rope_sin_base_addr is not None
+    )
+    if runtime_rope_table and (
+        args.runtime_rope_cos_base_addr is None or args.runtime_rope_sin_base_addr is None
+    ):
+        raise ValueError("runtime RoPE mode requires both cos and sin base addresses")
+    if runtime_rope_table and (
+        (args.runtime_rope_cos_base_addr & 0x3) != 0
+        or (args.runtime_rope_sin_base_addr & 0x3) != 0
+    ):
+        raise ValueError("runtime RoPE base addresses must be 4-byte aligned")
 
     q_meta = json.loads((SIM_VECTOR_DIR / f"{args.qk_prefix}_meta.json").read_text(encoding="utf-8"))
     kv_meta = json.loads((SIM_VECTOR_DIR / f"{args.kv_prefix}_meta.json").read_text(encoding="utf-8"))
@@ -289,8 +313,9 @@ def main() -> None:
     cursor = add_payload(payloads, name="v_flat_q12_12", cursor=cursor, payload=as_le_bytes(v_input, "<i4"))
     cursor = add_payload(payloads, name="q_gamma_q8_7", cursor=cursor, payload=as_le_bytes(q_gamma, "<i4"))
     cursor = add_payload(payloads, name="k_gamma_q8_7", cursor=cursor, payload=as_le_bytes(k_gamma, "<i4"))
-    cursor = add_payload(payloads, name="rope_cos_q1_15", cursor=cursor, payload=as_le_bytes(cos, "<i4"))
-    cursor = add_payload(payloads, name="rope_sin_q1_15", cursor=cursor, payload=as_le_bytes(sin, "<i4"))
+    if not runtime_rope_table:
+        cursor = add_payload(payloads, name="rope_cos_q1_15", cursor=cursor, payload=as_le_bytes(cos, "<i4"))
+        cursor = add_payload(payloads, name="rope_sin_q1_15", cursor=cursor, payload=as_le_bytes(sin, "<i4"))
     cursor = add_payload(payloads, name="q_rope_output_q12_12", cursor=cursor, payload=bytes(Q_COUNT * 4))
     image_bytes = align_up(cursor, IMAGE_ALIGNMENT)
 
@@ -307,6 +332,17 @@ def main() -> None:
     rw = TENSOR_F_ROW_MAJOR
     q_stride = 4
     kv_cache_bytes = 2 * NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM * 4
+    rope_table_bytes = MAX_CONTEXT * HEAD_DIM * 4
+    rope_rank = 2 if runtime_rope_table else 1
+    rope_dims = (MAX_CONTEXT, HEAD_DIM, 0, 0) if runtime_rope_table else (HEAD_DIM, 0, 0, 0)
+    rope_strides = (HEAD_DIM * 4, 4, 0, 0) if runtime_rope_table else (q_stride, 0, 0, 0)
+    rope_cos_base_addr = (
+        args.runtime_rope_cos_base_addr if runtime_rope_table else addr("rope_cos_q1_15")
+    )
+    rope_sin_base_addr = (
+        args.runtime_rope_sin_base_addr if runtime_rope_table else addr("rope_sin_q1_15")
+    )
+    rope_nbytes = rope_table_bytes if runtime_rope_table else HEAD_DIM * 4
 
     descriptors = [
         pack_descriptor(
@@ -403,30 +439,30 @@ def main() -> None:
             tensor_id=TENSOR_ID_ROPE_COS,
             role=ROLE_ROPE_TABLE,
             dtype=DTYPE_I16_Q1_15,
-            rank=1,
+            rank=rope_rank,
             flags=ro,
             element_bits=TRIG_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("rope_cos_q1_15"),
-            nbytes=size("rope_cos_q1_15"),
-            dims=(HEAD_DIM, 0, 0, 0),
-            strides=(q_stride, 0, 0, 0),
+            base_addr=rope_cos_base_addr,
+            nbytes=rope_nbytes,
+            dims=rope_dims,
+            strides=rope_strides,
             aux=(0, layer_id, 0, selected_position),
         ),
         pack_descriptor(
             tensor_id=TENSOR_ID_ROPE_SIN,
             role=ROLE_ROPE_TABLE,
             dtype=DTYPE_I16_Q1_15,
-            rank=1,
+            rank=rope_rank,
             flags=ro,
             element_bits=TRIG_WIDTH,
             group_size=0,
             scale_tensor_id=NO_TENSOR_ID,
-            base_addr=addr("rope_sin_q1_15"),
-            nbytes=size("rope_sin_q1_15"),
-            dims=(HEAD_DIM, 0, 0, 0),
-            strides=(q_stride, 0, 0, 0),
+            base_addr=rope_sin_base_addr,
+            nbytes=rope_nbytes,
+            dims=rope_dims,
+            strides=rope_strides,
             aux=(0, layer_id, 0, selected_position),
         ),
         pack_descriptor(
@@ -502,6 +538,7 @@ def main() -> None:
             "max_context": MAX_CONTEXT,
             "selected_position": selected_position,
             "layer_id": layer_id,
+            "runtime_rope_table": runtime_rope_table,
         },
         "memory_layout": {
             "q_flat_addr": args.q_base_addr if args.q_base_addr is not None else addr("q_flat_q12_12"),
@@ -509,8 +546,10 @@ def main() -> None:
             "v_flat_addr": args.v_base_addr if args.v_base_addr is not None else addr("v_flat_q12_12"),
             "q_gamma_addr": addr("q_gamma_q8_7"),
             "k_gamma_addr": addr("k_gamma_q8_7"),
-            "cos_addr": addr("rope_cos_q1_15"),
-            "sin_addr": addr("rope_sin_q1_15"),
+            "cos_addr": rope_cos_base_addr,
+            "sin_addr": rope_sin_base_addr,
+            "rope_table_shape": [MAX_CONTEXT, HEAD_DIM] if runtime_rope_table else [HEAD_DIM],
+            "rope_row_stride_bytes": HEAD_DIM * 4,
             "kv_cache_base_addr": cache_base,
             "q_rope_output_addr": addr("q_rope_output_q12_12"),
         },

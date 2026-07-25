@@ -57,13 +57,15 @@ New-Item -ItemType Directory -Force -Path $vectorDir | Out-Null
 $rtlDir = Join-Path $repoRoot "FPGA_Project\rtl"
 $simDir = Join-Path $repoRoot "FPGA_Project\sim"
 $exporter = Join-Path $repoRoot "Qwen3-0.6B-Base\python_each_module\49_export_q4_embedding_vectors.py"
-$rtlFiles = @(Get-ChildItem -LiteralPath $rtlDir -Filter "*.sv" -File |
-    Sort-Object FullName |
-    ForEach-Object { $_.FullName })
+. (Join-Path $simDir "load_rtl_manifest.ps1")
+$rtlBuild = Get-RtlBuildManifest -RtlDir $rtlDir
+$rtlFiles = $rtlBuild.SourceFiles
+$rtlIncludeDirs = $rtlBuild.IncludeDirs
 $tests = @(
     @{ Top = "tb_q4_embedding_lookup"; Source = "tb_q4_embedding_lookup.sv" },
     @{ Top = "tb_qmap_one_token_axil_embedding_top"; Source = "tb_qmap_one_token_axil_embedding_top.sv" },
-    @{ Top = "tb_qmap_one_token_axi_embedding_top"; Source = "tb_qmap_one_token_axi_embedding_top.sv" }
+    @{ Top = "tb_qmap_one_token_axi_embedding_top"; Source = "tb_qmap_one_token_axi_embedding_top.sv" },
+    @{ Top = "tb_qmap_one_token_axi_embedding_top_mem_error"; Source = "tb_qmap_one_token_axi_embedding_top.sv" }
 )
 
 $conda = (Get-Command conda -ErrorAction Stop).Source
@@ -104,8 +106,11 @@ try {
         $compileLog = Join-Path $testDir "compile.log"
         $runLog = Join-Path $testDir "run.log"
         $tbPath = Join-Path $simDir $test.Source
-        $compileArgs = @("-g2012", "-Wall", "-I", $rtlDir, "-s", $name,
-            "-o", $vvpPath) + $rtlFiles + @($tbPath)
+        $compileArgs = @("-g2012", "-Wall")
+        foreach ($includeDir in $rtlIncludeDirs) {
+            $compileArgs += @("-I", $includeDir)
+        }
+        $compileArgs += @("-s", $name, "-o", $vvpPath) + $rtlFiles + @($tbPath)
 
         Write-Host "[compile] $name"
         Invoke-LoggedCommand -Executable $iverilog -Arguments $compileArgs -LogPath $compileLog | Out-Null
@@ -131,8 +136,11 @@ try {
 
         Push-Location $xsimDir
         try {
-            $xvlogArgs = @("--sv", "--relax", "-i", $rtlDir,
-                "--log", (Join-Path $xsimDir "xvlog.log")) + $rtlFiles + @($tbPath)
+            $xvlogArgs = @("--sv", "--relax")
+            foreach ($includeDir in $rtlIncludeDirs) {
+                $xvlogArgs += @("-i", $includeDir)
+            }
+            $xvlogArgs += @("--log", (Join-Path $xsimDir "xvlog.log")) + $rtlFiles + @($tbPath)
             Write-Host "[xvlog]  $name"
             Invoke-LoggedCommand -Executable $xvlog -Arguments $xvlogArgs `
                 -LogPath (Join-Path $xsimDir "xvlog_console.log") | Out-Null

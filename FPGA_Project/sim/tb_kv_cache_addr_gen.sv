@@ -5,7 +5,7 @@
 //
 // Run from the repository root:
 //
-//   iverilog -g2012 -o FPGA_Project/sim/tb_kv_cache_addr_gen.vvp FPGA_Project/sim/tb_kv_cache_addr_gen.sv FPGA_Project/rtl/kv_cache_addr_gen.sv
+//   iverilog -g2012 -o FPGA_Project/sim/tb_kv_cache_addr_gen.vvp FPGA_Project/sim/tb_kv_cache_addr_gen.sv FPGA_Project/rtl/model/attention/kv_cache_addr_gen.sv
 //   vvp FPGA_Project/sim/tb_kv_cache_addr_gen.vvp
 
 module tb_kv_cache_addr_gen;
