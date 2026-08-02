@@ -431,6 +431,16 @@ static inline int qot_decode_token_ids(
     if (cfg->final_hidden_override_valid != 0u) {
         return QOT_ERR_CONTEXT;
     }
+    /*
+     * Validate the complete prompt before launching any hardware work. Returning
+     * after a later invalid prompt token would otherwise leave a partially
+     * populated KV cache even though the caller received an argument error.
+     */
+    for (prompt_index = 0u; prompt_index < prompt_token_count; ++prompt_index) {
+        if (prompt_token_ids[prompt_index] >= QOT_VOCAB_SIZE) {
+            return QOT_ERR_BAD_TOKEN;
+        }
+    }
 
     /* prompt_count runs plus one run for every generated token after the first */
     run_count = prompt_token_count + max_new_tokens - 1u;
@@ -443,9 +453,6 @@ static inline int qot_decode_token_ids(
     position = cfg->position;
     next_token = 0u;
     for (prompt_index = 0u; prompt_index < prompt_token_count; ++prompt_index) {
-        if (prompt_token_ids[prompt_index] >= QOT_VOCAB_SIZE) {
-            return QOT_ERR_BAD_TOKEN;
-        }
         rc = qot_run_token(base, cfg, prompt_token_ids[prompt_index], position,
                            max_polls_per_token, &result);
         if (rc != QOT_OK) {
@@ -453,6 +460,10 @@ static inline int qot_decode_token_ids(
             return rc;
         }
         next_token = result.token_id;
+        if (next_token >= QOT_VOCAB_SIZE) {
+            *last_result = result;
+            return QOT_ERR_BAD_TOKEN;
+        }
         ++position;
     }
 
@@ -470,6 +481,10 @@ static inline int qot_decode_token_ids(
             return rc;
         }
         next_token = result.token_id;
+        if (next_token >= QOT_VOCAB_SIZE) {
+            *last_result = result;
+            return QOT_ERR_BAD_TOKEN;
+        }
         generated_token_ids[generated_index] = next_token;
         if (generated_token_count != NULL) {
             *generated_token_count = generated_index + 1u;

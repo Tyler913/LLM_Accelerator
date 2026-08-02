@@ -5,6 +5,16 @@ module tb_lm_head_argmax_stage;
 
     localparam int SCAN_ROWS      = 1024;
     localparam int TILE_ROWS      = 16;
+`ifdef LM_HEAD_ROW_PARALLEL
+    localparam int ROW_PARALLEL   = `LM_HEAD_ROW_PARALLEL;
+`else
+    localparam int ROW_PARALLEL   = TILE_ROWS;
+`endif
+`ifdef LM_HEAD_GROUP_PARALLEL
+    localparam int GROUP_PARALLEL = `LM_HEAD_GROUP_PARALLEL;
+`else
+    localparam int GROUP_PARALLEL = 4;
+`endif
     localparam int INPUT_SIZE     = 1024;
     localparam int GROUP_SIZE     = 64;
     localparam int GROUP_COUNT    = INPUT_SIZE / GROUP_SIZE;
@@ -19,6 +29,10 @@ module tb_lm_head_argmax_stage;
     localparam int TILE_INDEX_W   = $clog2(TILE_COUNT);
     localparam int TILE_WEIGHT_BITS = TILE_ROWS * INPUT_SIZE * WEIGHT_WIDTH;
     localparam int TILE_SCALE_BITS  = TILE_ROWS * GROUP_COUNT * SCALE_WIDTH;
+    localparam int ROW_BATCH_SCALE =
+        (TILE_ROWS + ROW_PARALLEL - 1) / ROW_PARALLEL;
+    localparam int GROUP_BATCH_SCALE =
+        (4 + GROUP_PARALLEL - 1) / GROUP_PARALLEL;
 
     logic clk;
     logic rst_n;
@@ -88,9 +102,11 @@ module tb_lm_head_argmax_stage;
     lm_head_argmax_stage #(
         .SCAN_ROWS     (SCAN_ROWS),
         .TILE_ROWS     (TILE_ROWS),
+        .ROW_PARALLEL  (ROW_PARALLEL),
         .INPUT_SIZE    (INPUT_SIZE),
         .GROUP_SIZE    (GROUP_SIZE),
         .GROUP_COUNT   (GROUP_COUNT),
+        .GROUP_PARALLEL(GROUP_PARALLEL),
         .ACT_WIDTH     (ACT_WIDTH),
         .WEIGHT_WIDTH  (WEIGHT_WIDTH),
         .SCALE_WIDTH   (SCALE_WIDTH),
@@ -498,7 +514,10 @@ module tb_lm_head_argmax_stage;
             pulse_start();
         end
 
-        while ((done != 1'b1) && (cycle_count < 80000)) begin
+        while (
+            (done != 1'b1) &&
+            (cycle_count < (80000 * ROW_BATCH_SCALE * GROUP_BATCH_SCALE))
+        ) begin
             @(negedge clk);
         end
         if (done != 1'b1) begin
@@ -513,7 +532,10 @@ module tb_lm_head_argmax_stage;
         repeat (12) @(negedge clk);
         pulse_start();
 
-        while ((done != 1'b1) && (cycle_count < 160000)) begin
+        while (
+            (done != 1'b1) &&
+            (cycle_count < (160000 * ROW_BATCH_SCALE * GROUP_BATCH_SCALE))
+        ) begin
             @(negedge clk);
         end
         if (done != 1'b1) begin
@@ -580,7 +602,11 @@ module tb_lm_head_argmax_stage;
             $finish(1);
         end
 
-        $display("PASS: lm_head_argmax_stage matched Q4 LM-head logits and greedy argmax.");
+        $display(
+            "PASS: lm_head_argmax_stage matched Q4 LM-head logits and greedy argmax (ROW_PARALLEL=%0d, GROUP_PARALLEL=%0d).",
+            ROW_PARALLEL,
+            GROUP_PARALLEL
+        );
         $display("Waveform: %s", wavefile);
         $finish;
     end

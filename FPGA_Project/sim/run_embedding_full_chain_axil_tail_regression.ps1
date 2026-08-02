@@ -6,6 +6,10 @@ param(
     [int]$LayerCount = 28,
     [int]$TokenId = -1,
     [switch]$RuntimeContext,
+    [switch]$PersistentTwoToken,
+    [string]$PersistentVectorDir = "",
+    [int]$PersistentFeedbackTokenId = -1,
+    [string]$RtlSourceDir = "",
     [string]$CondaEnvironment = "llm_fpga"
 )
 
@@ -123,6 +127,42 @@ function Add-ReadMemLine {
         $svPath, $ArrayName, $Start, $end))
 }
 
+function Write-HexSlice {
+    param(
+        [Parameter(Mandatory = $true)] [string]$Source,
+        [Parameter(Mandatory = $true)] [string]$Destination,
+        [Parameter(Mandatory = $true)] [int]$Start,
+        [Parameter(Mandatory = $true)] [int]$Count
+    )
+
+    $lines = [System.IO.File]::ReadAllLines($Source)
+    if (($Start -lt 0) -or ($Count -le 0) -or (($Start + $Count) -gt $lines.Length)) {
+        throw "Hex slice $Start+$Count escapes $Source ($($lines.Length) lines)"
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
+    [System.IO.File]::WriteAllLines(
+        $Destination,
+        [string[]]$lines[$Start..($Start + $Count - 1)],
+        [System.Text.Encoding]::ASCII
+    )
+}
+
+function Format-SvWord32 {
+    param([Parameter(Mandatory = $true)] [UInt32]$Value)
+    return "32'h{0:X8}" -f $Value
+}
+
+function Format-SvSignedDecimal {
+    param(
+        [Parameter(Mandatory = $true)] [Int64]$Value,
+        [Parameter(Mandatory = $true)] [int]$Width
+    )
+    if ($Value -lt 0) {
+        return "-${Width}'sd$(-$Value)"
+    }
+    return "${Width}'sd$Value"
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $tempRoot = Join-Path $repoRoot "Temp"
 if ([string]::IsNullOrWhiteSpace($RunRoot)) {
@@ -146,12 +186,39 @@ if ([string]::IsNullOrWhiteSpace($VectorDir)) {
     $vectorDirFull = $VectorDir
 }
 $vectorDirFull = Assert-UnderTemp -Path $vectorDirFull -TempRoot $tempRoot
+if ($PersistentTwoToken -and !$RuntimeContext) {
+    throw "-PersistentTwoToken requires -RuntimeContext"
+}
+if ($PersistentTwoToken -and ($TokenId -lt 0)) {
+    $TokenId = 374
+}
+if ($PersistentTwoToken) {
+    if ([string]::IsNullOrWhiteSpace($PersistentVectorDir)) {
+        $persistentVectorDirFull = Join-Path $sessionDir "persistent_vectors"
+    } elseif (![System.IO.Path]::IsPathRooted($PersistentVectorDir)) {
+        $persistentVectorDirFull = Join-Path $repoRoot $PersistentVectorDir
+    } else {
+        $persistentVectorDirFull = $PersistentVectorDir
+    }
+    $persistentVectorDirFull = Assert-UnderTemp -Path $persistentVectorDirFull -TempRoot $tempRoot
+}
 
-$rtlDir = Join-Path $repoRoot "FPGA_Project\rtl"
+if ([string]::IsNullOrWhiteSpace($RtlSourceDir)) {
+    $rtlDir = Join-Path $repoRoot "FPGA_Project\rtl"
+} elseif ([System.IO.Path]::IsPathRooted($RtlSourceDir)) {
+    $rtlDir = [System.IO.Path]::GetFullPath($RtlSourceDir)
+} else {
+    $rtlDir = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $RtlSourceDir))
+}
+if (!(Test-Path -LiteralPath $rtlDir -PathType Container)) {
+    throw "RTL source directory does not exist: $rtlDir"
+}
 $simDir = Join-Path $repoRoot "FPGA_Project\sim"
 $tbPath = Join-Path $simDir "tb_qmap_one_token_layer_scheduler.sv"
 $exporter = Join-Path $repoRoot "Qwen3-0.6B-Base\python_each_module\53_export_embedding_full28_final_chain.py"
+$persistentExporter = Join-Path $repoRoot "Qwen3-0.6B-Base\python_each_module\56_export_persistent_multitoken_layer_golden.py"
 $timingChecker = Join-Path $simDir "check_embedding_full_chain_axil_tail_timing.py"
+$persistentTimingChecker = Join-Path $simDir "check_persistent_two_token_full_chain.py"
 . (Join-Path $simDir "load_rtl_manifest.ps1")
 $rtlBuild = Get-RtlBuildManifest -RtlDir $rtlDir
 $rtlFiles = $rtlBuild.SourceFiles
@@ -166,7 +233,13 @@ $summary.Add("AXI-Lite tied-Q4 embedding -> full decoder chain -> final tail reg
 $summary.Add("run_id=$runId")
 $summary.Add("session_dir=$sessionDir")
 $summary.Add("vector_dir=$vectorDirFull")
+$summary.Add("rtl_source_dir=$rtlDir")
+$summary.Add("rtl_source_count=$($rtlFiles.Count)")
 $summary.Add("runtime_context=$($RuntimeContext.IsPresent)")
+$summary.Add("persistent_two_token=$($PersistentTwoToken.IsPresent)")
+if ($PersistentTwoToken) {
+    $summary.Add("persistent_vector_dir=$persistentVectorDirFull")
+}
 
 $savedPycachePrefix = $env:PYTHONPYCACHEPREFIX
 $env:PYTHONPYCACHEPREFIX = $pycacheDir
@@ -315,6 +388,118 @@ try {
             }
         }
         $summary.Add("PASS runtime_manifest_contract :: position=$runtimePosition hidden_a=$(Format-SvAddress $runtimeHiddenABase) hidden_b=$(Format-SvAddress $runtimeHiddenBBase)")
+    }
+
+    $persistentManifest = $null
+    $persistentManifestPath = $null
+    if ($PersistentTwoToken) {
+        $persistentFullModel = ($LayerCount -eq 28)
+        $persistentManifestName = if ($persistentFullModel) {
+            "persistent_multitoken_full_model_manifest.json"
+        } else {
+            "persistent_multitoken_layer_prefix_manifest.json"
+        }
+        $persistentLayerModeArgs = if ($persistentFullModel) {
+            @("--all-layers")
+        } else {
+            @("--layer-count", "$LayerCount")
+        }
+        $persistentManifestPath = Join-Path $persistentVectorDirFull `
+            $persistentManifestName
+        if (!(Test-Path -LiteralPath $persistentManifestPath -PathType Leaf)) {
+            New-Item -ItemType Directory -Force -Path $persistentVectorDirFull | Out-Null
+            $feedbackToken = $PersistentFeedbackTokenId
+            if ($feedbackToken -lt 0) {
+                $probeDir = Join-Path $sessionDir "persistent_probe"
+                $probeManifestPath = Join-Path $probeDir `
+                    $persistentManifestName
+                if (!(Test-Path -LiteralPath $probeManifestPath -PathType Leaf)) {
+                    New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
+                    $probeArgs = @(
+                        "run", "--no-capture-output", "-n", $CondaEnvironment,
+                        "python", "-B", $persistentExporter,
+                        "--output-dir", $probeDir
+                    )
+                    $probeArgs += $persistentLayerModeArgs
+                    $probeArgs += @("--token-ids", "$TokenId")
+                    Write-Host "[golden]  discover feedback token for token=$TokenId position=0 over $LayerCount layers"
+                    $probeOutput = Invoke-LoggedCommand -Executable $conda -Arguments $probeArgs `
+                        -LogPath (Join-Path $sessionDir "persistent_probe.log")
+                    if (($probeOutput -join "`n") -notmatch
+                        "Persistent multi-token fixed-point golden: PASS") {
+                        throw "Persistent feedback probe did not print its PASS marker"
+                    }
+                }
+                $probeManifest = Get-Content -Raw -LiteralPath $probeManifestPath | ConvertFrom-Json
+                if (($probeManifest.self_check.status -ne "PASS") -or
+                    ([int]$probeManifest.layer_count -ne $LayerCount) -or
+                    ([int]$probeManifest.token_ids[0] -ne $TokenId) -or
+                    ($probeManifest.final_tail.position_results.Count -ne 1)) {
+                    throw "Persistent feedback probe manifest contract mismatch"
+                }
+                $feedbackToken =
+                    [int]$probeManifest.final_tail.position_results[0].argmax_token
+                $summary.Add("PASS feedback_probe :: token=$TokenId -> $feedbackToken")
+            }
+
+            $persistentArgs = @(
+                "run", "--no-capture-output", "-n", $CondaEnvironment,
+                "python", "-B", $persistentExporter,
+                "--output-dir", $persistentVectorDirFull
+            )
+            $persistentArgs += $persistentLayerModeArgs
+            $persistentArgs += @("--token-ids", "$TokenId", "$feedbackToken")
+            Write-Host "[golden]  export feedback-closed positions 0/1 tokens $TokenId/$feedbackToken"
+            $persistentOutput = Invoke-LoggedCommand -Executable $conda -Arguments $persistentArgs `
+                -LogPath (Join-Path $sessionDir "persistent_export.log")
+            if (($persistentOutput -join "`n") -notmatch
+                "Persistent multi-token fixed-point golden: PASS") {
+                throw "Persistent two-token exporter did not print its PASS marker"
+            }
+            $summary.Add("PASS persistent_vector_export")
+        } else {
+            $summary.Add("REUSE persistent_vector_export :: $persistentManifestPath")
+        }
+
+        $persistentManifest =
+            Get-Content -Raw -LiteralPath $persistentManifestPath | ConvertFrom-Json
+        if (($persistentManifest.self_check.status -ne "PASS") -or
+            ($persistentManifest.self_check.full_vocab_argmax_checked -ne $true) -or
+            ([int]$persistentManifest.layer_count -ne $LayerCount) -or
+            ($persistentManifest.positions.Count -ne 2) -or
+            ([int]$persistentManifest.positions[0] -ne 0) -or
+            ([int]$persistentManifest.positions[1] -ne 1) -or
+            ($persistentManifest.token_ids.Count -ne 2) -or
+            ([int]$persistentManifest.token_ids[0] -ne $TokenId) -or
+            ($persistentManifest.final_tail.position_results.Count -ne 2)) {
+            throw "Persistent two-token manifest shape/self-check contract mismatch"
+        }
+        if ($persistentFullModel) {
+            if (($persistentManifest.model_complete -ne $true) -or
+                ($persistentManifest.valid_as_full_model_decode -ne $true) -or
+                ([string]$persistentManifest.tail_semantics -ne "full_model_decode")) {
+                throw "Full28 persistent manifest is not classified as a complete model decode"
+            }
+        } elseif (($null -ne $persistentManifest.model_complete) -and
+            (($persistentManifest.model_complete -ne $false) -or
+             ($persistentManifest.valid_as_full_model_decode -ne $false) -or
+             ([string]$persistentManifest.tail_semantics -ne "truncated_prefix_diagnostic"))) {
+            throw "Partial persistent manifest is not classified as a truncated-prefix diagnostic"
+        }
+        $feedbackToken = [int]$persistentManifest.final_tail.position_results[0].argmax_token
+        if ([int]$persistentManifest.token_ids[1] -ne $feedbackToken) {
+            throw "Persistent token pair is not feedback closed: step0 argmax=$feedbackToken step1 input=$($persistentManifest.token_ids[1])"
+        }
+        $baseTokenPath = Resolve-VectorFile $vectorDirFull `
+            ([string]$manifest.embedding.files.token)
+        $baseTokenText = (Get-Content -LiteralPath $baseTokenPath -TotalCount 1).Trim()
+        $baseToken = [Convert]::ToInt32($baseTokenText, 16)
+        if ($baseToken -ne $TokenId) {
+            throw "RuntimeContext base bundle token $baseToken does not match persistent token $TokenId"
+        }
+        $summary.Add(
+            "PASS persistent_manifest_contract :: tokens=$TokenId/$feedbackToken positions=0/1 layers=$LayerCount"
+        )
     }
 
     $syntheticVectors = Join-Path $xsimDir "FPGA_Project\sim\vectors"
@@ -471,33 +656,193 @@ try {
         [System.Text.Encoding]::ASCII)
     $summary.Add("PASS Temp-only manifest include :: $includePath")
 
+    if ($PersistentTwoToken) {
+        $persistentConfigLines = [System.Collections.Generic.List[string]]::new()
+        $persistentConfigLines.Add(
+            "                    // Generated from persistent_multitoken_layer_prefix_manifest.json."
+        )
+        for ($step = 0; $step -lt 2; $step++) {
+            $inputToken = [int]$persistentManifest.token_ids[$step]
+            $outputToken =
+                [int]$persistentManifest.final_tail.position_results[$step].argmax_token
+            $outputScore =
+                [Int64]$persistentManifest.final_tail.position_results[$step].argmax_score_q26
+            $persistentConfigLines.Add(
+                "                    persistent_input_token[$step] = 32'd$inputToken;"
+            )
+            $persistentConfigLines.Add(
+                "                    persistent_expected_output_token[$step] = 32'd$outputToken;"
+            )
+            $persistentConfigLines.Add(
+                "                    persistent_expected_output_score[$step] = $(Format-SvSignedDecimal -Value $outputScore -Width 56);"
+            )
+        }
+        $persistentConfigLines.Add(
+            "                    if (full_chain_layer_count != $LayerCount) begin"
+        )
+        $persistentConfigLines.Add(
+            '                        $display("FAIL: persistent/full-chain layer-count mismatch");'
+        )
+        $persistentConfigLines.Add("                        `$finish(1);")
+        $persistentConfigLines.Add("                    end")
+        $persistentConfigPath = Join-Path $xsimDir "persistent_two_token_config.svh"
+        [System.IO.File]::WriteAllLines(
+            $persistentConfigPath,
+            [string[]]$persistentConfigLines,
+            [System.Text.Encoding]::ASCII
+        )
+
+        $initialHiddenPath = Resolve-VectorFile $persistentVectorDirFull `
+            "initial_hidden_q14_10_words32.hex"
+        $finalNormPath = Resolve-VectorFile $persistentVectorDirFull `
+            "final/final_norm_q12_12_words32.hex"
+        $sliceDir = Join-Path $xsimDir "persistent_slices"
+        New-Item -ItemType Directory -Force -Path $sliceDir | Out-Null
+        $perLayerLoads = @(
+            @("input_norm_q12_12_words32.hex", "full_expected_input_norm", 1024),
+            @("q_rope_q12_12_words32.hex", "full_expected_q_rope", 2048),
+            @("kv_write_addr.hex", "full_expected_cache_addr", 2048),
+            @("kv_write_data_words32.hex", "full_expected_cache_data", 2048),
+            @("kv_write_kind.hex", "full_expected_cache_kind", 2048),
+            @("attention_output_q12_12_words32.hex", "full_expected_attn_out", 2048),
+            @("o_proj_q12_12_words32.hex", "full_expected_o_proj", 1024),
+            @("post_attention_hidden_q14_10_words32.hex", "full_expected_post_hidden", 1024),
+            @("post_attention_norm_q12_12_words32.hex", "full_expected_post_norm", 1024),
+            @("mlp_gate_q12_12_words32.hex", "full_expected_gate", 3072),
+            @("mlp_up_q12_12_words32.hex", "full_expected_up", 3072),
+            @("mlp_hidden_q12_12_words32.hex", "full_expected_silu_hidden", 3072),
+            @("mlp_down_q12_12_words32.hex", "full_expected_down", 1024),
+            @("layer_output_q14_10_words32.hex", "full_expected_layer", 1024)
+        )
+
+        for ($step = 0; $step -lt 2; $step++) {
+            $stepLines = [System.Collections.Generic.List[string]]::new()
+            $stepLines.Add(
+                "                    // Position $step exact fixed-point writes and tail result."
+            )
+            $inputToken = [int]$persistentManifest.token_ids[$step]
+            $outputToken =
+                [int]$persistentManifest.final_tail.position_results[$step].argmax_token
+            $outputScore =
+                [Int64]$persistentManifest.final_tail.position_results[$step].argmax_score_q26
+            $scoreBytes = [BitConverter]::GetBytes($outputScore)
+            $scoreLow = [BitConverter]::ToUInt32($scoreBytes, 0)
+            $scoreHigh = [BitConverter]::ToUInt32($scoreBytes, 4)
+            $stepLines.Add("                    embedding_token_mem[0] = 32'd$inputToken;")
+            $stepLines.Add(
+                "                    tail_expected_words[0] = 32'd$outputToken;"
+            )
+            $stepLines.Add(
+                "                    tail_expected_words[1] = $(Format-SvWord32 $scoreLow);"
+            )
+            $stepLines.Add(
+                "                    tail_expected_words[2] = $(Format-SvWord32 $scoreHigh);"
+            )
+
+            $embeddingSlice = Join-Path $sliceDir "step${step}_embedding_expected.hex"
+            $normSlice = Join-Path $sliceDir "step${step}_final_norm_expected.hex"
+            Write-HexSlice -Source $initialHiddenPath -Destination $embeddingSlice `
+                -Start ($step * 1024) -Count 1024
+            Write-HexSlice -Source $finalNormPath -Destination $normSlice `
+                -Start ($step * 1024) -Count 1024
+            Add-ReadMemLine -Lines $stepLines -Path $embeddingSlice `
+                -ArrayName "embedding_expected" -Start 0 -WordCount 1024
+            Add-ReadMemLine -Lines $stepLines -Path $normSlice `
+                -ArrayName "tail_final_norm_expected" -Start 0 -WordCount 1024
+
+            for ($layerIndex = 0; $layerIndex -lt $LayerCount; $layerIndex++) {
+                $positionRoot = "layer_{0:D2}/position_{1:D3}" -f $layerIndex,$step
+                $qPath = Resolve-VectorFile $persistentVectorDirFull `
+                    "$positionRoot/q_proj_q12_12_words32.hex"
+                $kPath = Resolve-VectorFile $persistentVectorDirFull `
+                    "$positionRoot/k_proj_q12_12_words32.hex"
+                $vPath = Resolve-VectorFile $persistentVectorDirFull `
+                    "$positionRoot/v_proj_q12_12_words32.hex"
+                $qkvStart = $layerIndex * 4096
+                Add-ReadMemLine -Lines $stepLines -Path $qPath `
+                    -ArrayName "full_expected_qkv" -Start $qkvStart -WordCount 2048
+                Add-ReadMemLine -Lines $stepLines -Path $kPath `
+                    -ArrayName "full_expected_qkv" -Start ($qkvStart + 2048) -WordCount 1024
+                Add-ReadMemLine -Lines $stepLines -Path $vPath `
+                    -ArrayName "full_expected_qkv" -Start ($qkvStart + 3072) -WordCount 1024
+
+                foreach ($load in $perLayerLoads) {
+                    $relativeName = [string]$load[0]
+                    $arrayName = [string]$load[1]
+                    $wordCount = [int]$load[2]
+                    $path = Resolve-VectorFile $persistentVectorDirFull `
+                        "$positionRoot/$relativeName"
+                    Add-ReadMemLine -Lines $stepLines -Path $path `
+                        -ArrayName $arrayName -Start ($layerIndex * $wordCount) `
+                        -WordCount $wordCount
+                }
+            }
+
+            $stepIncludePath = Join-Path $xsimDir `
+                "persistent_step${step}_vector_loads.svh"
+            [System.IO.File]::WriteAllLines(
+                $stepIncludePath,
+                [string[]]$stepLines,
+                [System.Text.Encoding]::ASCII
+            )
+        }
+        $summary.Add(
+            "PASS persistent Temp-only includes :: $persistentConfigPath"
+        )
+    }
+
     Push-Location $xsimDir
     try {
-        $snapshotMode = if ($RuntimeContext) { "runtime" } else { "legacy" }
+        $snapshotMode = if ($PersistentTwoToken) {
+            "persistent"
+        } elseif ($RuntimeContext) {
+            "runtime"
+        } else {
+            "legacy"
+        }
         $snapshot = "embedding_full_chain_${manifestLayerCount}_${snapshotMode}_axil_tail_xsim"
-        $xvlogArgs = @("--sv", "--relax")
+        $xvlogProjectPath = Join-Path $xsimDir "full_chain_sources.prj"
+        $xvlogProjectLines = [System.Collections.Generic.List[string]]::new()
+        foreach ($sourcePath in @($rtlFiles) + @($tbPath)) {
+            $projectPath = $sourcePath.Replace("\", "/").Replace('"', '\"')
+            $xvlogProjectLines.Add(('sv work "{0}"' -f $projectPath))
+        }
+        [System.IO.File]::WriteAllLines(
+            $xvlogProjectPath,
+            [string[]]$xvlogProjectLines,
+            [System.Text.Encoding]::ASCII
+        )
+        $summary.Add(
+            "PASS xvlog project :: $xvlogProjectPath " +
+            "($($xvlogProjectLines.Count) ordered sources including testbench)"
+        )
+
+        $xvlogArgs = @("--sv", "--relax", "--prj", $xvlogProjectPath)
         foreach ($includeDir in $rtlIncludeDirs) {
             $xvlogArgs += @("-i", $includeDir)
         }
         $xvlogArgs += @("-i", $xsimDir)
-        foreach ($define in @(
+        $compileDefines = @(
             "QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL",
             "QMAP_ONE_TOKEN_TB_USE_TOP",
             "QMAP_ONE_TOKEN_TB_USE_MMIO_CONTROL",
             "QMAP_ONE_TOKEN_TB_USE_AXIL_TOP",
             "QMAP_ONE_TOKEN_TB_FULL_CHAIN"
-        )) {
+        )
+        if ($PersistentTwoToken) {
+            $compileDefines += "QMAP_ONE_TOKEN_TB_PERSISTENT_TWO_TOKEN"
+        }
+        foreach ($define in $compileDefines) {
             $xvlogArgs += @("-d", $define)
         }
         $xvlogArgs += @("--log", (Join-Path $xsimDir "xvlog.log"))
-        $xvlogArgs += $rtlFiles
-        $xvlogArgs += @($tbPath)
         Write-Host "[xvlog]  compile $manifestLayerCount-layer AXI-Lite full-chain snapshot"
         Invoke-LoggedCommand -Executable $xvlog -Arguments $xvlogArgs `
             -LogPath (Join-Path $xsimDir "xvlog_console.log") | Out-Null
 
         $xelabArgs = @(
-            "--relax", "--snapshot", $snapshot,
+            "--relax", "--O3", "--debug", "off", "--mt", "auto",
+            "--snapshot", $snapshot,
             "--log", (Join-Path $xsimDir "xelab.log"),
             "tb_qmap_one_token_layer_scheduler"
         )
@@ -517,26 +862,43 @@ try {
             "--runall"
         )
         if ($RuntimeContext) {
-            $xsimArgs = @($snapshot,
+            $runtimePlusargs = @(
                 "-testplusarg", "true3_mmio_top_tail_only",
                 "-testplusarg", "embedding_true3",
                 "-testplusarg", "embedding_full_chain",
                 "-testplusarg", "runtime_context",
                 "-testplusarg", "fastmem",
                 "-testplusarg", "progress",
-                "-testplusarg", "notrace",
+                "-testplusarg", "notrace"
+            )
+            if ($PersistentTwoToken) {
+                $runtimePlusargs += @(
+                    "-testplusarg", "persistent_two_token"
+                )
+            }
+            $xsimArgs = @($snapshot) + $runtimePlusargs + @(
                 "--log", (Join-Path $xsimDir "xsim.log"),
-                "--runall")
+                "--runall"
+            )
         }
-        Write-Host "[xsim]   run embedding -> $manifestLayerCount layers -> full-vocabulary tail"
+        $runLabel = if ($PersistentTwoToken) {
+            "two persistent RuntimeContext tokens"
+        } else {
+            "embedding -> $manifestLayerCount layers -> full-vocabulary tail"
+        }
+        Write-Host "[xsim]   run $runLabel"
         $xsimOutput = Invoke-LoggedCommand -Executable $xsim -Arguments $xsimArgs `
             -LogPath (Join-Path $xsimDir "xsim_console.log")
         $combinedOutput = $xsimOutput -join "`n"
         if ($combinedOutput -match "(?m)^FAIL:") {
             throw "XSim printed a FAIL line. See $(Join-Path $xsimDir 'xsim.log')"
         }
-        if ($combinedOutput -notmatch
-            "PASS: AXI-Lite tied-Q4 embedding ran through $manifestLayerCount complete layers") {
+        $passMarker = if ($PersistentTwoToken) {
+            "PASS: AXI-Lite RuntimeContext persistent two-token decode ran through $manifestLayerCount complete layers without reset."
+        } else {
+            "PASS: AXI-Lite tied-Q4 embedding ran through $manifestLayerCount complete layers"
+        }
+        if ($combinedOutput -notmatch [regex]::Escape($passMarker)) {
             throw "XSim did not print the full-chain PASS marker"
         }
         $summary.Add("PASS xsim")
@@ -544,23 +906,44 @@ try {
         Pop-Location
     }
 
-    $eventTrace = Join-Path $xsimDir "embedding_full_chain_events.csv"
-    $auditPath = Join-Path $xsimDir "timing_audit.json"
-    $auditArgs = @(
-        "run", "--no-capture-output", "-n", $CondaEnvironment,
-        "python", "-B", $timingChecker, $eventTrace,
-        "--manifest", $manifestPath,
-        "--xsim-log", (Join-Path $xsimDir "xsim.log"),
-        "--output", $auditPath
-    )
-    Write-Host "[audit]  verify all $manifestLayerCount layer addresses, counts, and response ordering"
-    $auditOutput = Invoke-LoggedCommand -Executable $conda -Arguments $auditArgs `
-        -LogPath (Join-Path $xsimDir "timing_audit_console.log")
-    if (($auditOutput -join "`n") -notmatch
-        "PASS: AXI-Lite embedding full-chain timing and counts are exact") {
-        throw "Timing auditor did not print its PASS marker"
+    if ($PersistentTwoToken) {
+        $eventTrace = Join-Path $xsimDir "persistent_two_token_events.csv"
+        $auditPath = Join-Path $xsimDir "persistent_timing_audit.json"
+        $auditArgs = @(
+            "run", "--no-capture-output", "-n", $CondaEnvironment,
+            "python", "-B", $persistentTimingChecker, $eventTrace,
+            "--full-chain-manifest", $manifestPath,
+            "--persistent-manifest", $persistentManifestPath,
+            "--xsim-log", (Join-Path $xsimDir "xsim.log"),
+            "--output", $auditPath
+        )
+        Write-Host "[audit]  verify two starts, feedback, exact writes, retained K/V, and no reset"
+        $auditOutput = Invoke-LoggedCommand -Executable $conda -Arguments $auditArgs `
+            -LogPath (Join-Path $xsimDir "persistent_timing_audit_console.log")
+        if (($auditOutput -join "`n") -notmatch
+            "PASS: persistent two-token full-chain timing and retention are exact") {
+            throw "Persistent timing auditor did not print its PASS marker"
+        }
+        $summary.Add("PASS persistent_timing_audit :: $auditPath")
+    } else {
+        $eventTrace = Join-Path $xsimDir "embedding_full_chain_events.csv"
+        $auditPath = Join-Path $xsimDir "timing_audit.json"
+        $auditArgs = @(
+            "run", "--no-capture-output", "-n", $CondaEnvironment,
+            "python", "-B", $timingChecker, $eventTrace,
+            "--manifest", $manifestPath,
+            "--xsim-log", (Join-Path $xsimDir "xsim.log"),
+            "--output", $auditPath
+        )
+        Write-Host "[audit]  verify all $manifestLayerCount layer addresses, counts, and response ordering"
+        $auditOutput = Invoke-LoggedCommand -Executable $conda -Arguments $auditArgs `
+            -LogPath (Join-Path $xsimDir "timing_audit_console.log")
+        if (($auditOutput -join "`n") -notmatch
+            "PASS: AXI-Lite embedding full-chain timing and counts are exact") {
+            throw "Timing auditor did not print its PASS marker"
+        }
+        $summary.Add("PASS timing_audit :: $auditPath")
     }
-    $summary.Add("PASS timing_audit :: $auditPath")
 
     $summaryPath = Join-Path $sessionDir "summary.txt"
     [System.IO.File]::WriteAllLines($summaryPath, [string[]]$summary)

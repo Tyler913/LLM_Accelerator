@@ -25,6 +25,7 @@ module attention_softmax_value_stage #(
     parameter int EXP_FRAC         = 20,
     parameter int EXP_LUT_STEP_FRAC = 4,
     parameter int EXP_LUT_SIZE     = 257,
+    parameter int USE_EXP_READ_PORT = 0,
     parameter int PROB_WIDTH       = 24,
     parameter int PROB_FRAC        = 16,
     parameter int Q_HEAD_INDEX_W   = (NUM_Q_HEADS <= 1) ? 1 : $clog2(NUM_Q_HEADS),
@@ -43,6 +44,8 @@ module attention_softmax_value_stage #(
     input  wire logic                                           i_start,
     input  wire logic [CACHE_LENGTH_W-1 : 0]                    i_cache_length,
     input  wire logic [EXP_LUT_SIZE*EXP_WIDTH-1 : 0]            i_exp_lut_flat,
+    output logic [EXP_LUT_INDEX_W-1 : 0]                        o_exp_lut_rd_addr,
+    input  wire logic [EXP_WIDTH-1 : 0]                          i_exp_lut_rd_data,
 
     input  wire logic                                           i_score_valid,
     output logic                                           o_score_ready,
@@ -91,14 +94,25 @@ module attention_softmax_value_stage #(
     localparam logic [Q_HEAD_INDEX_W-1 : 0] LAST_Q_HEAD_INDEX = NUM_Q_HEADS - 1;
     localparam logic [DIM_INDEX_W-1 : 0] LAST_DIM_INDEX = HEAD_DIM - 1;
 
-    localparam IDLE        = 3'd0;
-    localparam LOAD_SCORE  = 3'd1;
-    localparam PREP_HEAD   = 3'd2;
-    localparam ISSUE_V_REQ = 3'd3;
-    localparam WAIT_V_RSP  = 3'd4;
-    localparam FINALIZE_OUT = 3'd5;
-    localparam EMIT_OUT     = 3'd6;
-    localparam DONE         = 3'd7;
+    localparam logic [4 : 0] IDLE          = 5'd0;
+    localparam logic [4 : 0] LOAD_SCORE    = 5'd1;
+    localparam logic [4 : 0] PREP_HEAD     = 5'd2;
+    localparam logic [4 : 0] MAX_READ      = 5'd3;
+    localparam logic [4 : 0] MAX_USE       = 5'd4;
+    localparam logic [4 : 0] SUM_READ      = 5'd5;
+    localparam logic [4 : 0] SUM_USE       = 5'd6;
+    localparam logic [4 : 0] PROB_READ     = 5'd7;
+    localparam logic [4 : 0] PROB_USE      = 5'd8;
+    localparam logic [4 : 0] PROB_WAIT     = 5'd9;
+    localparam logic [4 : 0] PREP_VALUE    = 5'd10;
+    localparam logic [4 : 0] FETCH_PROB    = 5'd11;
+    localparam logic [4 : 0] ISSUE_V_REQ   = 5'd12;
+    localparam logic [4 : 0] WAIT_V_RSP    = 5'd13;
+    localparam logic [4 : 0] FINALIZE_OUT  = 5'd14;
+    localparam logic [4 : 0] EMIT_OUT      = 5'd15;
+    localparam logic [4 : 0] DONE          = 5'd16;
+    localparam logic [4 : 0] SUM_LUT_WAIT  = 5'd17;
+    localparam logic [4 : 0] PROB_LUT_WAIT = 5'd18;
 
     localparam signed [OUT_WIDTH-1 : 0] OUT_MAX = {1'b0, {(OUT_WIDTH-1){1'b1}}};
     localparam signed [OUT_WIDTH-1 : 0] OUT_MIN = {1'b1, {(OUT_WIDTH-1){1'b0}}};
@@ -111,27 +125,45 @@ module attention_softmax_value_stage #(
     typedef logic signed [SCORE_WIDTH-1 : 0] score_t;
     typedef logic [PROB_WIDTH-1 : 0] prob_t;
 
-    logic [2 : 0] current_state;
-    logic [2 : 0] next_state;
+    localparam int SCORE_DEPTH =
+        NUM_Q_HEADS * MAX_CONTEXT;
+    localparam int SCORE_ADDR_W =
+        (SCORE_DEPTH <= 1) ? 1 : $clog2(SCORE_DEPTH);
+
+    logic [4 : 0] current_state;
+    logic [4 : 0] next_state;
     logic [CACHE_LENGTH_W-1 : 0] cache_length_reg;
     logic [Q_HEAD_INDEX_W-1 : 0] q_head_index;
     logic [KV_HEAD_INDEX_W-1 : 0] kv_head_index;
     logic [POSITION_INDEX_W-1 : 0] position_index;
+    logic [POSITION_INDEX_W-1 : 0] softmax_position;
     logic [DIM_INDEX_W-1 : 0] dim_index;
     logic signed [VALUE_ACC_WIDTH-1 : 0] value_acc;
     logic signed [VALUE_ACC_WIDTH-1 : 0] value_acc_next;
     logic value_saturation_from_acc;
 
-    score_t score_mem [0:NUM_Q_HEADS-1][0:MAX_CONTEXT-1];
-    prob_t prob_mem [0:MAX_CONTEXT-1];
-
-    score_t max_score_calc;
-    logic [EXP_LUT_INDEX_W-1 : 0] lut_index_calc [0:MAX_CONTEXT-1];
-    logic [EXP_WIDTH-1 : 0] exp_value_calc [0:MAX_CONTEXT-1];
-    logic [EXP_SUM_WIDTH-1 : 0] exp_sum_calc;
-    prob_t prob_calc [0:MAX_CONTEXT-1];
+    (* ram_style = "block" *) score_t score_mem [0:SCORE_DEPTH-1];
+    logic [SCORE_ADDR_W-1 : 0] score_write_addr;
+    logic [SCORE_ADDR_W-1 : 0] score_read_addr;
+    score_t score_read_data;
+    prob_t prob_read_data;
+    score_t max_score_reg;
+    logic [EXP_SUM_WIDTH-1 : 0] exp_sum_reg;
+    logic [EXP_LUT_INDEX_W-1 : 0] lut_index_current;
+    logic [EXP_WIDTH-1 : 0] exp_value_current;
+    logic [EXP_SUM_WIDTH-1 : 0] exp_sum_next;
+    logic [PROB_NUM_WIDTH-1 : 0] prob_numerator_current;
+    prob_t prob_value_current;
+    logic prob_div_start;
+    logic prob_div_busy;
+    logic prob_div_done;
+    logic prob_divide_by_zero;
+    logic prob_write_en;
+    logic [PROB_WIDTH-1 : 0] prob_div_quotient;
+    logic [EXP_SUM_WIDTH-1 : 0] prob_div_remainder;
 
     logic [CACHE_LENGTH_W-1 : 0] position_index_ext;
+    logic [CACHE_LENGTH_W-1 : 0] softmax_position_ext;
     logic [CACHE_LENGTH_W-1 : 0] score_position_ext;
     logic [CACHE_LENGTH_W-1 : 0] last_cache_position;
     logic [31 : 0] expected_score_count;
@@ -163,7 +195,7 @@ module attention_softmax_value_stage #(
     assign o_v_req_kv_head = kv_head_index;
     assign o_v_req_position = position_index;
     assign o_v_req_dim = dim_index;
-    assign o_v_req_prob = prob_mem[position_index];
+    assign o_v_req_prob = prob_read_data;
     assign v_req_fire = o_v_req_valid && i_v_req_ready;
 
     assign o_v_rsp_ready = (current_state == WAIT_V_RSP);
@@ -177,7 +209,13 @@ module attention_softmax_value_stage #(
     assign out_fire = o_out_valid && i_out_ready;
 
     assign position_index_ext = {{(CACHE_LENGTH_W-POSITION_INDEX_W){1'b0}}, position_index};
+    assign softmax_position_ext =
+        {{(CACHE_LENGTH_W-POSITION_INDEX_W){1'b0}}, softmax_position};
     assign score_position_ext = {{(CACHE_LENGTH_W-POSITION_INDEX_W){1'b0}}, i_score_position};
+    assign score_write_addr =
+        (i_score_q_head * MAX_CONTEXT) + i_score_position;
+    assign score_read_addr =
+        (q_head_index * MAX_CONTEXT) + softmax_position;
     assign last_cache_position = cache_length_reg - 1'b1;
     assign expected_score_count = NUM_Q_HEADS * cache_length_reg;
     assign expected_v_count = NUM_Q_HEADS * HEAD_DIM * cache_length_reg;
@@ -232,49 +270,61 @@ module attention_softmax_value_stage #(
         end
     endfunction
 
-    integer i;
     localparam int VALUE_PRODUCT_WIDTH = VALUE_WIDTH + PROB_WIDTH + 1;
     logic signed [VALUE_PRODUCT_WIDTH-1 : 0] prob_product_operand;
     logic signed [VALUE_PRODUCT_WIDTH-1 : 0] value_product_operand;
     logic signed [VALUE_PRODUCT_WIDTH-1 : 0] value_product;
 
     always @* begin
-        max_score_calc = score_mem[q_head_index][0];
-        for (i = 1; i < MAX_CONTEXT; i = i + 1) begin
-            if ((i < cache_length_reg) && (score_mem[q_head_index][i] > max_score_calc)) begin
-                max_score_calc = score_mem[q_head_index][i];
-            end
+        lut_index_current = diff_to_lut_index(max_score_reg, score_read_data);
+        if (USE_EXP_READ_PORT != 0) begin
+            exp_value_current = i_exp_lut_rd_data;
         end
-
-        exp_sum_calc = 'd0;
-        for (i = 0; i < MAX_CONTEXT; i = i + 1) begin
-            if (i < cache_length_reg) begin
-                lut_index_calc[i] = diff_to_lut_index(max_score_calc, score_mem[q_head_index][i]);
-                exp_value_calc[i] =
-                    i_exp_lut_flat[lut_index_calc[i]*EXP_WIDTH +: EXP_WIDTH];
-                exp_sum_calc = exp_sum_calc + exp_value_calc[i];
-            end
-            else begin
-                lut_index_calc[i] = 'd0;
-                exp_value_calc[i] = 'd0;
-            end
+        else begin
+            exp_value_current =
+                i_exp_lut_flat[
+                    lut_index_current*EXP_WIDTH +: EXP_WIDTH
+                ];
         end
-
-        for (i = 0; i < MAX_CONTEXT; i = i + 1) begin
-            if ((i < cache_length_reg) && (exp_sum_calc != 'd0)) begin
-                prob_calc[i] =
-                    ({{(PROB_NUM_WIDTH-EXP_WIDTH){1'b0}}, exp_value_calc[i]} << PROB_FRAC) /
-                    exp_sum_calc;
-            end
-            else begin
-                prob_calc[i] = 'd0;
-            end
-        end
+        exp_sum_next =
+            exp_sum_reg +
+            {{(EXP_SUM_WIDTH-EXP_WIDTH){1'b0}}, exp_value_current};
+        prob_numerator_current =
+            {{(PROB_NUM_WIDTH-EXP_WIDTH){1'b0}}, exp_value_current} << PROB_FRAC;
     end
+
+    assign o_exp_lut_rd_addr = lut_index_current;
+    assign prob_div_start = (current_state == PROB_LUT_WAIT);
+    assign prob_value_current =
+        prob_divide_by_zero ? 'd0 : prob_div_quotient;
+    assign prob_write_en =
+        i_rst_n && (current_state == PROB_WAIT) && prob_div_done;
+
+    // Keep the iterative divider as a sequential hierarchy. Without this
+    // boundary Vivado can fold the fixed-latency transaction into the
+    // probability RAM write cone, recreating a long combinational divider.
+    (* DONT_TOUCH = "yes" *)
+    fixed_udiv #(
+        .NUMERATOR_WIDTH   (PROB_NUM_WIDTH),
+        .DENOMINATOR_WIDTH (EXP_SUM_WIDTH),
+        .QUOTIENT_WIDTH    (PROB_WIDTH),
+        .REMAINDER_WIDTH   (EXP_SUM_WIDTH)
+    ) prob_divider (
+        .i_clk            (i_clk),
+        .i_rst_n          (i_rst_n),
+        .i_start          (prob_div_start),
+        .i_numerator      (prob_numerator_current),
+        .i_denominator    (exp_sum_reg),
+        .o_busy           (prob_div_busy),
+        .o_done           (prob_div_done),
+        .o_divide_by_zero (prob_divide_by_zero),
+        .o_quotient       (prob_div_quotient),
+        .o_remainder      (prob_div_remainder)
+    );
 
     always @* begin
         prob_product_operand =
-            {{(VALUE_PRODUCT_WIDTH-PROB_WIDTH-1){1'b0}}, 1'b0, prob_mem[position_index]};
+            {{(VALUE_PRODUCT_WIDTH-PROB_WIDTH-1){1'b0}}, 1'b0, prob_read_data};
         value_product_operand =
             {{(VALUE_PRODUCT_WIDTH-VALUE_WIDTH){i_v_rsp_data[VALUE_WIDTH-1]}}, i_v_rsp_data};
         value_product = prob_product_operand * value_product_operand;
@@ -309,6 +359,67 @@ module attention_softmax_value_stage #(
             end
 
             PREP_HEAD: begin
+                next_state = MAX_READ;
+            end
+
+            MAX_READ: begin
+                next_state = MAX_USE;
+            end
+
+            MAX_USE: begin
+                if (softmax_position_ext == last_cache_position) begin
+                    next_state = SUM_READ;
+                end
+                else begin
+                    next_state = MAX_READ;
+                end
+            end
+
+            SUM_READ: begin
+                next_state = SUM_USE;
+            end
+
+            SUM_USE: begin
+                next_state = SUM_LUT_WAIT;
+            end
+
+            SUM_LUT_WAIT: begin
+                if (softmax_position_ext == last_cache_position) begin
+                    next_state = PROB_READ;
+                end
+                else begin
+                    next_state = SUM_READ;
+                end
+            end
+
+            PROB_READ: begin
+                next_state = PROB_USE;
+            end
+
+            PROB_USE: begin
+                next_state = PROB_LUT_WAIT;
+            end
+
+            PROB_LUT_WAIT: begin
+                next_state = PROB_WAIT;
+            end
+
+            PROB_WAIT: begin
+                if (prob_div_done) begin
+                    if (softmax_position_ext == last_cache_position) begin
+                        next_state = PREP_VALUE;
+                    end
+                    else begin
+                        next_state = PROB_READ;
+                    end
+                end
+            end
+
+            PREP_VALUE: begin
+                next_state = FETCH_PROB;
+            end
+
+            FETCH_PROB: begin
                 next_state = ISSUE_V_REQ;
             end
 
@@ -324,7 +435,7 @@ module attention_softmax_value_stage #(
                         next_state = FINALIZE_OUT;
                     end
                     else begin
-                        next_state = ISSUE_V_REQ;
+                        next_state = FETCH_PROB;
                     end
                 end
             end
@@ -342,7 +453,7 @@ module attention_softmax_value_stage #(
                         next_state = PREP_HEAD;
                     end
                     else begin
-                        next_state = ISSUE_V_REQ;
+                        next_state = FETCH_PROB;
                     end
                 end
             end
@@ -357,6 +468,34 @@ module attention_softmax_value_stage #(
         endcase
     end
 
+    // A flat, synchronous-read score store maps to a simple dual-port BRAM.
+    // Reset only gates writes; stored data is overwritten by every invocation.
+    always_ff @(posedge i_clk) begin
+        if (i_rst_n && score_fire &&
+            (i_score_q_head < NUM_Q_HEADS) &&
+            (score_position_ext < cache_length_reg)) begin
+            score_mem[score_write_addr] <= i_score_scaled;
+        end
+        score_read_data <= score_mem[score_read_addr];
+    end
+
+    // Probabilities are produced serially after max and exp-sum passes. A
+    // synchronous BRAM read is primed in FETCH_PROB before each V-cache
+    // request.
+    qmap_sdp_bram #(
+        .DATA_WIDTH(PROB_WIDTH),
+        .DEPTH(MAX_CONTEXT),
+        .ADDR_WIDTH(POSITION_INDEX_W)
+    ) prob_store (
+        .i_clk(i_clk),
+        .i_wr_en(prob_write_en),
+        .i_wr_addr(softmax_position),
+        .i_wr_data(prob_value_current),
+        .i_rd_en(1'b1),
+        .i_rd_addr(position_index),
+        .o_rd_data(prob_read_data)
+    );
+
     always_ff @(posedge i_clk or negedge i_rst_n) begin
         if (i_rst_n == 1'b0) begin
             current_state <= IDLE;
@@ -366,16 +505,17 @@ module attention_softmax_value_stage #(
         end
     end
 
-    integer j;
-
     always_ff @(posedge i_clk or negedge i_rst_n) begin
         if (i_rst_n == 1'b0) begin
             cache_length_reg <= 'd0;
             q_head_index <= 'd0;
             kv_head_index <= 'd0;
             position_index <= 'd0;
+            softmax_position <= 'd0;
             dim_index <= 'd0;
             value_acc <= 'd0;
+            max_score_reg <= 'd0;
+            exp_sum_reg <= 'd0;
             out_q_head_reg <= 'd0;
             out_dim_reg <= 'd0;
             out_data_reg <= 'd0;
@@ -386,9 +526,6 @@ module attention_softmax_value_stage #(
             o_v_request_count <= 32'd0;
             o_v_response_count <= 32'd0;
             o_output_count <= 32'd0;
-            for (j = 0; j < MAX_CONTEXT; j = j + 1) begin
-                prob_mem[j] <= 'd0;
-            end
         end
         else begin
             case (current_state)
@@ -398,8 +535,11 @@ module attention_softmax_value_stage #(
                         q_head_index <= 'd0;
                         kv_head_index <= 'd0;
                         position_index <= 'd0;
+                        softmax_position <= 'd0;
                         dim_index <= 'd0;
                         value_acc <= 'd0;
+                        max_score_reg <= 'd0;
+                        exp_sum_reg <= 'd0;
                         out_q_head_reg <= 'd0;
                         out_dim_reg <= 'd0;
                         out_data_reg <= 'd0;
@@ -415,11 +555,8 @@ module attention_softmax_value_stage #(
 
                 LOAD_SCORE: begin
                     if (score_fire == 1'b1) begin
-                        if ((i_score_q_head < NUM_Q_HEADS) &&
-                            (score_position_ext < cache_length_reg)) begin
-                            score_mem[i_score_q_head][i_score_position] <= i_score_scaled;
-                        end
-                        else begin
+                        if (!((i_score_q_head < NUM_Q_HEADS) &&
+                              (score_position_ext < cache_length_reg))) begin
                             error_reg <= 1'b1;
                         end
                         o_score_count <= o_score_count + 1'b1;
@@ -428,20 +565,70 @@ module attention_softmax_value_stage #(
                             q_head_index <= 'd0;
                             kv_head_index <= 'd0;
                             position_index <= 'd0;
+                            softmax_position <= 'd0;
                             dim_index <= 'd0;
                             value_acc <= 'd0;
+                            max_score_reg <= 'd0;
+                            exp_sum_reg <= 'd0;
                         end
                     end
                 end
 
                 PREP_HEAD: begin
-                    for (j = 0; j < MAX_CONTEXT; j = j + 1) begin
-                        prob_mem[j] <= prob_calc[j];
+                    softmax_position <= 'd0;
+                    max_score_reg <= 'd0;
+                    exp_sum_reg <= 'd0;
+                end
+
+                MAX_USE: begin
+                    if ((softmax_position == 'd0) ||
+                        (score_read_data > max_score_reg)) begin
+                        max_score_reg <= score_read_data;
                     end
+                    if (softmax_position_ext == last_cache_position) begin
+                        softmax_position <= 'd0;
+                        exp_sum_reg <= 'd0;
+                    end
+                    else begin
+                        softmax_position <= softmax_position + 1'b1;
+                    end
+                end
+
+                SUM_LUT_WAIT: begin
+                    exp_sum_reg <= exp_sum_next;
+                    if (softmax_position_ext == last_cache_position) begin
+                        softmax_position <= 'd0;
+                    end
+                    else begin
+                        softmax_position <= softmax_position + 1'b1;
+                    end
+                end
+
+                PROB_WAIT: begin
+                    if (prob_div_done) begin
+                        if (softmax_position_ext == last_cache_position) begin
+                            softmax_position <= 'd0;
+                        end
+                        else begin
+                            softmax_position <= softmax_position + 1'b1;
+                        end
+                    end
+                end
+
+                PREP_VALUE: begin
                     kv_head_index <= q_head_index / KV_REPEAT;
                     position_index <= 'd0;
                     dim_index <= 'd0;
                     value_acc <= 'd0;
+                end
+
+                MAX_READ,
+                SUM_READ,
+                SUM_USE,
+                PROB_READ,
+                PROB_USE,
+                PROB_LUT_WAIT,
+                FETCH_PROB: begin
                 end
 
                 ISSUE_V_REQ: begin
@@ -505,8 +692,11 @@ module attention_softmax_value_stage #(
                     q_head_index <= 'd0;
                     kv_head_index <= 'd0;
                     position_index <= 'd0;
+                    softmax_position <= 'd0;
                     dim_index <= 'd0;
                     value_acc <= 'd0;
+                    max_score_reg <= 'd0;
+                    exp_sum_reg <= 'd0;
                     out_q_head_reg <= 'd0;
                     out_dim_reg <= 'd0;
                     out_data_reg <= 'd0;

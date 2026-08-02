@@ -19,6 +19,7 @@ module qmap_final_token_tail_compute_path #(
     parameter int MAX_TILES        = 9496,
     parameter int TILE_COUNT_WIDTH = (MAX_TILES <= 1) ? 1 : $clog2(MAX_TILES + 1),
     parameter int TILE_ROWS        = 16,
+    parameter int ROW_PARALLEL     = 1,
     parameter int INPUT_SIZE       = 1024,
     parameter int HIDDEN_WIDTH     = 24,
     parameter int HIDDEN_FRAC      = 10,
@@ -28,12 +29,14 @@ module qmap_final_token_tail_compute_path #(
     parameter int NORM_FRAC        = 12,
     parameter int GROUP_SIZE       = 64,
     parameter int GROUP_COUNT      = INPUT_SIZE / GROUP_SIZE,
+    parameter int GROUP_PARALLEL   = 1,
     parameter int WEIGHT_WIDTH     = 4,
     parameter int SCALE_WIDTH      = 16,
     parameter int PARTIAL_WIDTH    = NORM_WIDTH + WEIGHT_WIDTH + $clog2(GROUP_SIZE),
     parameter int SCALED_WIDTH     = PARTIAL_WIDTH + SCALE_WIDTH,
     parameter int ROW_ACC_WIDTH    = SCALED_WIDTH + $clog2(GROUP_COUNT) + 2,
     parameter int TOKEN_ID_WIDTH   = 32,
+    parameter int USE_BRAM_STREAMING = 1,
     parameter int MEM_DATA_WIDTH   = 32,
     parameter int MAX_READ_BYTES   = 1024
 )
@@ -99,10 +102,12 @@ module qmap_final_token_tail_compute_path #(
     localparam int NORM_BYTES           = INPUT_SIZE * MEM_DATA_BYTES;
     localparam int HIDDEN_CHUNK_COUNT   = HIDDEN_BYTES / MAX_READ_BYTES;
     localparam int GAMMA_CHUNK_COUNT    = GAMMA_BYTES / MAX_READ_BYTES;
+    localparam int ELEMENT_INDEX_W      =
+        (INPUT_SIZE <= 1) ? 1 : $clog2(INPUT_SIZE);
     localparam logic [15 : 0] CHUNK_BYTES_U16 = MAX_READ_BYTES;
     localparam logic [15 : 0] NORM_BYTES_U16 = NORM_BYTES;
 
-    typedef enum logic [3 : 0] {
+    typedef enum logic [4 : 0] {
         S_IDLE,
         S_READER_START,
         S_READER_WAIT,
@@ -114,6 +119,7 @@ module qmap_final_token_tail_compute_path #(
         S_RMS_START,
         S_RMS_WAIT,
         S_NORM_WRITE_REQ,
+        S_NORM_WRITE_PRIME,
         S_NORM_WRITE_DATA,
         S_NORM_WRITE_WAIT,
         S_LM_START,
@@ -185,6 +191,15 @@ module qmap_final_token_tail_compute_path #(
     logic [63 : 0] norm_mean_square;
     logic [23 : 0] norm_inv_rms;
     logic [31 : 0] norm_write_data_word;
+    logic norm_bram_error_raw;
+    logic [ELEMENT_INDEX_W-1 : 0] norm_bram_load_addr;
+    logic norm_bram_input_wr_en;
+    logic norm_bram_gamma_wr_en;
+    logic [ELEMENT_INDEX_W-1 : 0] norm_bram_output_rd_addr;
+    logic [NORM_WIDTH-1 : 0] norm_bram_output_rd_data;
+    logic [31 : 0] legacy_norm_cycle_count;
+    logic [31 : 0] bram_norm_cycle_count;
+    logic [3 : 0] final_norm_state_debug;
 
     logic lm_start;
     logic lm_busy;
@@ -275,30 +290,92 @@ module qmap_final_token_tail_compute_path #(
         .o_desc_aux3_flat(reader_desc_aux3_flat)
     );
 
-    final_rmsnorm_stage #(
-        .INPUT_SIZE(INPUT_SIZE),
-        .IN_WIDTH(HIDDEN_WIDTH),
-        .IN_FRAC(HIDDEN_FRAC),
-        .GAMMA_WIDTH(GAMMA_WIDTH),
-        .GAMMA_FRAC(GAMMA_FRAC),
-        .OUT_WIDTH(NORM_WIDTH),
-        .OUT_FRAC(NORM_FRAC)
-    ) final_norm_stage (
-        .i_clk(i_clk),
-        .i_rst_n(i_rst_n),
-        .i_start(norm_start),
-        .i_input_flat(hidden_flat),
-        .i_gamma_flat(gamma_flat),
-        .o_busy(norm_busy),
-        .o_done(norm_done),
-        .o_error(norm_error),
-        .o_saturation(o_norm_saturation),
-        .o_cycle_count(o_norm_cycle_count),
-        .o_output_flat(norm_output_flat),
-        .o_sum_squares(norm_sum_squares),
-        .o_mean_square(norm_mean_square),
-        .o_inv_rms(norm_inv_rms)
-    );
+    generate
+        if (USE_BRAM_STREAMING != 0) begin : gen_bram_final_norm
+            assign norm_error =
+                norm_bram_error_raw | o_norm_saturation;
+            assign legacy_norm_cycle_count = 32'd0;
+            assign final_norm_state_debug =
+                final_norm_stage_bram.state;
+
+            rmsnorm_bram #(
+                .INPUT_SIZE(INPUT_SIZE),
+                .IN_WIDTH(HIDDEN_WIDTH),
+                .IN_FRAC(HIDDEN_FRAC),
+                .GAMMA_WIDTH(GAMMA_WIDTH),
+                .GAMMA_FRAC(GAMMA_FRAC),
+                .GAMMA_SIGNED(1),
+                .INV_RMS_WIDTH(24),
+                .INV_RMS_FRAC(16),
+                .OUT_WIDTH(NORM_WIDTH),
+                .OUT_FRAC(NORM_FRAC),
+                .SUM_WIDTH(64),
+                .SUM_FRAC(2 * HIDDEN_FRAC),
+                .MEAN_SHIFT($clog2(INPUT_SIZE)),
+                .RMS_WIDTH(HIDDEN_WIDTH),
+                .RMS_FRAC(HIDDEN_FRAC),
+                .DIV_NUM_WIDTH(48),
+                .DIV_NUM_SHIFT(HIDDEN_FRAC + 16),
+                .EPS_Q20(1),
+                .ELEMENT_INDEX_W(ELEMENT_INDEX_W)
+            ) final_norm_stage_bram (
+                .i_clk(i_clk),
+                .i_rst_n(i_rst_n),
+                .i_input_wr_en(norm_bram_input_wr_en),
+                .i_input_wr_addr(norm_bram_load_addr),
+                .i_input_wr_data(
+                    i_mem_rd_rsp_data[HIDDEN_WIDTH-1 : 0]),
+                .i_gamma_wr_en(norm_bram_gamma_wr_en),
+                .i_gamma_wr_addr(norm_bram_load_addr),
+                .i_gamma_wr_data(
+                    i_mem_rd_rsp_data[GAMMA_WIDTH-1 : 0]),
+                .i_start(norm_start),
+                .o_busy(norm_busy),
+                .o_done(norm_done),
+                .o_error(norm_bram_error_raw),
+                .o_saturation(o_norm_saturation),
+                .i_output_rd_addr(norm_bram_output_rd_addr),
+                .o_output_rd_data(norm_bram_output_rd_data),
+                .o_output_wr_valid(),
+                .o_output_wr_addr(),
+                .o_output_wr_data(),
+                .o_sum_squares(norm_sum_squares),
+                .o_mean_square(norm_mean_square),
+                .o_inv_rms(norm_inv_rms)
+            );
+        end
+        else begin : gen_legacy_final_norm
+            assign norm_bram_error_raw = 1'b0;
+            assign norm_bram_output_rd_data = '0;
+            assign final_norm_state_debug =
+                {2'b00, final_norm_stage.current_state};
+
+            final_rmsnorm_stage #(
+                .INPUT_SIZE(INPUT_SIZE),
+                .IN_WIDTH(HIDDEN_WIDTH),
+                .IN_FRAC(HIDDEN_FRAC),
+                .GAMMA_WIDTH(GAMMA_WIDTH),
+                .GAMMA_FRAC(GAMMA_FRAC),
+                .OUT_WIDTH(NORM_WIDTH),
+                .OUT_FRAC(NORM_FRAC)
+            ) final_norm_stage (
+                .i_clk(i_clk),
+                .i_rst_n(i_rst_n),
+                .i_start(norm_start),
+                .i_input_flat(hidden_flat),
+                .i_gamma_flat(gamma_flat),
+                .o_busy(norm_busy),
+                .o_done(norm_done),
+                .o_error(norm_error),
+                .o_saturation(o_norm_saturation),
+                .o_cycle_count(legacy_norm_cycle_count),
+                .o_output_flat(norm_output_flat),
+                .o_sum_squares(norm_sum_squares),
+                .o_mean_square(norm_mean_square),
+                .o_inv_rms(norm_inv_rms)
+            );
+        end
+    endgenerate
 
     qmap_lm_head_argmax_compute_path #(
         .ADDR_WIDTH(ADDR_WIDTH),
@@ -306,9 +383,11 @@ module qmap_final_token_tail_compute_path #(
         .MAX_TILES(MAX_TILES),
         .TILE_COUNT_WIDTH(TILE_COUNT_WIDTH),
         .TILE_ROWS(TILE_ROWS),
+        .ROW_PARALLEL(ROW_PARALLEL),
         .INPUT_SIZE(INPUT_SIZE),
         .GROUP_SIZE(GROUP_SIZE),
         .GROUP_COUNT(GROUP_COUNT),
+        .GROUP_PARALLEL(GROUP_PARALLEL),
         .ACT_WIDTH(NORM_WIDTH),
         .WEIGHT_WIDTH(WEIGHT_WIDTH),
         .SCALE_WIDTH(SCALE_WIDTH),
@@ -361,6 +440,10 @@ module qmap_final_token_tail_compute_path #(
     assign norm_start = (state == S_RMS_START);
     assign lm_start = (state == S_LM_START);
     assign o_busy = (state != S_IDLE) && (state != S_DONE);
+    assign o_norm_cycle_count =
+        (USE_BRAM_STREAMING != 0) ?
+        bram_norm_cycle_count :
+        legacy_norm_cycle_count;
 
     assign reader_req_ready = (state == S_READER_WAIT) ? i_mem_rd_req_ready : 1'b0;
     assign reader_rsp_valid = (state == S_READER_WAIT) ? i_mem_rd_rsp_valid : 1'b0;
@@ -429,6 +512,25 @@ module qmap_final_token_tail_compute_path #(
         (i_mem_rd_rsp_last != (read_word_index == (CHUNK_WORDS - 1)));
     assign gamma_protocol_error =
         (i_mem_rd_rsp_last != (read_word_index == (CHUNK_WORDS - 1)));
+    assign norm_bram_load_addr =
+        element_index[ELEMENT_INDEX_W-1 : 0];
+    assign norm_bram_input_wr_en =
+        (USE_BRAM_STREAMING != 0) &&
+        (state == S_HIDDEN_READ) &&
+        i_mem_rd_rsp_valid &&
+        !hidden_protocol_error;
+    assign norm_bram_gamma_wr_en =
+        (USE_BRAM_STREAMING != 0) &&
+        (state == S_GAMMA_READ) &&
+        i_mem_rd_rsp_valid &&
+        !gamma_protocol_error;
+    assign norm_bram_output_rd_addr =
+        ((state == S_NORM_WRITE_DATA) &&
+         o_mem_wr_data_valid &&
+         i_mem_wr_data_ready &&
+         !o_mem_wr_data_last) ?
+        (norm_write_word_index[ELEMENT_INDEX_W-1 : 0] + 1'b1) :
+        norm_write_word_index[ELEMENT_INDEX_W-1 : 0];
 
     always @* begin
         element_index = 32'd0;
@@ -444,10 +546,23 @@ module qmap_final_token_tail_compute_path #(
         end
 
         if (state == S_NORM_WRITE_DATA) begin
-            norm_write_data_word = {
-                {8{norm_output_flat[(element_index*NORM_WIDTH) + (NORM_WIDTH-1)]}},
-                norm_output_flat[element_index*NORM_WIDTH +: NORM_WIDTH]
-            };
+            if (USE_BRAM_STREAMING != 0) begin
+                norm_write_data_word = {
+                    {(MEM_DATA_WIDTH-NORM_WIDTH){
+                        norm_bram_output_rd_data[NORM_WIDTH-1]}},
+                    norm_bram_output_rd_data
+                };
+            end
+            else begin
+                norm_write_data_word = {
+                    {(MEM_DATA_WIDTH-NORM_WIDTH){
+                        norm_output_flat[
+                            (element_index*NORM_WIDTH) +
+                            (NORM_WIDTH-1)]}},
+                    norm_output_flat[
+                        element_index*NORM_WIDTH +: NORM_WIDTH]
+                };
+            end
         end
     end
 
@@ -486,8 +601,10 @@ module qmap_final_token_tail_compute_path #(
     always_ff @(posedge i_clk or negedge i_rst_n) begin
         if (i_rst_n == 1'b0) begin
             state <= S_IDLE;
-            hidden_flat <= '0;
-            gamma_flat <= '0;
+            if (USE_BRAM_STREAMING == 0) begin
+                hidden_flat <= '0;
+                gamma_flat <= '0;
+            end
             hidden_chunk_index <= 32'd0;
             gamma_chunk_index <= 32'd0;
             read_word_index <= 32'd0;
@@ -499,6 +616,7 @@ module qmap_final_token_tail_compute_path #(
             o_mem_read_burst_count <= 32'd0;
             o_mem_read_word_count <= 32'd0;
             o_mem_write_word_count <= 32'd0;
+            bram_norm_cycle_count <= 32'd0;
         end
         else begin
             o_done <= 1'b0;
@@ -512,13 +630,21 @@ module qmap_final_token_tail_compute_path #(
             if (o_mem_wr_data_valid && i_mem_wr_data_ready) begin
                 o_mem_write_word_count <= o_mem_write_word_count + 1'b1;
             end
+            if ((USE_BRAM_STREAMING != 0) &&
+                ((state == S_RMS_START) ||
+                 (state == S_RMS_WAIT))) begin
+                bram_norm_cycle_count <=
+                    bram_norm_cycle_count + 1'b1;
+            end
 
             case (state)
                 S_IDLE: begin
                     if (i_start) begin
                         state <= S_READER_START;
-                        hidden_flat <= '0;
-                        gamma_flat <= '0;
+                        if (USE_BRAM_STREAMING == 0) begin
+                            hidden_flat <= '0;
+                            gamma_flat <= '0;
+                        end
                         hidden_chunk_index <= 32'd0;
                         gamma_chunk_index <= 32'd0;
                         read_word_index <= 32'd0;
@@ -529,6 +655,7 @@ module qmap_final_token_tail_compute_path #(
                         o_mem_read_burst_count <= 32'd0;
                         o_mem_read_word_count <= 32'd0;
                         o_mem_write_word_count <= 32'd0;
+                        bram_norm_cycle_count <= 32'd0;
                     end
                 end
 
@@ -574,8 +701,13 @@ module qmap_final_token_tail_compute_path #(
                             state <= S_DONE;
                         end
                         else begin
-                            hidden_flat[element_index*HIDDEN_WIDTH +: HIDDEN_WIDTH] <=
-                                i_mem_rd_rsp_data[HIDDEN_WIDTH-1 : 0];
+                            if (USE_BRAM_STREAMING == 0) begin
+                                hidden_flat[
+                                    element_index*HIDDEN_WIDTH +:
+                                    HIDDEN_WIDTH] <=
+                                    i_mem_rd_rsp_data[
+                                        HIDDEN_WIDTH-1 : 0];
+                            end
                             if (i_mem_rd_rsp_last) begin
                                 if (hidden_chunk_index == (HIDDEN_CHUNK_COUNT - 1)) begin
                                     gamma_chunk_index <= 32'd0;
@@ -609,8 +741,13 @@ module qmap_final_token_tail_compute_path #(
                             state <= S_DONE;
                         end
                         else begin
-                            gamma_flat[element_index*GAMMA_WIDTH +: GAMMA_WIDTH] <=
-                                i_mem_rd_rsp_data[GAMMA_WIDTH-1 : 0];
+                            if (USE_BRAM_STREAMING == 0) begin
+                                gamma_flat[
+                                    element_index*GAMMA_WIDTH +:
+                                    GAMMA_WIDTH] <=
+                                    i_mem_rd_rsp_data[
+                                        GAMMA_WIDTH-1 : 0];
+                            end
                             if (i_mem_rd_rsp_last) begin
                                 if (gamma_chunk_index == (GAMMA_CHUNK_COUNT - 1)) begin
                                     state <= S_RMS_START;
@@ -648,8 +785,13 @@ module qmap_final_token_tail_compute_path #(
                 S_NORM_WRITE_REQ: begin
                     if (i_mem_wr_req_ready) begin
                         norm_write_word_index <= 32'd0;
-                        state <= S_NORM_WRITE_DATA;
+                        state <= S_NORM_WRITE_PRIME;
                     end
+                end
+
+                S_NORM_WRITE_PRIME: begin
+                    norm_write_word_index <= 32'd0;
+                    state <= S_NORM_WRITE_DATA;
                 end
 
                 S_NORM_WRITE_DATA: begin

@@ -387,28 +387,37 @@ and Q2.14 scales, the default 24-bit path derives:
 
 ## Immediate Technical Direction
 
-The PS-to-PL memory bring-up phase and the first PL AXI-master QMAP compute
-bring-up phase have both reached hardware checkpoints:
-
-1. AXI BRAM, DDR4 status GPIO, and PL DDR4 are reachable from PS.
-2. The dot64 QMAP image can be loaded by PS, read by PL through AXI, and
-   computed by the Q4 dot-product RTL.
-3. The row1024 QMAP image can be loaded by PS, read by PL through AXI, and
-   computed by the full-row Q4 GEMV RTL.
-
-The current durable hardware-facing direction is Layer 0 local one-token
-datapath integration:
+The PS-to-PL memory phase and the dot64/row1024 PL-master compute phases have
+hardware PASS checkpoints. The current project has advanced beyond those smoke
+designs:
 
 ```text
-input_norm[1024]
-  -> q_proj/k_proj/v_proj Q4 GEMV
-  -> Q/K/V output buffers in PL DDR4
-  -> q_norm/k_norm, RoPE, KV-cache append, attention, and o_proj
-  -> post-attention residual/RMSNorm/MLP
-  -> final RMSNorm and LM-head scan/argmax
+token id
+  -> tied-Q4 embedding
+  -> 28 x (input RMSNorm, QKV, attention, o_proj, residual/RMSNorm, MLP)
+  -> retained per-layer K/V cache
+  -> final RMSNorm
+  -> full 151936-row tied-Q4 LM head
+  -> greedy token id and score
 ```
 
-The important new capability is PL write-back. The existing row1024 hardware
+That complete datapath is now present in the Vivado BD behind AXI4-Lite control
+at `0xA004_0000` and a PL-DDR AXI4 master. The current routed board candidate
+meets timing with WNS `+0.208 ns`, fully routes all `119,383` routable nets, and
+uses `92.58%` of CLB LUTs. The runtime/Vitis/XSDB path loads 61 verified PL-DDR
+segments, checks all 281 QMAP packets, and runs two feedback-closed token
+positions without clearing the 28-layer KV cache.
+
+The latest actual hardware PASS remains the 2026-06-23 row1024 smoke. The
+resource-reduced full28 no-reset two-token XSim and its independent exact-write,
+producer-before-consumer, and retained-KV audit passed on 2026-08-01. The
+self-contained release package also passed its inventory, SHA256, and board-
+readme semantic verifier and records
+`BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`. No additional planned RTL feature
+remains before the first full28 board run.
+
+The remainder of this section records how the full datapath was assembled. The
+important early capability was PL write-back. The existing row1024 hardware
 checkpoint proves the PL AXI read path and Q4 row GEMV datapath. The local
 QKV projection step now has a QMAP exporter, a descriptor-driven projection
 compute path, an AXI write adapter, and a Vivado-facing AXI read/write top that
@@ -572,22 +581,24 @@ mask `0x0fffffff`, exact token/score `537/1155032971`, exact scheduler and top
 counters, all `281` QMAP packets observed, and every producer write response
 before its consumer read. Its `508` physical address intervals are collision-free
 inside the PL DDR aperture, and all simulation products remain under `Temp/`.
-The first PS-side runtime skeleton now lives under
-`FPGA_Project/software/qmap_one_token_runtime/`, mirroring the RTL register map
-and providing configure/start/poll/result helpers plus a no-memory AXI-Lite
-validation smoke. The first BD-facing shell `qmap_one_token_axi_top.sv` now
-adapts that control seam plus the simple memory request/write port into one
-AXI4-Lite slave and one AXI4 memory master, with integration notes in
-`FPGA_Project/Vivado_Project/ONE_TOKEN_AXI_TOP_BD_PLAN.md`. Its focused Icarus
-smoke test now proves the BD-facing shell can accept the no-memory validation
-request through `S_AXI` without issuing any `M_AXI` transaction. A safe-by-default
-Tcl scaffold, `FPGA_Project/Vivado_Project/scripts/one_token_axi_top_bd_scaffold.tcl`,
-now dry-runs the planned BD edits and requires `--apply` before modifying the
-current row1024 BD. The next model-facing direction is persistent multi-token
-decode: retain per-layer K/V cache across invocations, increment position, feed
-the selected token back into embedding, and then add prompt prefill. Vivado
-block-design/Vitis integration remains deferred unless a board-specific issue
-requires it.
+The durable PS-side runtime under
+`FPGA_Project/software/qmap_one_token_runtime/` now mirrors the RTL register
+map, programs all 28 layers' QMAP tables, launches repeated token positions,
+retains PL-DDR KV cache between calls, and provides a prompt-token/bounded
+decode helper. `qmap_one_token_axi_top.sv` and
+`qmap_one_token_axi_bd.v` adapt the model control/memory seam into one
+AXI4-Lite slave and one AXI4 master in the checked-in Vivado BD. The current
+Vitis workspace builds both a no-memory control smoke and a full28 persistent
+two-token application from the routed fixed XSA. The PL-DDR packer, XSDB
+launcher, and release verifier are also durable source in that runtime
+directory.
+
+The immediate boundary is now physical validation, not another local model
+feature. The final full28 two-token XSim/audit gate and release-package verifier
+are closed; run the packaged control smoke and then the full model smoke. Only
+after the expected UART results establish a real hardware PASS should the
+project move to arbitrary prompt prefill, stop conditions, tokenizer/
+detokenizer integration, or performance tuning.
 
 Keep the exact next action in `Source/CURRENT_STATE.md`; keep detailed address
 planning in `Source/FPGA_MEMORY_MAP.md`.

@@ -23,6 +23,10 @@ module attention_score_stage #(
     parameter int SCORE_WIDTH      = 64,
     parameter int SCALE_WIDTH      = 32,
     parameter int SCALE_FRAC       = 31,
+    parameter int USE_Q_READ_PORT  = 0,
+    parameter int Q_COUNT          = NUM_Q_HEADS * HEAD_DIM,
+    parameter int Q_ADDR_WIDTH     =
+        (Q_COUNT <= 1) ? 1 : $clog2(Q_COUNT),
     parameter int Q_HEAD_INDEX_W   = (NUM_Q_HEADS <= 1) ? 1 : $clog2(NUM_Q_HEADS),
     parameter int KV_HEAD_INDEX_W  = (NUM_KV_HEADS <= 1) ? 1 : $clog2(NUM_KV_HEADS),
     parameter int POSITION_INDEX_W = (MAX_CONTEXT <= 1) ? 1 : $clog2(MAX_CONTEXT),
@@ -37,6 +41,8 @@ module attention_score_stage #(
     input  wire logic [CACHE_LENGTH_W-1 : 0]                    i_cache_length,
     input  wire logic signed [SCALE_WIDTH-1 : 0]                i_score_scale_q0_31,
     input  wire logic [NUM_Q_HEADS*HEAD_DIM*IN_WIDTH-1 : 0]     i_q_rope_flat,
+    output logic [Q_ADDR_WIDTH-1 : 0]                       o_q_read_addr,
+    input  wire logic signed [IN_WIDTH-1 : 0]                    i_q_read_data,
 
     output logic                                           o_busy,
     output logic                                           o_done,
@@ -148,8 +154,14 @@ module attention_score_stage #(
         (q_head_index == LAST_Q_HEAD_INDEX) &&
         (position_index_ext == last_cache_position);
 
+    assign o_q_read_addr =
+        Q_ADDR_WIDTH'((q_head_index * HEAD_DIM) + dim_index);
     assign current_q =
-        i_q_rope_flat[(q_head_index*HEAD_DIM + dim_index)*IN_WIDTH +: IN_WIDTH];
+        (USE_Q_READ_PORT != 0) ?
+        i_q_read_data :
+        i_q_rope_flat[
+            (q_head_index*HEAD_DIM + dim_index)*IN_WIDTH +: IN_WIDTH
+        ];
     assign product_qk = current_q * i_k_rsp_data;
     assign dot_acc_next =
         dot_acc + {{(SCORE_WIDTH-PRODUCT_WIDTH){product_qk[PRODUCT_WIDTH-1]}}, product_qk};

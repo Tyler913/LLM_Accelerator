@@ -22,6 +22,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "Temp" / "persistent_multitoken_layer0_golden"
 DEFAULT_ALL_LAYERS_OUTPUT_DIR = REPO_ROOT / "Temp" / "persistent_multitoken_full28_golden"
 
+MODEL_LAYER_COUNT = 28
 HIDDEN_SIZE = 1024
 NUM_Q_HEADS = 16
 NUM_KV_HEADS = 8
@@ -48,11 +49,26 @@ def parse_int_auto(text: str) -> int:
     return int(text.replace("_", ""), 0)
 
 
+def parse_layer_count(text: str) -> int:
+    try:
+        value = int(text.replace("_", ""), 10)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"--layer-count must be an integer in 1..{MODEL_LAYER_COUNT}"
+        ) from error
+    if value < 1 or value > MODEL_LAYER_COUNT:
+        raise argparse.ArgumentTypeError(
+            f"--layer-count must be in 1..{MODEL_LAYER_COUNT}, got {value}"
+        )
+    return value
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Export an exact fixed-point persistent multi-token golden for one complete "
-            "Qwen3 decoder layer. Positions always start at zero and share one retained K/V cache."
+            "Export an exact fixed-point persistent multi-token golden for one layer, "
+            "the first N layers, or all Qwen3 decoder layers. Positions always start "
+            "at zero and share retained per-layer K/V caches."
         )
     )
     parser.add_argument(
@@ -62,8 +78,25 @@ def parse_args() -> argparse.Namespace:
         default=[374, 537],
         help="Token-id sequence; token 0 is evaluated at position 0 (default: 374 537).",
     )
-    parser.add_argument("--layer-id", type=int, default=0)
-    parser.add_argument(
+    layer_mode = parser.add_mutually_exclusive_group()
+    layer_mode.add_argument(
+        "--layer-id",
+        type=int,
+        default=0,
+        help="Run one decoder layer only (default: 0).",
+    )
+    layer_mode.add_argument(
+        "--layer-count",
+        type=parse_layer_count,
+        default=None,
+        metavar="N",
+        help=(
+            f"Run Layers 0 through N-1 (1..{MODEL_LAYER_COUNT}), chain their outputs, "
+            "then run exact final RMSNorm and a full-vocabulary tied-Q4 LM-head scan. "
+            f"N={MODEL_LAYER_COUNT} is classified as a complete full-model export."
+        ),
+    )
+    layer_mode.add_argument(
         "--all-layers",
         action="store_true",
         help=(
@@ -77,7 +110,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Optional signed word32 Q14.10 matrix with token_count*1024 values. "
-            "Required for layer-id > 0; layer 0 defaults to exact tied-Q4 embeddings."
+            "Required for layer-id > 0; chains beginning at Layer 0 default to exact "
+            "tied-Q4 embeddings."
         ),
     )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
@@ -90,7 +124,7 @@ def parse_args() -> argparse.Namespace:
         "--lm-head-chunk-rows",
         type=int,
         default=1024,
-        help="Rows quantized per full-vocabulary LM-head chunk in --all-layers mode.",
+        help="Rows quantized per full-vocabulary LM-head chunk in chained-layer modes.",
     )
     return parser.parse_args()
 
@@ -678,6 +712,7 @@ def run_final_tail(
     output_dir: Path,
     files: dict[str, dict[str, Any]],
     chunk_rows: int,
+    full_model: bool,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     if chunk_rows <= 0:
@@ -702,7 +737,11 @@ def run_final_tail(
         values=final_hidden,
         width_bits=32,
         signed=True,
-        logical_format="signed Q14.10 [position][hidden] after all decoder layers",
+        logical_format=(
+            "signed Q14.10 [position][hidden] after all decoder layers"
+            if full_model
+            else "signed Q14.10 [position][hidden] after selected decoder-layer chain"
+        ),
     )
     emit_hex(
         helper=chained,
@@ -827,6 +866,8 @@ def run_final_tail(
 def main() -> None:
     args = parse_args()
     total_started = time.perf_counter()
+    layer_prefix_mode = args.layer_count is not None
+    chained_tail_mode = args.all_layers or layer_prefix_mode
     token_ids = [int(value) for value in args.token_ids]
     if not token_ids:
         raise ValueError("--token-ids must contain at least one token")
@@ -856,7 +897,7 @@ def main() -> None:
     }
     final_norm = None
     lm_head = None
-    if args.all_layers:
+    if chained_tail_mode:
         final_norm = load_helper("32_export_final_rmsnorm_vectors.py", "persistent_final_norm_helper")
         lm_head = load_helper("35_export_lm_head_full_vocab_vectors.py", "persistent_lm_head_helper")
 
@@ -864,17 +905,31 @@ def main() -> None:
     # chunks are quantized from this one resident model object.
     tokenizer, model, backbone = load_model()
     layer_count = len(backbone.layers)
-    if args.all_layers and layer_count != 28:
-        raise RuntimeError(f"Expected Qwen3-0.6B to have 28 layers, found {layer_count}")
-    if not args.all_layers and args.layer_id >= layer_count:
+    if args.all_layers and layer_count != MODEL_LAYER_COUNT:
+        raise RuntimeError(
+            f"Expected Qwen3-0.6B to have {MODEL_LAYER_COUNT} layers, found {layer_count}"
+        )
+    if layer_prefix_mode and args.layer_count > layer_count:
+        raise ValueError(
+            f"layer-count {args.layer_count} exceeds checkpoint layer count {layer_count}"
+        )
+    if not chained_tail_mode and args.layer_id >= layer_count:
         raise ValueError(f"layer-id {args.layer_id} is outside 0..{layer_count - 1}")
+    if args.all_layers:
+        layer_ids = list(range(layer_count))
+    elif layer_prefix_mode:
+        layer_ids = list(range(args.layer_count))
+    else:
+        layer_ids = [args.layer_id]
+    layer_prefix = layer_ids == list(range(len(layer_ids)))
+    model_complete = chained_tail_mode and layer_ids == list(range(layer_count))
 
     embedding_errors: list[float] | None = None
     if args.input_hidden_hex is not None:
         hidden_inputs = load_hidden_override(args.input_hidden_hex, len(token_ids), helpers["qmap"])
         hidden_source = "explicit signed word32 Q14.10 input-hidden matrix"
     else:
-        if not args.all_layers and args.layer_id != 0:
+        if not chained_tail_mode and args.layer_id != 0:
             raise ValueError("--input-hidden-hex is required when --layer-id is not zero")
         hidden_inputs, embedding_errors = q4_embedding_hidden(
             token_ids=token_ids,
@@ -901,8 +956,12 @@ def main() -> None:
         trig_saturation += int(cos_sat) + int(sin_sat)
 
     output_dir_arg = args.output_dir
-    if args.all_layers and output_dir_arg == DEFAULT_OUTPUT_DIR:
+    if model_complete and output_dir_arg == DEFAULT_OUTPUT_DIR:
         output_dir_arg = DEFAULT_ALL_LAYERS_OUTPUT_DIR
+    elif layer_prefix_mode and output_dir_arg == DEFAULT_OUTPUT_DIR:
+        output_dir_arg = (
+            REPO_ROOT / "Temp" / f"persistent_multitoken_first{args.layer_count}_golden"
+        )
     output_dir = output_dir_arg.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     files: dict[str, dict[str, Any]] = {}
@@ -930,7 +989,11 @@ def main() -> None:
         helper=helpers["chained"],
         output_dir=output_dir,
         files=files,
-        relative_name="initial_hidden_q14_10_words32.hex" if args.all_layers else "input_hidden_q14_10_words32.hex",
+        relative_name=(
+            "initial_hidden_q14_10_words32.hex"
+            if chained_tail_mode
+            else "input_hidden_q14_10_words32.hex"
+        ),
         values=hidden_inputs,
         width_bits=32,
         signed=True,
@@ -939,13 +1002,12 @@ def main() -> None:
 
     exp_lut = helpers["chained"].build_exp_lut()
     sigmoid_lut = helpers["silu"].build_sigmoid_lut()
-    layer_ids = list(range(layer_count)) if args.all_layers else [args.layer_id]
     layer_results: list[dict[str, Any]] = []
     current_hidden = hidden_inputs
     global_addresses: set[int] = set()
     for ordinal, layer_id in enumerate(layer_ids):
         print(f"Layer {layer_id:02d}/{layer_ids[-1]:02d}: quantize and run {len(token_ids)} positions")
-        scope = f"layer_{layer_id:02d}" if args.all_layers else ""
+        scope = f"layer_{layer_id:02d}" if chained_tail_mode else ""
         current_hidden, layer_record, addresses = run_fixed_layer(
             layer_id=layer_id,
             layer=backbone.layers[layer_id],
@@ -975,7 +1037,7 @@ def main() -> None:
             gc.collect()
 
     final_tail: dict[str, Any] | None = None
-    if args.all_layers:
+    if chained_tail_mode:
         assert final_norm is not None and lm_head is not None
         print("Final RMSNorm + full-vocabulary tied-Q4 LM head")
         final_tail = run_final_tail(
@@ -990,6 +1052,7 @@ def main() -> None:
             output_dir=output_dir,
             files=files,
             chunk_rows=args.lm_head_chunk_rows,
+            full_model=model_complete,
         )
 
     helper_reuse = [
@@ -1002,33 +1065,57 @@ def main() -> None:
         "26..31: exact attention output, residual, and MLP stages",
         "49_export_q4_embedding_vectors.py: tied Q4 embedding",
     ]
-    if args.all_layers:
+    if chained_tail_mode:
         helper_reuse.extend(
             [
                 "32_export_final_rmsnorm_vectors.py: exact final RMSNorm",
                 "35_export_lm_head_full_vocab_vectors.py: chunked Q4 full-vocabulary logits and argmax",
             ]
         )
-    manifest_name = (
-        "persistent_multitoken_full_model_manifest.json"
-        if args.all_layers
-        else "persistent_multitoken_manifest.json"
-    )
+    if model_complete:
+        manifest_name = "persistent_multitoken_full_model_manifest.json"
+        manifest_id = "qwen3_0p6b_full28_persistent_multitoken_fixed_golden"
+        manifest_purpose = "Exact RTL-arithmetic persistent multi-token full-model golden"
+    elif layer_prefix_mode:
+        manifest_name = "persistent_multitoken_layer_prefix_manifest.json"
+        manifest_id = (
+            f"qwen3_0p6b_first{args.layer_count}_persistent_multitoken_fixed_golden"
+        )
+        manifest_purpose = (
+            "Exact RTL-arithmetic persistent multi-token truncated-prefix diagnostic "
+            "with final-tail scan"
+        )
+    else:
+        manifest_name = "persistent_multitoken_manifest.json"
+        manifest_id = (
+            f"qwen3_0p6b_layer{args.layer_id}_persistent_multitoken_fixed_golden"
+        )
+        manifest_purpose = "Exact RTL-arithmetic persistent multi-token one-layer seam golden"
     manifest_path = output_dir / manifest_name
     manifest: dict[str, Any] = {
-        "format_version": 2 if args.all_layers else 1,
-        "name": (
-            "qwen3_0p6b_full28_persistent_multitoken_fixed_golden"
+        "format_version": 2 if chained_tail_mode else 1,
+        "name": manifest_id,
+        "purpose": manifest_purpose,
+        "selection_mode": (
+            "all_layers"
             if args.all_layers
-            else f"qwen3_0p6b_layer{args.layer_id}_persistent_multitoken_fixed_golden"
+            else ("layer_prefix" if layer_prefix_mode else "single_layer")
         ),
-        "purpose": (
-            "Exact RTL-arithmetic persistent multi-token full-model golden"
-            if args.all_layers
-            else "Exact RTL-arithmetic persistent multi-token one-layer seam golden"
-        ),
-        "all_layers": bool(args.all_layers),
+        "all_layers": model_complete,
         "layer_ids": layer_ids,
+        "layer_count": len(layer_ids),
+        "layer_prefix": layer_prefix,
+        "model_complete": model_complete,
+        "tail_semantics": (
+            "full_model_decode"
+            if model_complete
+            else (
+                "truncated_prefix_diagnostic"
+                if chained_tail_mode
+                else "not_present"
+            )
+        ),
+        "valid_as_full_model_decode": bool(model_complete and final_tail is not None),
         "token_ids": token_ids,
         "positions": list(range(len(token_ids))),
         "hidden_source": hidden_source,
@@ -1063,7 +1150,8 @@ def main() -> None:
             "kv_address_stride_every_layer": True,
             "kv_global_non_overlap": True,
             "trig_saturation_count": trig_saturation,
-            "full_vocab_argmax_checked": bool(args.all_layers),
+            "full_vocab_argmax_checked": bool(chained_tail_mode),
+            "full_model_argmax_checked": bool(model_complete),
         },
         "scope": {
             "exact": (
@@ -1079,7 +1167,7 @@ def main() -> None:
         "elapsed_seconds": round(time.perf_counter() - total_started, 3),
         "files": files,
     }
-    if not args.all_layers:
+    if not chained_tail_mode:
         manifest["layer_id"] = args.layer_id
         manifest["position_results"] = layer_results[0]["position_results"]
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

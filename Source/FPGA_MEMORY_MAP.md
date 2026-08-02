@@ -1,33 +1,16 @@
 # FPGA Memory Map
 
-Status: working draft, updated through the QMAP row1024 PL AXI master
-hardware smoke pass, the full local Layer 0 QKV projection AXI write-back
-simulation, the first local QMAP attention front-end wrapper, the first local
-QMAP attention score/value wrapper, the first local QMAP attention o_proj
-wrapper, the first local QMAP post-attention residual/RMSNorm wrapper, the
-first local QMAP MLP gate/up wrapper, the first local QMAP MLP
-SiLU/multiply wrapper, the first local QMAP MLP down wrapper, the first local
-QMAP final MLP residual wrapper, the first local Layer 0 body scheduler, and
-the first local QMAP full Layer 0 scheduler, the first local QMAP Layer 0
-compute scheduler, and the first local one-token/layer-loop scheduler
-boundary, plus the local q/k norm + RoPE + KV-cache
-append + attention score/softmax/value/o_proj/post-attention residual-norm/
-MLP gate-up/MLP SiLU-multiply/MLP-down/
-final-MLP-residual/final-RMSNorm/LM-head-argmax plus memory-backed,
-runtime-tile-scheduled, and QMAP descriptor-backed LM-head simulation evidence,
-including the full `151936`-row / `9496`-tile QMAP LM-head sweep and the first
-QMAP final-token tail wrapper, plus true Layer 1 QKV, attention front-end,
-attention score/value, `o_proj`, post-attention residual/RMSNorm, MLP gate/up,
-MLP SiLU/multiply, MLP down, and final MLP residual packet coverage, plus the
-local QMAP input RMSNorm wrapper, its input-normalized QKV prechecks, and the
-input-RMSNorm-enabled Layer 1 -> Layer 2 scheduler to final-token tail handoff
-through `qmap_one_token_top.sv`, and the timing-audited tied-Q4 embedding ->
-complete Layer 0 shared-memory XSim path on 2026-07-13
+Status: current physical apertures and full28 runtime layout, updated
+2026-08-01. The latest hardware PASS remains the 2026-06-23 row1024 PL-master
+smoke. The checked-in BD has since been replaced by the complete
+resource-reduced Qwen accelerator and has generated a routed bitstream/fixed
+XSA, but it has not yet received a full28 hardware PASS.
 
-This document defines the first FPGA-visible memory layout for the Qwen3
-0.6B accelerator bring-up. It distinguishes hardware-proven base apertures
-from draft accelerator subregions that still need real RTL data-movement and
-kernel integration.
+This document defines the FPGA-visible memory layout for Qwen3-0.6B bring-up.
+It distinguishes three kinds of evidence: physical apertures already proven by
+the row1024 board checkpoint, the address map in the current routed full28 BD,
+and current runtime subregions that are locally/package audited but still await
+their first physical full28 run.
 
 The descriptor-based tensor staging format for PL DDR4 is
 `Source/QMAP_FORMAT.md`. Q4 quantization and packing semantics remain in
@@ -87,91 +70,52 @@ Current PL DDR4 controller configuration:
 - Data mask/DBI: `DM NO DBI`
 - Memory address map: `ROW COLUMN BANK`
 
-Completed hardware checkpoint:
+Hardware and release checkpoints:
 
-- The current reset-fix hardware handoff is
-  `FPGA_Project/Vivado_Project/llm_system_pl_ddr4_aux_reset_fix.xsa`.
-- The current Vitis platform is `llm_pl_ddr4_aux_reset_fix_platform`.
-- The standalone smoke app proved PS read/write access to the current AXI BRAM
-  aperture, DDR4 status GPIO, and PL DDR4 aperture on hardware.
-- The QMAP load/readback smoke app proved that PS can place the first 1536-byte
-  QMAP v1 dot64 image at `0x4_1B10_0000` in PL DDR4 and read it back exactly.
-- The current PL AXI master handoff is
-  `FPGA_Project/Vivado_Project/llm_system_qmap_row1024_pl_master.xsa`.
-- The current clean short-path Vitis workspace is `F:\vws`, with platform
-  `p_r1024` and application `a_r1024` for the passing row1024 board run.
-- The QMAP dot64 PL master smoke app proved that PL can read the QMAP image
-  from real PL DDR4 through its AXI master and produce the expected Q4 dot64
-  result.
-- The QMAP row1024 PL master smoke app proved that PL can read the 4096-byte
-  row1024 QMAP image from real PL DDR4 through its AXI master and produce the
-  expected full-row Q4 GEMV result `-3482169`.
+- Hardware-proven: PS access to DDR4 status/PL DDR4, QMAP dot64 PL reads and
+  compute, and the QMAP row1024 PL read/full-row GEMV result `-3482169`.
+- Current routed full28 candidate:
+  `Temp/boardready_board_build_20260726/full_board_impl_v8_current/`.
+- Current fixed XSA:
+  `llm_system_qwen3_one_token_boardready.xsa` in that candidate directory.
+- Current short-path Vitis components: `F:\vws\p_qot`,
+  `F:\vws\a_qctl`, and `F:\vws\a_qmdl`.
+- Current release state is `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`: the
+  persistent full28 XSim audit and self-contained package verification passed;
+  the first physical full28 run remains pending.
 
 ## Current Address Map
 
-This section is the source of truth for the current Vivado block design and
-successful board smoke test.
-
-Current QMAP row1024 PL master hardware handoff:
-
-```text
-FPGA_Project/Vivado_Project/llm_system_qmap_row1024_pl_master.xsa
-```
-
-Previous QMAP dot64 PL master hardware handoff, kept as the first PL AXI
-master smoke checkpoint:
-
-```text
-FPGA_Project/Vivado_Project/llm_system_qmap_dot64_pl_master.xsa
-```
-
-Previous reset-fix hardware handoff, kept as the PS-to-PL DDR4 proven
-checkpoint:
-
-```text
-FPGA_Project/Vivado_Project/llm_system_pl_ddr4_aux_reset_fix.xsa
-```
-
-Previous BRAM-only checkpoint, kept only as historical evidence:
-
-```text
-FPGA_Project/Vivado_Project/llm_system_axi_bram_smoke.xsa
-```
+This section is the source of truth for the current routed full28 Vivado block
+design. Hardware status is stated separately so a routed aperture is not
+mistaken for a physical-board PASS.
 
 | Space / IP | Interface | Base | High | Size | Status |
 | --- | --- | ---: | ---: | ---: | --- |
-| PS DDR low memory | PS DDR | `0x0000_0000` | `0x7FEF_FFFF` | about 2 GiB minus reserved top window | exported in current standalone BSP |
-| AXI BRAM memory | `M_AXI_HPM0_FPD` -> AXI SmartConnect `M00_AXI` -> AXI BRAM Controller `S_AXI` | `0xA000_0000` | `0xA000_1FFF` | 8 KiB | passed current hardware smoke |
-| DDR4 status AXI GPIO | `M_AXI_HPM0_FPD` -> AXI SmartConnect `M02_AXI` -> AXI GPIO `S_AXI` | `0xA001_0000` | `0xA001_FFFF` | 64 KiB | passed current hardware smoke |
-| QMAP smoke control/status AXI GPIO | PS `M_AXI_HPM0_FPD` -> AXI SmartConnect -> AXI GPIO `S_AXI` | `0xA002_0000` | `0xA002_FFFF` | 64 KiB | passed dot64 and row1024 PL master hardware smoke |
-| QMAP smoke result AXI GPIO | PS `M_AXI_HPM0_FPD` -> AXI SmartConnect -> AXI GPIO `S_AXI` | `0xA003_0000` | `0xA003_FFFF` | 64 KiB | passed dot64 and row1024 PL master hardware smoke |
-| PL DDR4 | `M_AXI_HPM0_FPD` -> AXI SmartConnect `M01_AXI` -> AXI Clock Converter -> `ddr4_0/C0_DDR4_S_AXI` | `0x4_0000_0000` | `0x4_1FFF_FFFF` | 512 MiB | passed current hardware smoke |
+| PS DDR low memory | PS DDR | `0x0000_0000` | `0x7FEF_FFFF` | about 2 GiB minus reserved top window | current standalone BSP |
+| DDR4 status AXI GPIO | PS `M_AXI_HPM0_FPD` -> SmartConnect -> AXI GPIO | `0xA001_0000` | `0xA001_FFFF` | 64 KiB | address current; status `0x5` hardware-proven |
+| Qwen one-token control | PS `M_AXI_HPM0_FPD` -> SmartConnect -> `qmap_one_token_axi_bd/S_AXI` | `0xA004_0000` | `0xA004_FFFF` | 64 KiB | routed and exported; first hardware run pending |
+| PL DDR4 | PS and accelerator masters -> SmartConnect -> AXI Clock Converter -> `ddr4_0/C0_DDR4_S_AXI` | `0x4_0000_0000` | `0x4_1FFF_FFFF` | 512 MiB | aperture hardware-proven; full28 contents/run pending |
 
-Current PS-to-PL fabric:
+Current fabric:
 
 ```text
-M_AXI_HPM0_FPD
+PS M_AXI_HPM0_FPD
   -> AXI SmartConnect
-      M00_AXI -> AXI BRAM Controller -> Block Memory Generator
-      M01_AXI -> AXI Clock Converter -> DDR4 MIG C0_DDR4_S_AXI
-      M02_AXI -> AXI GPIO DDR4 status register
-      additional AXI GPIO slaves for QMAP smoke control/status/result
+      -> AXI GPIO DDR4 status register
+      -> qmap_one_token_axi_bd/S_AXI
+      -> AXI Clock Converter -> DDR4 MIG C0_DDR4_S_AXI
 
-qmap_row1024_axi_smoke_0/M_AXI
-  -> AXI SmartConnect S01_AXI
+qmap_one_token_axi_bd/M_AXI
+  -> AXI SmartConnect
       -> AXI Clock Converter -> DDR4 MIG C0_DDR4_S_AXI
 ```
 
 Confirmed block-design and BSP facts:
 
 - `M_AXI_HPM0_FPD` is the active PS master for the current PL memory fabric.
-- `M_AXI_HPM0_LPD` is disabled in the current block design to remove the
-  incomplete address path used during early bring-up.
-- AXI BRAM controller `S_AXI` data width: 32 bits.
-- AXI BRAM controller address width: 13 bits.
-- AXI BRAM controller uses one BRAM interface in the passing hardware
-  configuration (`C_SINGLE_PORT_BRAM=1` / `SINGLE_PORT_BRAM=1`).
-- BRAM depth: 2048 32-bit words = 8192 bytes.
+- The old AXI BRAM and row1024 GPIO apertures at `0xA000_0000`,
+  `0xA002_0000`, and `0xA003_0000` are not present in the current BD.
 - `pl_clk0` frequency in the exported handoff: about 96.97 MHz.
 - The DDR4 AXI Clock Converter uses the PS/SmartConnect clock on its `S_AXI`
   side and `ddr4_0/c0_ddr4_ui_clk` on its `M_AXI` side.
@@ -181,12 +125,18 @@ Confirmed block-design and BSP facts:
   active-low in the current IP configuration.
 - `proc_sys_reset_0/peripheral_aresetn` drives both `ddr4_0/c0_ddr4_aresetn`
   and the clock converter `m_axi_aresetn`.
-- The current BSP defines `XPAR_AXI_GPIO_0_BASEADDR` and
-  `XPAR_XGPIO_0_BASEADDR` as `0xA001_0000`, with GPIO width `0x3`.
-- The current BSP defines `XPAR_DDR4_0_BASEADDRESS` as `0x400000000` and
-  `XPAR_DDR4_0_HIGHADDRESS` as `0x41fffffff`.
+- The current BSP exports DDR4 status at `0xA001_0000`, accelerator control at
+  `0xA004_0000`, and PL DDR4 at
+  `0x4_0000_0000..0x4_1FFF_FFFF`.
 - PL DDR4 is above the 32-bit address range. Bare-metal software must use a
   64-bit-capable address type such as `UINTPTR` for `0x4_0000_0000`.
+
+Historical handoffs retained as evidence:
+
+- `llm_system_qmap_row1024_pl_master.xsa`;
+- `llm_system_qmap_dot64_pl_master.xsa`;
+- `llm_system_pl_ddr4_aux_reset_fix.xsa`;
+- `llm_system_axi_bram_smoke.xsa`.
 
 ## Design Intent
 
@@ -218,29 +168,29 @@ High-level split:
 - All offsets in this document are byte offsets relative to the selected memory
   space unless marked as physical addresses.
 - Physical addresses are written as byte addresses.
-- Current AXI BRAM and PL DDR4 smoke-test accesses use 32-bit word accesses
-  aligned to 4-byte boundaries.
+- The current accelerator AXI datapath uses 32-bit data words aligned to
+  4-byte boundaries and 64-bit physical addresses. The old BRAM smoke also used
+  32-bit words.
 - Endianness: little-endian for PS-side scalar accesses.
-- Scalar format: unsigned 32-bit words for the current BRAM and PL DDR4
-  smoke-test reads/writes.
+- Scalar format: unsigned 32-bit words unless a QMAP dtype specifies a signed
+  fixed-point interpretation.
 - Vector format: QMAP v1 for structured PL DDR4 tensor staging; keep exported
   Python vectors as golden references.
 - Matrix layout: QMAP descriptors record logical shape and physical byte
   strides. Row-major contiguous Q4 groups remain the first GEMV bring-up
   layout from `Source/Q4_FORMAT.md`.
-- Cache coherency rule between PS and PL: TODO. For the current standalone
-  smoke tests, use direct memory-mapped accesses plus explicit cache
-  flush/invalidate handling where the app touches cached regions.
-- Required flush/invalidate operations: TODO after the Vitis domain/cache
-  settings are chosen.
-- The current standalone smoke app has validated direct 32-bit `Xil_Out32` /
+- The first full28 board release loads PL DDR through XSDB before the model ELF
+  runs and uses volatile MMIO only for sentinels/control; it does not rely on a
+  PS-cached PL-DDR staging buffer. A later in-application loader or DMA path must
+  define explicit cache flush/invalidate ownership before use.
+- The historical standalone smoke app validated direct 32-bit `Xil_Out32` /
   `Xil_In32` accesses to AXI BRAM at `0xA000_0000` through `0xA000_1FFF` and
   PL DDR4 at selected addresses in `0x4_0000_0000` through `0x4_1FFF_FFFF`.
 - PL DDR4 addresses are 64-bit physical addresses. C code must use `UINTPTR`
   or another 64-bit-capable type and should print high/low 32-bit halves for
   debug output.
-- Do not assume future PL masters, DMA engines, or cached PS buffer paths have
-  the same coherency behavior as the current direct standalone MMIO smoke app.
+- Do not assume a future DMA or cached PS buffer path has the same coherency
+  behavior as the current XSDB preload/volatile-control release path.
 
 ## Memory Spaces
 
@@ -264,10 +214,10 @@ Notes:
 - Do not hard-code PS DDR suballocations until the Vitis standalone app and
   linker script are created.
 
-### PL BRAM Smoke Test
+### Historical PL BRAM Smoke Test
 
-Purpose: minimal PS-to-PL memory-mapped access test kept in the current block
-design as a quick sanity check before touching PL DDR4.
+Purpose: preserve the minimal PS-to-PL memory-mapped access evidence from the
+row1024-era design. This BRAM is no longer present in the current full28 BD.
 
 | Region | Base | Size | Owner | Contents | Status |
 | --- | ---: | ---: | --- | --- | --- |
@@ -314,10 +264,11 @@ The expected good status word is `0x5`.
 
 Purpose: accelerator-side storage for weights, KV cache, and working buffers.
 
-Current status: the PL DDR4 controller is instantiated in the Vivado block
-design, Address Editor assigns a 512 MiB aperture, block-design validation and
-bitstream generation pass, and PS standalone write/readback smoke testing
-passes on hardware.
+Current status: the 512 MiB physical aperture and PS/PL access have passed
+hardware smoke tests. The current full28 BD validates, routes, generates a
+bitstream/fixed XSA, and exports the same aperture to Vitis. Loading and
+executing the complete full28 runtime on physical hardware is the next board
+test, not an already-passed checkpoint.
 
 Current physical base:
 
@@ -325,6 +276,32 @@ Current physical base:
 PL_DDR4_BASE = 0x4_0000_0000
 PL_DDR4_HIGH = 0x4_1FFF_FFFF
 ```
+
+Current board-runtime facts:
+
+| Item | Value | Evidence state |
+| --- | ---: | --- |
+| binary segments | `61` | package-audited |
+| total segment bytes | `394,547,200` | package-audited |
+| first loaded address | `0x4_0010_0000` | package-audited |
+| last end-exclusive address | `0x4_1A14_0000` | package-audited |
+| tied embedding / LM-head Q4 start | `0x4_0010_0000` | manifest and runtime image |
+| per-layer persistent/QKV block start | `0x4_0500_0000` | 28 blocks, stride `0x0084_0000` |
+| KV cache start | `0x4_1410_0000` | 28 layers, `0x0020_0000` bytes/layer |
+| body-QMAP block start | `0x4_1790_0000` | 28 blocks, stride `0x0010_0000` |
+| final-tail QMAP | `0x4_1950_0000` | runtime manifest |
+| hidden ping-pong A/B | `0x4_1960_0000` / `0x4_1960_1000` | runtime manifest |
+| runtime RoPE table start | `0x4_1A10_0000` | runtime manifest |
+| QMAP packet count | `281` | 28 x 10 layer packets + final tail |
+| zero-initialized mutable regions | `397` | release audit |
+
+The 397 zero regions cover 14 output families per layer, 28 K/V-cache slices,
+both hidden buffers, and final-tail norm/output scratch. The board candidate
+must compute these values; it cannot pass by reading a preloaded golden output.
+
+The table below is the earlier capacity-budget partition. Use the manifest facts
+above for the current board image; keep this older partition only as a planning
+cross-check.
 
 | Region | Base | Size | Owner | Contents | Status |
 | --- | ---: | ---: | --- | --- | --- |
@@ -923,20 +900,15 @@ also through `qmap_one_token_axil_top.sv` via the generic
 contract now lives in `FPGA_Project/software/qmap_one_token_runtime/`:
 `qmap_one_token_regs.h` keeps the offsets/table ids/status masks,
 `qmap_one_token_runtime.h` keeps configure/start/poll/result helpers, and
-`main.c` is a Vitis no-memory validation smoke. The BD-facing RTL shell is now
-`FPGA_Project/rtl/top/one_token/qmap_one_token_axi_top.sv`; it exposes `S_AXI` for this
-register map and `M_AXI` for PL-DDR traffic. The runbook
-`FPGA_Project/Vivado_Project/ONE_TOKEN_AXI_TOP_BD_PLAN.md` recommends first
-control aperture `0xA004_0000` / `64 KiB`. The safe-by-default Tcl scaffold
-`FPGA_Project/Vivado_Project/scripts/one_token_axi_top_bd_scaffold.tcl` dry-runs
-under Vivado and requires `--apply` before editing the BD. This is still a local
-RTL/software contract until the Vivado BD assigns and validates that aperture.
+`main.c` builds as either the no-memory validation smoke or the full28
+persistent two-token model smoke. The BD-facing RTL is
+`qmap_one_token_axi_bd.v` over `qmap_one_token_axi_top.sv`; the checked-in BD
+assigns and routes this register map at `0xA004_0000` / 64 KiB and exposes its
+PL-DDR traffic through `M_AXI`.
 
-Current AXI BRAM and DDR4 status GPIO ranges are not the final accelerator
-control register map. The QMAP GPIOs are also temporary smoke-test registers
-for PL AXI master read/compute paths:
+Historical row1024-era smoke registers, no longer present in the current BD:
 
-| Smoke-Test Item | Address | Width | Access | Description |
+| Historical Smoke-Test Item | Address | Width | Access | Description |
 | --- | ---: | ---: | --- | --- |
 | BRAM word 0 | `0xA000_0000` | 32 | R/W | first pattern-test word |
 | BRAM word N | `0xA000_0000 + 4*N` | 32 | R/W | valid for `0 <= N < 2048` |
@@ -948,8 +920,8 @@ for PL AXI master read/compute paths:
 | QMAP row1024 row result | `0xA003_0000` | 32 | R | AXI GPIO channel 1 in the row1024 smoke top: `row_sum_q26_low32`; expected smoke value is `0xFFCA_DDC7` / `-3482169` |
 | QMAP row1024 expected result | `0xA003_0008` | 32 | R | AXI GPIO channel 2 in the row1024 smoke top: `expected_row_sum_q26_low32`; expected smoke value is `0xFFCA_DDC7` / `-3482169` |
 
-Current local one-token register offsets use byte addresses inside a 12-bit
-local register space:
+Current one-token register offsets use byte addresses inside a 12-bit register
+space. The physical PS address is `0xA004_0000 + offset`:
 
 | Register | Offset | Width | Access | Description |
 | --- | ---: | ---: | --- | --- |
@@ -1037,12 +1009,28 @@ Current state and open questions:
   write, and five legal physical AXI write bursts. This is local RTL evidence,
   not a new board result.
 - Decide later whether DMA is needed for faster bulk copies.
-- Future cache coherency policy is still open for PS buffers, PL masters, DMA,
-  or cached runtime paths.
-- Large-artifact loading flow on Windows/Linux remains open until the Q4
-  full-model artifact format and transfer path are fixed.
+- Future cache coherency remains open only for a later in-application loader,
+  DMA, or cached PS-buffer path. The current board release uses XSDB preload.
+- The current Windows board flow has a fixed 61-segment loader and verified Q4
+  full-model runtime. A portable Linux/in-application bulk loader is future
+  work.
 
-## Validation Plan
+## Current Board Validation Plan
+
+Closed pre-board gates: the full28 persistent two-token XSim, independent
+timing/KV-retention audit, and 92-file package inventory/size/SHA256/readme
+verification all passed. The physical plan is now:
+
+1. Run the packaged AXI-Lite no-memory control smoke and require
+   `PASS qot_run_no_memory_validation_smoke`.
+2. Run the packaged full28 model smoke and require the exact position-0 and
+   position-1 token/score UART lines recorded in
+   `FPGA_Project/Vivado_Project/ONE_TOKEN_AXI_TOP_BD_PLAN.md`.
+3. Preserve the UART log. If a gate fails, debug that exact interface/address/
+   stage. Do not replace this plan with another small row test unless the
+   failure specifically points there.
+
+## Historical Validation Plan and Gap Closure
 
 Use the exported FP32 test vectors first:
 
@@ -1423,3 +1411,7 @@ Pass/fail fields to record:
 | 2026-07-13 | Extend the continuous token path through complete Layer 0 | Makes the existing chained attention/MLP exporters Temp-workspace aware, extends the orchestrator to Layer 0 embedding input, and adds `51_export_embedding_layer0_full_chain.py`, full shared-memory XSim coverage, a reusable runner, and independent exact timing/address audit |
 | 2026-07-13 | Replace mixed true3 with a continuous token-driven true3 AXI-Lite proof | Adds `52_export_embedding_true3_final_chain.py`, extends the shared-memory AXI-Lite testbench from tied-Q4 embedding through three complete layers and the full-vocabulary final tail, and adds a reusable Temp-contained XSim runner plus an independent event/timing audit; exact token `537`, score `838805253`, counters, addresses, and producer-response-before-consumer ordering all pass |
 | 2026-07-13 | Complete the continuous 28-layer single-token AXI-Lite proof | Adds `53_export_embedding_full28_final_chain.py`, a collision-free full-depth address manifest/audit, manifest-generated Temp-only testbench loads, generic 28-layer scoreboarding, and a streamed independent timing checker; fresh XSim reaches exact token `537` / score `1155032971`, layer mask `0x0fffffff`, all `281` QMAP packets, exact counters, and strict producer-response-before-consumer ordering with every artifact under `Temp/embedding_full28_axil_tail_regression/20260713_164001` |
+| 2026-07-26 | Integrate and route the resource-reduced full28 board design | Replaces the row1024 BD with `qmap_one_token_axi_bd`, assigns DDR status at `0xA001_0000`, control at `0xA004_0000`, and PL DDR4 at `0x4_0000_0000..0x4_1FFF_FFFF`; the fixed bit/XSA closes timing at WNS `+0.208 ns`, fully routes `119383/119383` nets, and has no routing/DRC/methodology Error or Critical Warning |
+| 2026-07-26 | Freeze the full28 PL-DDR board runtime | `57_pack_qmap_runtime_load_plan.py` emits 61 SHA256-verified binary segments totaling `394547200` bytes, preserves source plan/manifest provenance, and spans first address `0x4_0010_0000` through last end-exclusive `0x4_1A14_0000` |
+| 2026-07-27 | Add board release and false-positive gates | Vitis builds control/model apps from the current XSA; XSDB automation checks DDR status and all 281 QMAP headers; packaging requires 397 mutable regions to be zero before launch and records state `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED` only after the full28 persistent two-token audit passes |
+| 2026-08-01 | Close local full28 persistent release gates | The resource-reduced no-reset two-token XSim returns exact token/score `28458/1227344433` then `64/1015661901`; the independent event audit proves one reset release, exact reads/writes, all 281 QMAP packets per step, and retained position-0 K/V reads in every layer. `Temp/boardready_qwen3_full28_20260801` then passes its 92-file package verifier and becomes the board-test-ready, not-yet-hardware-validated release |

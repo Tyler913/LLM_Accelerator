@@ -135,6 +135,7 @@ module qmap_dot64_reader #(
     logic [31 : 0] desc_reserved0;
     logic [31 : 0] desc_reserved1;
     logic [31 : 0] desc_reserved2;
+    integer descriptor_write_slot;
 
     assign o_busy           = (state != S_IDLE);
     assign header_start     = (state == S_HEADER_START);
@@ -246,28 +247,6 @@ module qmap_dot64_reader #(
             slot_index                  <= 'd0;
             o_done                      <= 1'b0;
             o_error                     <= 1'b0;
-            o_desc_tensor_id_flat       <= 'd0;
-            o_desc_role_flat            <= 'd0;
-            o_desc_dtype_flat           <= 'd0;
-            o_desc_rank_flat            <= 'd0;
-            o_desc_flags_flat           <= 'd0;
-            o_desc_element_bits_flat    <= 'd0;
-            o_desc_group_size_flat      <= 'd0;
-            o_desc_scale_tensor_id_flat <= 'd0;
-            o_desc_base_addr_flat       <= 'd0;
-            o_desc_nbytes_flat          <= 'd0;
-            o_desc_dim0_flat            <= 'd0;
-            o_desc_dim1_flat            <= 'd0;
-            o_desc_dim2_flat            <= 'd0;
-            o_desc_dim3_flat            <= 'd0;
-            o_desc_stride0_bytes_flat   <= 'd0;
-            o_desc_stride1_bytes_flat   <= 'd0;
-            o_desc_stride2_bytes_flat   <= 'd0;
-            o_desc_stride3_bytes_flat   <= 'd0;
-            o_desc_aux0_flat            <= 'd0;
-            o_desc_aux1_flat            <= 'd0;
-            o_desc_aux2_flat            <= 'd0;
-            o_desc_aux3_flat            <= 'd0;
         end else begin
             o_done <= 1'b0;
 
@@ -276,28 +255,6 @@ module qmap_dot64_reader #(
                     if (i_start) begin
                         slot_index                  <= 'd0;
                         o_error                     <= 1'b0;
-                        o_desc_tensor_id_flat       <= 'd0;
-                        o_desc_role_flat            <= 'd0;
-                        o_desc_dtype_flat           <= 'd0;
-                        o_desc_rank_flat            <= 'd0;
-                        o_desc_flags_flat           <= 'd0;
-                        o_desc_element_bits_flat    <= 'd0;
-                        o_desc_group_size_flat      <= 'd0;
-                        o_desc_scale_tensor_id_flat <= 'd0;
-                        o_desc_base_addr_flat       <= 'd0;
-                        o_desc_nbytes_flat          <= 'd0;
-                        o_desc_dim0_flat            <= 'd0;
-                        o_desc_dim1_flat            <= 'd0;
-                        o_desc_dim2_flat            <= 'd0;
-                        o_desc_dim3_flat            <= 'd0;
-                        o_desc_stride0_bytes_flat   <= 'd0;
-                        o_desc_stride1_bytes_flat   <= 'd0;
-                        o_desc_stride2_bytes_flat   <= 'd0;
-                        o_desc_stride3_bytes_flat   <= 'd0;
-                        o_desc_aux0_flat            <= 'd0;
-                        o_desc_aux1_flat            <= 'd0;
-                        o_desc_aux2_flat            <= 'd0;
-                        o_desc_aux3_flat            <= 'd0;
                         state                       <= S_HEADER_START;
                     end
                 end
@@ -330,28 +287,89 @@ module qmap_dot64_reader #(
                             o_error <= 1'b1;
                             state   <= S_DONE;
                         end else begin
-                            o_desc_tensor_id_flat[slot_index*32 +: 32]       <= desc_tensor_id;
-                            o_desc_role_flat[slot_index*32 +: 32]            <= desc_role;
-                            o_desc_dtype_flat[slot_index*32 +: 32]           <= desc_dtype;
-                            o_desc_rank_flat[slot_index*32 +: 32]            <= desc_rank;
-                            o_desc_flags_flat[slot_index*32 +: 32]           <= desc_flags;
-                            o_desc_element_bits_flat[slot_index*32 +: 32]    <= desc_element_bits;
-                            o_desc_group_size_flat[slot_index*32 +: 32]      <= desc_group_size;
-                            o_desc_scale_tensor_id_flat[slot_index*32 +: 32] <= desc_scale_tensor_id;
-                            o_desc_base_addr_flat[slot_index*64 +: 64]       <= desc_base_addr;
-                            o_desc_nbytes_flat[slot_index*64 +: 64]          <= desc_nbytes;
-                            o_desc_dim0_flat[slot_index*32 +: 32]            <= desc_dim0;
-                            o_desc_dim1_flat[slot_index*32 +: 32]            <= desc_dim1;
-                            o_desc_dim2_flat[slot_index*32 +: 32]            <= desc_dim2;
-                            o_desc_dim3_flat[slot_index*32 +: 32]            <= desc_dim3;
-                            o_desc_stride0_bytes_flat[slot_index*64 +: 64]   <= desc_stride0_bytes;
-                            o_desc_stride1_bytes_flat[slot_index*64 +: 64]   <= desc_stride1_bytes;
-                            o_desc_stride2_bytes_flat[slot_index*64 +: 64]   <= desc_stride2_bytes;
-                            o_desc_stride3_bytes_flat[slot_index*64 +: 64]   <= desc_stride3_bytes;
-                            o_desc_aux0_flat[slot_index*32 +: 32]            <= desc_aux0;
-                            o_desc_aux1_flat[slot_index*32 +: 32]            <= desc_aux1;
-                            o_desc_aux2_flat[slot_index*32 +: 32]            <= desc_aux2;
-                            o_desc_aux3_flat[slot_index*32 +: 32]            <= desc_aux3;
+                            // Keep the lane select constant after elaboration.
+                            // A variable packed part-select builds a wide
+                            // feedback mux for every descriptor bit.  The
+                            // fixed-lane loop instead becomes one shared write
+                            // enable per slot. Every lane is overwritten before
+                            // a successful o_done, so these registers need no
+                            // reset or transaction-start clear.
+                            for (descriptor_write_slot = 0;
+                                 descriptor_write_slot < DESCRIPTOR_SLOTS;
+                                 descriptor_write_slot =
+                                    descriptor_write_slot + 1) begin
+                                if (slot_index ==
+                                    SLOT_INDEX_WIDTH'(
+                                        descriptor_write_slot
+                                    )) begin
+                                    o_desc_tensor_id_flat[
+                                        descriptor_write_slot*32 +: 32
+                                    ] <= desc_tensor_id;
+                                    o_desc_role_flat[
+                                        descriptor_write_slot*32 +: 32
+                                    ] <= desc_role;
+                                    o_desc_dtype_flat[
+                                        descriptor_write_slot*32 +: 32
+                                    ] <= desc_dtype;
+                                    o_desc_rank_flat[
+                                        descriptor_write_slot*32 +: 32
+                                    ] <= desc_rank;
+                                    o_desc_flags_flat[
+                                        descriptor_write_slot*32 +: 32
+                                    ] <= desc_flags;
+                                    o_desc_element_bits_flat[
+                                        descriptor_write_slot*32 +: 32
+                                    ] <= desc_element_bits;
+                                    o_desc_group_size_flat[
+                                        descriptor_write_slot*32 +: 32
+                                    ] <= desc_group_size;
+                                    o_desc_scale_tensor_id_flat[
+                                        descriptor_write_slot*32 +: 32
+                                    ] <= desc_scale_tensor_id;
+                                    o_desc_base_addr_flat[
+                                        descriptor_write_slot*64 +: 64
+                                    ] <= desc_base_addr;
+                                    o_desc_nbytes_flat[
+                                        descriptor_write_slot*64 +: 64
+                                    ] <= desc_nbytes;
+                                    o_desc_dim0_flat[
+                                        descriptor_write_slot*32 +: 32
+                                    ] <= desc_dim0;
+                                    o_desc_dim1_flat[
+                                        descriptor_write_slot*32 +: 32
+                                    ] <= desc_dim1;
+                                    o_desc_dim2_flat[
+                                        descriptor_write_slot*32 +: 32
+                                    ] <= desc_dim2;
+                                    o_desc_dim3_flat[
+                                        descriptor_write_slot*32 +: 32
+                                    ] <= desc_dim3;
+                                    o_desc_stride0_bytes_flat[
+                                        descriptor_write_slot*64 +: 64
+                                    ] <= desc_stride0_bytes;
+                                    o_desc_stride1_bytes_flat[
+                                        descriptor_write_slot*64 +: 64
+                                    ] <= desc_stride1_bytes;
+                                    o_desc_stride2_bytes_flat[
+                                        descriptor_write_slot*64 +: 64
+                                    ] <= desc_stride2_bytes;
+                                    o_desc_stride3_bytes_flat[
+                                        descriptor_write_slot*64 +: 64
+                                    ] <= desc_stride3_bytes;
+                                    o_desc_aux0_flat[
+                                        descriptor_write_slot*32 +: 32
+                                    ] <= desc_aux0;
+                                    o_desc_aux1_flat[
+                                        descriptor_write_slot*32 +: 32
+                                    ] <= desc_aux1;
+                                    o_desc_aux2_flat[
+                                        descriptor_write_slot*32 +: 32
+                                    ] <= desc_aux2;
+                                    o_desc_aux3_flat[
+                                        descriptor_write_slot*32 +: 32
+                                    ] <= desc_aux3;
+                                end
+                            end
 
                             if (slot_index == DESCRIPTOR_SLOTS-1) begin
                                 state <= S_DONE;

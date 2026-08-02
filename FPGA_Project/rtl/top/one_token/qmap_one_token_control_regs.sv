@@ -13,7 +13,8 @@ module qmap_one_token_control_regs #(
     parameter int SCORE_WIDTH       = 56,
     parameter int LAYER_INDEX_WIDTH = (MAX_LAYERS <= 1) ? 1 : $clog2(MAX_LAYERS),
     parameter int LAYER_COUNT_WIDTH = (MAX_LAYERS <= 1) ? 1 : $clog2(MAX_LAYERS + 1),
-    parameter int POSITION_WIDTH    = (MAX_CONTEXT <= 1) ? 1 : $clog2(MAX_CONTEXT)
+    parameter int POSITION_WIDTH    = (MAX_CONTEXT <= 1) ? 1 : $clog2(MAX_CONTEXT),
+    parameter bit USE_BRAM_BASE_TABLES = 1'b0
 ) (
     input  wire logic                         i_clk,
     input  wire logic                         i_rst_n,
@@ -54,6 +55,20 @@ module qmap_one_token_control_regs #(
     output logic [MAX_LAYERS*ADDR_WIDTH-1 : 0] o_mlp_down_qmap_base_addr_table,
     output logic [MAX_LAYERS*ADDR_WIDTH-1 : 0] o_mlp_residual_add_qmap_base_addr_table,
 
+    input  wire logic [LAYER_INDEX_WIDTH-1:0] i_runtime_table_layer,
+    output logic [ADDR_WIDTH-1 : 0]           o_qkv_qmap_base_addr,
+    output logic [ADDR_WIDTH-1 : 0]           o_input_norm_qmap_base_addr,
+    output logic [ADDR_WIDTH-1 : 0]           o_attn_frontend_qmap_base_addr,
+    output logic [ADDR_WIDTH-1 : 0]           o_attn_score_value_qmap_base_addr,
+    output logic [ADDR_WIDTH-1 : 0]           o_o_proj_qmap_base_addr,
+    output logic [ADDR_WIDTH-1 : 0]           o_post_attn_norm_qmap_base_addr,
+    output logic [ADDR_WIDTH-1 : 0]           o_mlp_gate_up_qmap_base_addr,
+    output logic [ADDR_WIDTH-1 : 0]           o_mlp_silu_mul_qmap_base_addr,
+    output logic [ADDR_WIDTH-1 : 0]           o_mlp_down_qmap_base_addr,
+    output logic [ADDR_WIDTH-1 : 0]           o_mlp_residual_add_qmap_base_addr,
+    output logic                              o_runtime_table_valid,
+    output logic [LAYER_INDEX_WIDTH-1:0]      o_runtime_table_layer,
+
     input  wire logic                         i_top_busy,
     input  wire logic                         i_top_done,
     input  wire logic                         i_top_error,
@@ -78,6 +93,9 @@ module qmap_one_token_control_regs #(
 );
 
     localparam int TABLE_COUNT = 10;
+    localparam int TABLE_DEPTH = TABLE_COUNT * MAX_LAYERS;
+    localparam int TABLE_ADDR_WIDTH =
+        (TABLE_DEPTH <= 1) ? 1 : $clog2(TABLE_DEPTH);
 
     localparam logic [7 : 0] TABLE_QKV             = 8'd0;
     localparam logic [7 : 0] TABLE_INPUT_NORM      = 8'd1;
@@ -144,6 +162,12 @@ module qmap_one_token_control_regs #(
     logic [ADDR_WIDTH-1 : 0] table_shadow_addr;
 
     logic [ADDR_WIDTH-1 : 0] selected_table_addr;
+    logic [ADDR_WIDTH-1 : 0] table_bram_sw_rd_data;
+    logic [ADDR_WIDTH-1 : 0] table_bram_runtime_rd_data;
+    logic [TABLE_ADDR_WIDTH-1:0] table_sw_rd_index;
+    logic [TABLE_ADDR_WIDTH-1:0] table_runtime_rd_index;
+    logic [LAYER_INDEX_WIDTH-1:0] table_runtime_layer_requested;
+    logic table_bram_commit_now;
     logic signed [63 : 0] tail_score_q26_ext;
 
     assign o_reg_wr_ready = 1'b1;
@@ -164,9 +188,30 @@ module qmap_one_token_control_regs #(
         end
     endfunction
 
+    assign table_sw_rd_index =
+        (table_select_valid(table_select_id) &&
+         layer_select_valid(table_select_layer)) ?
+        (table_select_id * MAX_LAYERS) + table_select_layer : '0;
+    assign table_runtime_layer_requested =
+        ($unsigned(i_runtime_table_layer) < MAX_LAYERS) ?
+        i_runtime_table_layer : '0;
+    assign table_bram_commit_now =
+        USE_BRAM_BASE_TABLES &&
+        i_reg_wr_valid &&
+        (word_addr == REG_TABLE_COMMIT) &&
+        !i_top_busy &&
+        table_select_valid(table_select_id) &&
+        layer_select_valid(table_select_layer) &&
+        i_reg_wdata[0];
+
     always @* begin
         selected_table_addr = '0;
-        if (layer_select_valid(table_select_layer)) begin
+        if (table_select_valid(table_select_id) &&
+            layer_select_valid(table_select_layer)) begin
+            if (USE_BRAM_BASE_TABLES) begin
+                selected_table_addr = table_bram_sw_rd_data;
+            end
+            else begin
             case (table_select_id)
                 TABLE_QKV:
                     selected_table_addr = o_qkv_qmap_base_addr_table[table_select_layer*ADDR_WIDTH +: ADDR_WIDTH];
@@ -191,8 +236,130 @@ module qmap_one_token_control_regs #(
                 default:
                     selected_table_addr = '0;
             endcase
+            end
         end
     end
+
+    generate
+        if (USE_BRAM_BASE_TABLES) begin : g_bram_base_tables
+            logic [7 : 0] runtime_issue_table_id;
+            logic [7 : 0] runtime_capture_table_id;
+            logic runtime_capture_valid;
+
+            qmap_base_addr_table_bram #(
+                .ADDR_WIDTH(ADDR_WIDTH),
+                .DEPTH(TABLE_DEPTH),
+                .INDEX_WIDTH(TABLE_ADDR_WIDTH)
+            ) all_tables (
+                .i_clk(i_clk),
+                .i_wr_en(table_bram_commit_now),
+                .i_wr_index(table_sw_rd_index),
+                .i_wr_data(table_shadow_addr),
+                .i_sw_rd_index(table_sw_rd_index),
+                .o_sw_rd_data(table_bram_sw_rd_data),
+                .i_runtime_rd_index(table_runtime_rd_index),
+                .o_runtime_rd_data(table_bram_runtime_rd_data)
+            );
+
+            always_comb begin
+                table_runtime_rd_index =
+                    (runtime_issue_table_id * MAX_LAYERS) +
+                    o_runtime_table_layer;
+            end
+
+            always_ff @(posedge i_clk or negedge i_rst_n) begin
+                if (!i_rst_n) begin
+                    runtime_issue_table_id <= TABLE_QKV;
+                    runtime_capture_table_id <= TABLE_QKV;
+                    runtime_capture_valid <= 1'b0;
+                    o_runtime_table_valid <= 1'b0;
+                    o_runtime_table_layer <= '0;
+                    o_qkv_qmap_base_addr <= '0;
+                    o_input_norm_qmap_base_addr <= '0;
+                    o_attn_frontend_qmap_base_addr <= '0;
+                    o_attn_score_value_qmap_base_addr <= '0;
+                    o_o_proj_qmap_base_addr <= '0;
+                    o_post_attn_norm_qmap_base_addr <= '0;
+                    o_mlp_gate_up_qmap_base_addr <= '0;
+                    o_mlp_silu_mul_qmap_base_addr <= '0;
+                    o_mlp_down_qmap_base_addr <= '0;
+                    o_mlp_residual_add_qmap_base_addr <= '0;
+                end
+                else if (table_runtime_layer_requested != o_runtime_table_layer) begin
+                    runtime_issue_table_id <= TABLE_QKV;
+                    runtime_capture_table_id <= TABLE_QKV;
+                    runtime_capture_valid <= 1'b0;
+                    o_runtime_table_valid <= 1'b0;
+                    o_runtime_table_layer <= table_runtime_layer_requested;
+                end
+                else if (table_bram_commit_now &&
+                         (table_select_layer[LAYER_INDEX_WIDTH-1:0] ==
+                          o_runtime_table_layer)) begin
+                    runtime_issue_table_id <= TABLE_QKV;
+                    runtime_capture_table_id <= TABLE_QKV;
+                    runtime_capture_valid <= 1'b0;
+                    o_runtime_table_valid <= 1'b0;
+                end
+                else begin
+                    if (runtime_capture_valid) begin
+                        unique case (runtime_capture_table_id)
+                            TABLE_QKV:
+                                o_qkv_qmap_base_addr <= table_bram_runtime_rd_data;
+                            TABLE_INPUT_NORM:
+                                o_input_norm_qmap_base_addr <= table_bram_runtime_rd_data;
+                            TABLE_ATTN_FRONTEND:
+                                o_attn_frontend_qmap_base_addr <= table_bram_runtime_rd_data;
+                            TABLE_ATTN_SCORE:
+                                o_attn_score_value_qmap_base_addr <= table_bram_runtime_rd_data;
+                            TABLE_O_PROJ:
+                                o_o_proj_qmap_base_addr <= table_bram_runtime_rd_data;
+                            TABLE_POST_ATTN_NORM:
+                                o_post_attn_norm_qmap_base_addr <= table_bram_runtime_rd_data;
+                            TABLE_MLP_GATE_UP:
+                                o_mlp_gate_up_qmap_base_addr <= table_bram_runtime_rd_data;
+                            TABLE_MLP_SILU_MUL:
+                                o_mlp_silu_mul_qmap_base_addr <= table_bram_runtime_rd_data;
+                            TABLE_MLP_DOWN:
+                                o_mlp_down_qmap_base_addr <= table_bram_runtime_rd_data;
+                            TABLE_MLP_RESIDUAL: begin
+                                o_mlp_residual_add_qmap_base_addr <=
+                                    table_bram_runtime_rd_data;
+                                o_runtime_table_valid <= 1'b1;
+                            end
+                            default:
+                                o_runtime_table_valid <= 1'b0;
+                        endcase
+                    end
+
+                    runtime_capture_table_id <= runtime_issue_table_id;
+                    runtime_capture_valid <= 1'b1;
+                    if (runtime_issue_table_id == TABLE_MLP_RESIDUAL) begin
+                        runtime_issue_table_id <= TABLE_QKV;
+                    end
+                    else begin
+                        runtime_issue_table_id <= runtime_issue_table_id + 1'b1;
+                    end
+                end
+            end
+        end
+        else begin : g_legacy_base_tables
+            assign o_qkv_qmap_base_addr = '0;
+            assign o_input_norm_qmap_base_addr = '0;
+            assign o_attn_frontend_qmap_base_addr = '0;
+            assign o_attn_score_value_qmap_base_addr = '0;
+            assign o_o_proj_qmap_base_addr = '0;
+            assign o_post_attn_norm_qmap_base_addr = '0;
+            assign o_mlp_gate_up_qmap_base_addr = '0;
+            assign o_mlp_silu_mul_qmap_base_addr = '0;
+            assign o_mlp_down_qmap_base_addr = '0;
+            assign o_mlp_residual_add_qmap_base_addr = '0;
+            assign o_runtime_table_valid = 1'b0;
+            assign o_runtime_table_layer = '0;
+            assign table_runtime_rd_index = '0;
+            assign table_bram_sw_rd_data = '0;
+            assign table_bram_runtime_rd_data = '0;
+        end
+    endgenerate
 
     always @* begin
         o_reg_error = 1'b0;
@@ -479,7 +646,7 @@ module qmap_one_token_control_regs #(
                                 error_sticky <= 1'b1;
                             end
                         end
-                        else begin
+                        else if (!USE_BRAM_BASE_TABLES) begin
                             unique case (table_select_id)
                                 TABLE_QKV:
                                     o_qkv_qmap_base_addr_table[table_select_layer*ADDR_WIDTH +: ADDR_WIDTH] <= table_shadow_addr;

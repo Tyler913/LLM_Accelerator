@@ -27,6 +27,7 @@ module qmap_attention_score_value_compute_path #(
     parameter int OUT_WIDTH        = 24,
     parameter int MEM_DATA_WIDTH   = 32,
     parameter int MAX_READ_BYTES   = 1024,
+    parameter int USE_BRAM_STREAMING = 1,
     parameter int LAYER_INDEX_W    = (NUM_LAYERS <= 1) ? 1 : $clog2(NUM_LAYERS),
     parameter int Q_HEAD_INDEX_W   = (NUM_Q_HEADS <= 1) ? 1 : $clog2(NUM_Q_HEADS),
     parameter int KV_HEAD_INDEX_W  = (NUM_KV_HEADS <= 1) ? 1 : $clog2(NUM_KV_HEADS),
@@ -93,6 +94,10 @@ module qmap_attention_score_value_compute_path #(
     localparam int MEM_DATA_BYTES = MEM_DATA_WIDTH / 8;
     localparam int CHUNK_WORDS    = MAX_READ_BYTES / MEM_DATA_BYTES;
     localparam int Q_COUNT        = NUM_Q_HEADS * HEAD_DIM;
+    localparam int Q_ADDR_WIDTH   =
+        (Q_COUNT <= 1) ? 1 : $clog2(Q_COUNT);
+    localparam int EXP_LUT_INDEX_W =
+        (EXP_LUT_SIZE <= 1) ? 1 : $clog2(EXP_LUT_SIZE);
     localparam int KV_CACHE_BYTES = 2 * NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM * MEM_DATA_BYTES;
     localparam int KV_KIND_STRIDE_BYTES = NUM_KV_HEADS * MAX_CONTEXT * HEAD_DIM * MEM_DATA_BYTES;
     localparam int KV_HEAD_STRIDE_BYTES = MAX_CONTEXT * HEAD_DIM * MEM_DATA_BYTES;
@@ -187,6 +192,12 @@ module qmap_attention_score_value_compute_path #(
     logic [Q_COUNT*IN_WIDTH-1 : 0] q_rope_flat;
     logic [EXP_LUT_SIZE*EXP_WIDTH-1 : 0] exp_lut_flat;
     logic [Q_COUNT*OUT_WIDTH-1 : 0] attn_out_flat;
+    (* ram_style = "block" *)
+    logic signed [IN_WIDTH-1 : 0] q_rope_mem [0 : Q_COUNT-1];
+    (* ram_style = "block" *)
+    logic [EXP_WIDTH-1 : 0] exp_lut_mem [0 : EXP_LUT_SIZE-1];
+    (* ram_style = "block" *)
+    logic signed [OUT_WIDTH-1 : 0] attn_out_mem [0 : Q_COUNT-1];
 
     logic [31 : 0] read_chunk_index;
     logic [31 : 0] read_word_index;
@@ -213,6 +224,8 @@ module qmap_attention_score_value_compute_path #(
     logic score_k_rsp_valid;
     logic score_k_rsp_ready;
     logic signed [IN_WIDTH-1 : 0] score_k_rsp_data;
+    logic [Q_ADDR_WIDTH-1 : 0] score_q_read_addr;
+    logic signed [IN_WIDTH-1 : 0] score_q_read_data;
     logic score_valid;
     logic score_ready;
     logic [Q_HEAD_INDEX_W-1 : 0] score_q_head;
@@ -272,6 +285,10 @@ module qmap_attention_score_value_compute_path #(
     logic value_saturation_seen;
     logic [31 : 0] attn_write_word_index;
     logic [31 : 0] attn_write_data_word;
+    logic [Q_ADDR_WIDTH-1 : 0] attn_out_read_addr;
+    logic signed [OUT_WIDTH-1 : 0] attn_out_read_data;
+    logic [EXP_LUT_INDEX_W-1 : 0] value_exp_lut_read_addr;
+    logic [EXP_WIDTH-1 : 0] value_exp_lut_read_data;
 
     genvar desc_index;
     generate
@@ -359,6 +376,9 @@ module qmap_attention_score_value_compute_path #(
         .IN_WIDTH(IN_WIDTH),
         .SCORE_WIDTH(SCORE_WIDTH),
         .SCALE_WIDTH(SCALE_WIDTH),
+        .USE_Q_READ_PORT(USE_BRAM_STREAMING),
+        .Q_COUNT(Q_COUNT),
+        .Q_ADDR_WIDTH(Q_ADDR_WIDTH),
         .Q_HEAD_INDEX_W(Q_HEAD_INDEX_W),
         .KV_HEAD_INDEX_W(KV_HEAD_INDEX_W),
         .POSITION_INDEX_W(POSITION_INDEX_W),
@@ -371,6 +391,8 @@ module qmap_attention_score_value_compute_path #(
         .i_cache_length(metadata_cache_length),
         .i_score_scale_q0_31(metadata_score_scale_q0_31),
         .i_q_rope_flat(q_rope_flat),
+        .o_q_read_addr(score_q_read_addr),
+        .i_q_read_data(score_q_read_data),
         .o_busy(score_busy),
         .o_done(score_done),
         .o_error(score_error),
@@ -405,6 +427,7 @@ module qmap_attention_score_value_compute_path #(
         .OUT_WIDTH(OUT_WIDTH),
         .EXP_WIDTH(EXP_WIDTH),
         .EXP_LUT_SIZE(EXP_LUT_SIZE),
+        .USE_EXP_READ_PORT(USE_BRAM_STREAMING),
         .Q_HEAD_INDEX_W(Q_HEAD_INDEX_W),
         .KV_HEAD_INDEX_W(KV_HEAD_INDEX_W),
         .POSITION_INDEX_W(POSITION_INDEX_W),
@@ -416,6 +439,8 @@ module qmap_attention_score_value_compute_path #(
         .i_start(stage_start),
         .i_cache_length(metadata_cache_length),
         .i_exp_lut_flat(exp_lut_flat),
+        .o_exp_lut_rd_addr(value_exp_lut_read_addr),
+        .i_exp_lut_rd_data(value_exp_lut_read_data),
         .i_score_valid(score_valid),
         .o_score_ready(score_ready),
         .i_score_q_head(score_q_head),
@@ -527,6 +552,12 @@ module qmap_attention_score_value_compute_path #(
     assign score_k_rsp_data = i_mem_rd_rsp_data[IN_WIDTH-1 : 0];
     assign value_v_rsp_data = i_mem_rd_rsp_data[IN_WIDTH-1 : 0];
     assign value_out_ready = (state == S_STAGE_RUN);
+    assign attn_out_read_addr =
+        ((state == S_ATTN_WR_DATA) &&
+         i_mem_wr_data_ready &&
+         (attn_write_word_index < (Q_COUNT - 1))) ?
+        Q_ADDR_WIDTH'(attn_write_word_index + 1'b1) :
+        Q_ADDR_WIDTH'(attn_write_word_index);
 
     assign reader_req_ready = (state == S_READER_WAIT) ? i_mem_rd_req_ready : 1'b0;
     assign reader_rsp_valid = (state == S_READER_WAIT) ? i_mem_rd_rsp_valid : 1'b0;
@@ -588,10 +619,29 @@ module qmap_attention_score_value_compute_path #(
         (state == S_CACHE_RD_DATA && active_cache_kind == 1'b1) ? value_v_rsp_ready :
         1'b0;
 
-    assign attn_write_data_word = {
-        {8{attn_out_flat[(attn_write_word_index*OUT_WIDTH) + (OUT_WIDTH-1)]}},
-        attn_out_flat[attn_write_word_index*OUT_WIDTH +: OUT_WIDTH]
-    };
+    generate
+        if (USE_BRAM_STREAMING != 0) begin : gen_attn_write_bram
+            assign attn_write_data_word = {
+                {(MEM_DATA_WIDTH-OUT_WIDTH){
+                    attn_out_read_data[OUT_WIDTH-1]
+                }},
+                attn_out_read_data
+            };
+        end
+        else begin : gen_attn_write_flat
+            assign attn_write_data_word = {
+                {(MEM_DATA_WIDTH-OUT_WIDTH){
+                    attn_out_flat[
+                        (attn_write_word_index*OUT_WIDTH) +
+                        (OUT_WIDTH-1)
+                    ]
+                }},
+                attn_out_flat[
+                    attn_write_word_index*OUT_WIDTH +: OUT_WIDTH
+                ]
+            };
+        end
+    endgenerate
 
     assign o_mem_wr_req_valid = (state == S_ATTN_WR_REQ);
     assign o_mem_wr_req_addr =
@@ -702,14 +752,59 @@ module qmap_attention_score_value_compute_path #(
         end
     endfunction
 
+    // Board-mode Q RoPE and attention output stores. Both are written in full
+    // and use synchronous reads, so no reset or whole-array assignment is
+    // present in these RAM inference processes.
+    always_ff @(posedge i_clk) begin
+        if ((USE_BRAM_STREAMING != 0) &&
+            (state == S_READ_DATA) &&
+            i_mem_rd_rsp_valid &&
+            !read_protocol_error &&
+            (active_read_slot == R_Q_ROPE)) begin
+            q_rope_mem[
+                read_element_index[Q_ADDR_WIDTH-1 : 0]
+            ] <= i_mem_rd_rsp_data[IN_WIDTH-1 : 0];
+        end
+        score_q_read_data <= q_rope_mem[score_q_read_addr];
+    end
+
+    always_ff @(posedge i_clk) begin
+        if ((USE_BRAM_STREAMING != 0) &&
+            (state == S_READ_DATA) &&
+            i_mem_rd_rsp_valid &&
+            !read_protocol_error &&
+            (active_read_slot == R_EXP_LUT)) begin
+            exp_lut_mem[
+                read_element_index[EXP_LUT_INDEX_W-1 : 0]
+            ] <= i_mem_rd_rsp_data[EXP_WIDTH-1 : 0];
+        end
+        value_exp_lut_read_data <=
+            exp_lut_mem[value_exp_lut_read_addr];
+    end
+
+    always_ff @(posedge i_clk) begin
+        if ((USE_BRAM_STREAMING != 0) &&
+            value_out_valid &&
+            value_out_ready) begin
+            attn_out_mem[
+                Q_ADDR_WIDTH'(
+                    (value_out_q_head * HEAD_DIM) + value_out_dim
+                )
+            ] <= value_out_data;
+        end
+        attn_out_read_data <= attn_out_mem[attn_out_read_addr];
+    end
+
     always_ff @(posedge i_clk or negedge i_rst_n) begin
         if (i_rst_n == 1'b0) begin
             state <= S_IDLE;
             active_read_slot <= R_Q_ROPE;
             active_cache_kind <= 1'b0;
-            q_rope_flat <= '0;
-            exp_lut_flat <= '0;
-            attn_out_flat <= '0;
+            if (USE_BRAM_STREAMING == 0) begin
+                q_rope_flat <= '0;
+                exp_lut_flat <= '0;
+                attn_out_flat <= '0;
+            end
             read_chunk_index <= 32'd0;
             read_word_index <= 32'd0;
             score_done_seen <= 1'b0;
@@ -762,9 +857,11 @@ module qmap_attention_score_value_compute_path #(
                         state <= S_READER_START;
                         active_read_slot <= R_Q_ROPE;
                         active_cache_kind <= 1'b0;
-                        q_rope_flat <= '0;
-                        exp_lut_flat <= '0;
-                        attn_out_flat <= '0;
+                        if (USE_BRAM_STREAMING == 0) begin
+                            q_rope_flat <= '0;
+                            exp_lut_flat <= '0;
+                            attn_out_flat <= '0;
+                        end
                         read_chunk_index <= 32'd0;
                         read_word_index <= 32'd0;
                         score_done_seen <= 1'b0;
@@ -832,12 +929,24 @@ module qmap_attention_score_value_compute_path #(
                         else begin
                             case (active_read_slot)
                                 R_Q_ROPE: begin
-                                    q_rope_flat[read_element_index*IN_WIDTH +: IN_WIDTH] <=
-                                        i_mem_rd_rsp_data[IN_WIDTH-1 : 0];
+                                    if (USE_BRAM_STREAMING == 0) begin
+                                        q_rope_flat[
+                                            read_element_index*IN_WIDTH +:
+                                            IN_WIDTH
+                                        ] <= i_mem_rd_rsp_data[
+                                            IN_WIDTH-1 : 0
+                                        ];
+                                    end
                                 end
                                 R_EXP_LUT: begin
-                                    exp_lut_flat[read_element_index*EXP_WIDTH +: EXP_WIDTH] <=
-                                        i_mem_rd_rsp_data[EXP_WIDTH-1 : 0];
+                                    if (USE_BRAM_STREAMING == 0) begin
+                                        exp_lut_flat[
+                                            read_element_index*EXP_WIDTH +:
+                                            EXP_WIDTH
+                                        ] <= i_mem_rd_rsp_data[
+                                            EXP_WIDTH-1 : 0
+                                        ];
+                                    end
                                 end
                                 default: begin
                                 end
@@ -880,8 +989,13 @@ module qmap_attention_score_value_compute_path #(
 
                 S_STAGE_RUN: begin
                     if (value_out_valid && value_out_ready) begin
-                        attn_out_flat[(value_out_q_head*HEAD_DIM + value_out_dim)*OUT_WIDTH +: OUT_WIDTH] <=
-                            value_out_data;
+                        if (USE_BRAM_STREAMING == 0) begin
+                            attn_out_flat[
+                                (value_out_q_head*HEAD_DIM +
+                                 value_out_dim)*OUT_WIDTH +:
+                                OUT_WIDTH
+                            ] <= value_out_data;
+                        end
                         o_attn_out_capture_count <= o_attn_out_capture_count + 1'b1;
                     end
 

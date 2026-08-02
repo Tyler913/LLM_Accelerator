@@ -3,7 +3,11 @@
 
 `include "qmap_defs.svh"
 
-module tb_qmap_mlp_gate_up_compute_path;
+module tb_qmap_mlp_gate_up_compute_path #(
+    parameter int GROUP_PARALLEL = 8,
+    parameter int SUCCESS_TIMEOUT_CYCLES =
+        (GROUP_PARALLEL == 1) ? 8000000 : 4000000
+);
 
     localparam int ADDR_WIDTH       = 64;
     localparam int DESCRIPTOR_SLOTS = 10;
@@ -11,7 +15,6 @@ module tb_qmap_mlp_gate_up_compute_path;
     localparam int OUT_FEATURES     = 3072;
     localparam int GROUP_SIZE       = 64;
     localparam int GROUP_COUNT      = INPUT_SIZE / GROUP_SIZE;
-    localparam int GROUP_PARALLEL   = 8;
     localparam int ACT_WIDTH        = 24;
     localparam int WEIGHT_WIDTH     = 4;
     localparam int SCALE_WIDTH      = 16;
@@ -642,7 +645,7 @@ module tb_qmap_mlp_gate_up_compute_path;
                 start = 1'b0;
             end
 
-            wait_for_next_done(prior_done_count, 4000000);
+            wait_for_next_done(prior_done_count, SUCCESS_TIMEOUT_CYCLES);
             normal_done_cycle = last_done_cycle;
             normal_rows_done = rows_done;
             normal_gate_write_count = gate_write_word_count;
@@ -975,6 +978,8 @@ module tb_qmap_mlp_gate_up_compute_path;
 
         $display("qmap_mlp_gate_up_compute_path descriptor-backed MLP gate/up test");
         $display("  qmap base                  = 0x%016h", qmap_base_addr);
+        $display("  group parallel             = %0d", GROUP_PARALLEL);
+        $display("  success timeout cycles     = %0d", SUCCESS_TIMEOUT_CYCLES);
         $display("  rows done normal           = %0d", normal_rows_done);
         $display("  gate/up words written      = %0d / %0d", normal_gate_write_count, normal_up_write_count);
         $display("  read req/rsp fires         = %0d / %0d", mem_req_fire_count, mem_rsp_fire_count);

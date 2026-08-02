@@ -63,6 +63,7 @@ $tests = @(
     @{ Top = "tb_axi4_write_master"; Source = "tb_axi4_write_master.sv" },
     @{ Top = "tb_axi4lite_to_mmio_regs"; Source = "tb_axi4lite_to_mmio_regs.sv" },
     @{ Top = "tb_qmap_one_token_control_regs"; Source = "tb_qmap_one_token_control_regs.sv" },
+    @{ Top = "tb_qmap_one_token_control_regs_bram"; Source = "tb_qmap_one_token_control_regs_bram.sv" },
     @{ Top = "tb_qmap_one_token_layer_scheduler_validation"; Source = "tb_qmap_one_token_layer_scheduler_validation.sv" },
     @{ Top = "tb_qmap_one_token_mmio_top"; Source = "tb_qmap_one_token_mmio_top.sv" },
     @{ Top = "tb_qmap_one_token_axil_top"; Source = "tb_qmap_one_token_axil_top.sv" },
@@ -120,7 +121,7 @@ try {
     $headerOffsets = @{}
     foreach ($match in $svMatches) {
         $svOffsets[$match.Groups[1].Value] =
-            4u * [Convert]::ToUInt32($match.Groups[2].Value, 16)
+            4 * [Convert]::ToUInt32($match.Groups[2].Value, 16)
     }
     foreach ($match in $headerMatches) {
         $headerOffsets[$match.Groups[1].Value] =

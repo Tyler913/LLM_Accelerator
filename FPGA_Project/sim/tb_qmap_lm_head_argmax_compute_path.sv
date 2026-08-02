@@ -61,6 +61,13 @@ module tb_qmap_lm_head_argmax_compute_path #(
     localparam int WEIGHT_BURSTS_PER_TILE = TILE_WEIGHT_BYTES / MAX_READ_BYTES;
     localparam int SCALE_BURSTS_PER_TILE = 1;
     localparam int BURSTS_PER_TILE = WEIGHT_BURSTS_PER_TILE + SCALE_BURSTS_PER_TILE;
+    localparam int WEIGHT_BURSTS_PER_ROW = 1;
+    localparam int SCALE_BURSTS_PER_ROW = 1;
+    localparam int BURSTS_PER_ROW =
+        WEIGHT_BURSTS_PER_ROW + SCALE_BURSTS_PER_ROW;
+    localparam int WORDS_PER_ROW =
+        (WEIGHT_ROW_BYTES + SCALE_ROW_BYTES) /
+        (MEM_DATA_WIDTH / 8);
     localparam int WORDS_PER_TILE = (TILE_WEIGHT_BYTES + TILE_SCALE_BYTES) / 4;
     localparam int WEIGHT_WORDS = SCAN_ROWS * WEIGHT_ROW_BYTES / 4;
     localparam int SCALE_WORDS = SCAN_ROWS * SCALE_ROW_BYTES / 4;
@@ -289,9 +296,9 @@ module tb_qmap_lm_head_argmax_compute_path #(
             $dumpvars(0, best_token_id);
             $dumpvars(0, best_score_q26);
             $dumpvars(0, dut.state);
-            $dumpvars(0, dut.scheduler.state);
-            $dumpvars(0, dut.scheduler.tile_stage.argmax_core.current_state);
-            $dumpvars(0, dut.scheduler.tile_stage.tile_reader.state);
+            $dumpvars(0, dut.scheduler_state_debug);
+            $dumpvars(0, dut.scheduler_engine_state_debug);
+            $dumpvars(0, dut.scheduler_row_result_valid);
         end
     end
 
@@ -443,45 +450,45 @@ module tb_qmap_lm_head_argmax_compute_path #(
     endtask
 
     task check_scheduler_request_address;
-        integer tile_id;
-        integer burst_id;
-        integer tile_token;
+        integer row_id;
+        integer row_request_id;
+        integer row_token;
         logic [ADDR_WIDTH-1 : 0] expected_addr;
         logic [15 : 0] expected_len;
         begin
-            tile_id = run_scheduler_req_count / BURSTS_PER_TILE;
-            burst_id = run_scheduler_req_count % BURSTS_PER_TILE;
-            tile_token = token_base + (tile_id * TILE_ROWS);
+            row_id = run_scheduler_req_count / BURSTS_PER_ROW;
+            row_request_id = run_scheduler_req_count % BURSTS_PER_ROW;
+            row_token = token_base + row_id;
 
-            if (tile_id >= current_run_tile_count) begin
+            if (row_id >= (current_run_tile_count * TILE_ROWS)) begin
                 if (print_count < 32) begin
-                    $display("FAIL: extra scheduler memory request run %0d tile_id=%0d tile_count=%0d",
-                             run_index, tile_id, current_run_tile_count);
+                    $display("FAIL: extra scheduler memory request run %0d row_id=%0d row_count=%0d",
+                             run_index, row_id,
+                             current_run_tile_count * TILE_ROWS);
                     print_count = print_count + 1;
                 end
                 mismatch_count = mismatch_count + 1;
             end
 
-            if (burst_id < WEIGHT_BURSTS_PER_TILE) begin
+            if (row_request_id == 0) begin
                 expected_addr =
                     weight_base_addr +
-                    (tile_token * WEIGHT_ROW_BYTES) +
-                    (burst_id * MAX_READ_BYTES);
-                expected_len = MAX_READ_BYTES_U16;
+                    (row_token * WEIGHT_ROW_BYTES);
+                expected_len = WEIGHT_ROW_BYTES;
                 mem_weight_req_count = mem_weight_req_count + 1;
             end
             else begin
                 expected_addr =
                     scale_base_addr +
-                    (tile_token * SCALE_ROW_BYTES);
-                expected_len = TILE_SCALE_BYTES_U16;
+                    (row_token * SCALE_ROW_BYTES);
+                expected_len = SCALE_ROW_BYTES;
                 mem_scale_req_count = mem_scale_req_count + 1;
             end
 
             if ((mem_rd_req_addr !== expected_addr) || (mem_rd_req_len_bytes !== expected_len)) begin
                 if (print_count < 32) begin
-                    $display("FAIL: scheduler request mismatch run %0d tile %0d burst %0d addr=0x%016h expected=0x%016h len=%0d expected_len=%0d",
-                             run_index, tile_id, burst_id, mem_rd_req_addr, expected_addr,
+                    $display("FAIL: scheduler request mismatch run %0d row %0d request %0d addr=0x%016h expected=0x%016h len=%0d expected_len=%0d",
+                             run_index, row_id, row_request_id, mem_rd_req_addr, expected_addr,
                              mem_rd_req_len_bytes, expected_len);
                     print_count = print_count + 1;
                 end
@@ -590,34 +597,34 @@ module tb_qmap_lm_head_argmax_compute_path #(
         integer local_index;
         logic signed [ROW_ACC_WIDTH-1 : 0] observed_logit;
         begin
-            for (row_index = 0; row_index < TILE_ROWS; row_index = row_index + 1) begin
-                local_index = (dut.scheduler_current_tile * TILE_ROWS) + row_index;
-                observed_logit =
-                    $signed(dut.scheduler.tile_stage.argmax_core.tile_output_flat[row_index*ROW_ACC_WIDTH +: ROW_ACC_WIDTH]);
-                logit_diff = observed_logit - expected_logits_mem[local_index];
-                if (logit_diff < 0) begin
-                    logit_diff = -logit_diff;
-                end
-                if (logit_diff > max_abs_logit_diff) begin
-                    max_abs_logit_diff = logit_diff;
-                end
-                if (observed_logit !== expected_logits_mem[local_index]) begin
-                    if (print_count < 32) begin
-                        $display(
-                            "FAIL: logit run %0d tile %0d row %0d token %0d actual=%0d expected=%0d",
-                            run_index,
-                            dut.scheduler_current_tile,
-                            row_index,
-                            token_base + local_index,
-                            observed_logit,
-                            expected_logits_mem[local_index]
-                        );
-                        print_count = print_count + 1;
-                    end
-                    mismatch_count = mismatch_count + 1;
-                end
-                checked_logit_count = checked_logit_count + 1;
+            local_index =
+                dut.scheduler_row_result_token - token_base;
+            observed_logit =
+                $signed(dut.scheduler_row_result_score);
+            logit_diff = observed_logit -
+                expected_logits_mem[local_index];
+            if (logit_diff < 0) begin
+                logit_diff = -logit_diff;
             end
+            if (logit_diff > max_abs_logit_diff) begin
+                max_abs_logit_diff = logit_diff;
+            end
+            if (observed_logit !==
+                expected_logits_mem[local_index]) begin
+                if (print_count < 32) begin
+                    $display(
+                        "FAIL: logit run %0d row %0d token %0d actual=%0d expected=%0d",
+                        run_index,
+                        local_index,
+                        dut.scheduler_row_result_token,
+                        observed_logit,
+                        expected_logits_mem[local_index]
+                    );
+                    print_count = print_count + 1;
+                end
+                mismatch_count = mismatch_count + 1;
+            end
+            checked_logit_count = checked_logit_count + 1;
         end
     endtask
 
@@ -626,9 +633,11 @@ module tb_qmap_lm_head_argmax_compute_path #(
         integer expected_read_words;
         integer expected_scheduler_reqs;
         begin
-            expected_scheduler_reqs = tile_count * BURSTS_PER_TILE;
+            expected_scheduler_reqs =
+                tile_count * TILE_ROWS * BURSTS_PER_ROW;
             expected_read_reqs = 11 + expected_scheduler_reqs;
-            expected_read_words = 1232 + (tile_count * WORDS_PER_TILE);
+            expected_read_words =
+                1232 + (tile_count * TILE_ROWS * WORDS_PER_ROW);
 
             if (error != 1'b0) begin
                 $display("FAIL: qmap LM-head wrapper error high at done for run %0d", run_index);
@@ -722,7 +731,7 @@ module tb_qmap_lm_head_argmax_compute_path #(
             start <= 1'b0;
 
             wait_cycles = 0;
-            wait_limit = 10000 + (tile_count * 8000);
+            wait_limit = 10000 + (tile_count * 25000);
             while ((done != 1'b1) && (wait_cycles < wait_limit)) begin
                 @(posedge clk);
                 wait_cycles = wait_cycles + 1;
@@ -886,9 +895,10 @@ module tb_qmap_lm_head_argmax_compute_path #(
                 wr_data_stall_active <= 0;
             end
 
-            if (dut.scheduler.tile_stage.argmax_core.current_state ==
-                dut.scheduler.tile_stage.argmax_core.UPDATE_BEST) begin
+            if (dut.scheduler_row_result_valid) begin
                 check_tile_logits();
+            end
+            if (dut.scheduler_tile_complete_pulse) begin
                 core_update_count <= core_update_count + 1;
             end
 
@@ -908,8 +918,7 @@ module tb_qmap_lm_head_argmax_compute_path #(
                  ((mem_wr_data_valid == 1'b1) && (mem_wr_data_ready == 1'b1)) ||
                  (mem_wr_done == 1'b1) ||
                  (done == 1'b1) ||
-                 (dut.scheduler.tile_stage.argmax_core.current_state ==
-                  dut.scheduler.tile_stage.argmax_core.UPDATE_BEST))) begin
+                 dut.scheduler_row_result_valid)) begin
                 $fwrite(
                     trace_fd,
                     "%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,0x%016h,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d\n",
@@ -920,9 +929,9 @@ module tb_qmap_lm_head_argmax_compute_path #(
                     done,
                     error,
                     dut.state,
-                    dut.scheduler.state,
-                    dut.scheduler.tile_stage.argmax_core.current_state,
-                    dut.scheduler.tile_stage.tile_reader.state,
+                    dut.scheduler_state_debug,
+                    dut.scheduler_engine_state_debug,
+                    0,
                     mem_rd_req_valid,
                     mem_rd_req_ready,
                     mem_rd_req_valid && mem_rd_req_ready,
@@ -1149,10 +1158,14 @@ module tb_qmap_lm_head_argmax_compute_path #(
 
         expected_success_runs = 1;
         expected_done_count = 1;
-        expected_total_read_req_count = 11 + (MAX_TILES * BURSTS_PER_TILE);
-        expected_total_read_rsp_count = 1232 + (MAX_TILES * WORDS_PER_TILE);
-        expected_total_weight_req_count = MAX_TILES * WEIGHT_BURSTS_PER_TILE;
-        expected_total_scale_req_count = MAX_TILES * SCALE_BURSTS_PER_TILE;
+        expected_total_read_req_count =
+            11 + (MAX_TILES * TILE_ROWS * BURSTS_PER_ROW);
+        expected_total_read_rsp_count =
+            1232 + (MAX_TILES * TILE_ROWS * WORDS_PER_ROW);
+        expected_total_weight_req_count =
+            MAX_TILES * TILE_ROWS * WEIGHT_BURSTS_PER_ROW;
+        expected_total_scale_req_count =
+            MAX_TILES * TILE_ROWS * SCALE_BURSTS_PER_ROW;
         expected_total_tile_update_count = MAX_TILES;
         expected_total_logit_count = MAX_TILES * TILE_ROWS;
 
@@ -1160,13 +1173,19 @@ module tb_qmap_lm_head_argmax_compute_path #(
             expected_success_runs = expected_success_runs + 1;
             expected_done_count = expected_done_count + 1;
             expected_total_read_req_count =
-                expected_total_read_req_count + 11 + (SECOND_RUN_TILES * BURSTS_PER_TILE);
+                expected_total_read_req_count + 11 +
+                (SECOND_RUN_TILES * TILE_ROWS * BURSTS_PER_ROW);
             expected_total_read_rsp_count =
-                expected_total_read_rsp_count + 1232 + (SECOND_RUN_TILES * WORDS_PER_TILE);
+                expected_total_read_rsp_count + 1232 +
+                (SECOND_RUN_TILES * TILE_ROWS * WORDS_PER_ROW);
             expected_total_weight_req_count =
-                expected_total_weight_req_count + (SECOND_RUN_TILES * WEIGHT_BURSTS_PER_TILE);
+                expected_total_weight_req_count +
+                (SECOND_RUN_TILES * TILE_ROWS *
+                 WEIGHT_BURSTS_PER_ROW);
             expected_total_scale_req_count =
-                expected_total_scale_req_count + (SECOND_RUN_TILES * SCALE_BURSTS_PER_TILE);
+                expected_total_scale_req_count +
+                (SECOND_RUN_TILES * TILE_ROWS *
+                 SCALE_BURSTS_PER_ROW);
             expected_total_tile_update_count = expected_total_tile_update_count + SECOND_RUN_TILES;
             expected_total_logit_count = expected_total_logit_count + (SECOND_RUN_TILES * TILE_ROWS);
         end

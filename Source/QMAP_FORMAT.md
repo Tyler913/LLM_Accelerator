@@ -1,9 +1,18 @@
 # QMAP Format
 
-Status: draft v1 descriptor format for PL DDR4 tensor staging and future
-full-model artifact layout. The dot64 image and the full row1024 image have
-both passed PS load/readback and PL AXI-master read/compute hardware smoke
-tests. The first Layer 0 QKV projection work packet, local PL write-back path,
+Current status (2026-08-01): QMAP v1 is the deployed descriptor contract in
+the current full28 board candidate. Its runtime has 281 packets, is packed into
+61 verified PL-DDR segments, and is checked for provenance, aperture safety,
+non-overlap, and zero initialization of all 397 accelerator-writable regions.
+The resource-reduced full28 no-reset two-token XSim and independent retained-KV
+event audit passed, and the self-contained release package independently
+verifies with state `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`. The full28
+physical run is still pending; the latest QMAP hardware PASS remains the
+row1024 smoke.
+
+Historical progression through 2026-07-13: the dot64 image and the full
+row1024 image both passed PS load/readback and PL AXI-master read/compute
+hardware smoke tests. The first Layer 0 QKV projection work packet, local PL write-back path,
 AXI write adapter, downstream local attention through `o_proj`,
 post-attention residual/RMSNorm hookup, MLP gate/up projection, MLP
 SiLU/multiply, MLP down projection, and final MLP residual add now pass Icarus
@@ -1826,6 +1835,67 @@ descriptor-level contract is clear.
 
 The PL reader and scheduler should therefore be designed around descriptors and
 tensor ids, not around a hard-coded 256-byte packet.
+
+## Current Full28 Board Runtime
+
+The first board-deployable QMAP runtime is generated from the complete
+28-layer manifest, then packed by
+`Qwen3-0.6B-Base/python_each_module/57_pack_qmap_runtime_load_plan.py`.
+
+Release contract:
+
+| Property | Value |
+| --- | ---: |
+| layer count | `28` |
+| per-layer packets | `10` |
+| final-tail packets | `1` |
+| total QMAP headers | `281` |
+| binary load segments | `61` |
+| total segment bytes | `394,547,200` |
+| first loaded address | `0x4_0010_0000` |
+| last end-exclusive address | `0x4_1A14_0000` |
+| PL DDR aperture | `0x4_0000_0000..0x4_1FFF_FFFF` |
+| accelerator-writable zero regions | `397` |
+
+The segment manifest carries SHA256 values for every binary plus SHA256
+provenance for the source load plan and complete full-chain manifest. The
+release audit reconstructs interval ownership, rejects overlaps or any byte
+outside PL DDR, and requires the XSDB loader to contain exactly one
+`dow -data` operation per segment. It also compares all 280 per-layer QMAP
+bases and eight global addresses compiled into the Vitis model application
+against that exact full-chain manifest.
+
+QMAP-header coverage is:
+
+```text
+28 * (
+  qkv + input_rmsnorm + attention_frontend + attention_score_value +
+  o_proj + post_attention_norm + mlp_gate_up + mlp_silu_mul +
+  mlp_down + mlp_residual_add
+) + final_tail = 281
+```
+
+The 397 zero-initialized regions are deliberate:
+
+```text
+28 layers * 14 stage-output regions = 392
++ 1 complete KV-cache region
++ hidden A
++ hidden B
++ final norm scratch
++ final token/score output
+= 397
+```
+
+The single cache interval covers all 28 layer slices. QMAP packets, Q4
+weights/scales, gamma/LUT/RoPE inputs, and immutable metadata are loaded;
+produced activations, cache entries, and final outputs are not preloaded with
+golden values. This is a release-level anti-false-positive rule.
+
+The packaged board launcher waits for DDR status `0x5`, loads all 61 segments,
+and reads the magic at all 281 packet bases before starting the model ELF.
+Passing these checks proves that the intended runtime was loaded; only the
+subsequent exact UART token/score result proves hardware inference.
 
 ## Open Decisions
 

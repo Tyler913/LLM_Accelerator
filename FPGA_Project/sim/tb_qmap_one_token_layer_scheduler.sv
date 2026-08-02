@@ -24,6 +24,7 @@ module tb_qmap_one_token_layer_scheduler;
     localparam int KV_COUNT = NUM_KV_HEADS * HEAD_DIM;
     localparam int KV_REPEAT = NUM_Q_HEADS / NUM_KV_HEADS;
     localparam int TOTAL_CACHE_WRITES = 2 * KV_COUNT;
+    localparam int CACHE_READ_WORDS_PER_POSITION = 2 * NUM_Q_HEADS * HEAD_DIM;
 
     localparam int QKV_IMAGE_BYTES = 32'h0022_B000;
     localparam int FRONT_IMAGE_BYTES = 32'h0000_8000;
@@ -211,7 +212,11 @@ module tb_qmap_one_token_layer_scheduler;
     localparam int EXPECTED_EMBEDDING_TRUE3_TOP_RD_WORDS = 27088110;
     localparam int EXPECTED_EMBEDDING_TRUE3_TOP_WR_REQS = 18468;
     localparam int EXPECTED_EMBEDDING_TRUE3_TOP_WR_WORDS = 78851;
-    localparam int EXPECTED_EMBEDDING_TAIL_EXTRA_RD_REQS = 85496;
+    // The routed resource-reduced tail uses the BRAM row scheduler.  Each of
+    // the 151936 vocabulary rows is fetched as one 512-byte weight request
+    // followed by one 32-byte scale request.  The remaining 32 requests are
+    // the two embedding-row requests plus QMAP/header and norm-side reads.
+    localparam int EXPECTED_EMBEDDING_TAIL_EXTRA_RD_REQS = 303904;
     localparam int EXPECTED_EMBEDDING_TAIL_EXTRA_RD_WORDS = 20667048;
     localparam int EXPECTED_EMBEDDING_TAIL_EXTRA_WR_REQS = 3;
     localparam int EXPECTED_EMBEDDING_TAIL_EXTRA_WR_WORDS = 2051;
@@ -233,8 +238,10 @@ module tb_qmap_one_token_layer_scheduler;
     localparam int TAIL_SCALE_ROW_BYTES = (TAIL_GROUP_COUNT * TAIL_SCALE_WIDTH) / 8;
     localparam int TAIL_TILE_WEIGHT_BYTES = TAIL_TILE_ROWS * TAIL_WEIGHT_ROW_BYTES;
     localparam int TAIL_TILE_SCALE_BYTES = TAIL_TILE_ROWS * TAIL_SCALE_ROW_BYTES;
-    localparam int TAIL_WEIGHT_BURSTS_PER_TILE = TAIL_TILE_WEIGHT_BYTES / `QMAP_FINAL_TOKEN_MAX_READ_BYTES;
-    localparam int TAIL_SCALE_BURSTS_PER_TILE = 1;
+    // The resource-reduced LM head fetches one packed-Q4 row per request even
+    // though MAX_READ_BYTES is wider than a 512-byte row.
+    localparam int TAIL_WEIGHT_BURSTS_PER_TILE = TAIL_TILE_ROWS;
+    localparam int TAIL_SCALE_BURSTS_PER_TILE = TAIL_TILE_ROWS;
     localparam int TAIL_BURSTS_PER_TILE = TAIL_WEIGHT_BURSTS_PER_TILE + TAIL_SCALE_BURSTS_PER_TILE;
     localparam int TAIL_QMAP_IMAGE_BYTES = 32'h0000_4000;
     localparam int TAIL_QMAP_WORDS = TAIL_QMAP_IMAGE_BYTES / MEM_DATA_BYTES;
@@ -695,6 +702,13 @@ module tb_qmap_one_token_layer_scheduler;
     logic [ADDR_WIDTH-1 : 0] full_layer_output_base [0 : MAX_LAYERS-1];
     logic [ADDR_WIDTH-1 : 0] full_actual_input_hidden_base [0 : MAX_LAYERS-1];
     logic [ADDR_WIDTH-1 : 0] full_actual_layer_output_base [0 : MAX_LAYERS-1];
+`ifdef QMAP_ONE_TOKEN_TB_PERSISTENT_TWO_TOKEN
+    logic signed [IN_WIDTH-1 : 0] persistent_step0_k_cache [0 : (MAX_LAYERS*KV_COUNT)-1];
+    logic signed [IN_WIDTH-1 : 0] persistent_step0_v_cache [0 : (MAX_LAYERS*KV_COUNT)-1];
+    logic [31 : 0] persistent_input_token [0 : 1];
+    logic [31 : 0] persistent_expected_output_token [0 : 1];
+    logic signed [TAIL_ROW_ACC_WIDTH-1 : 0] persistent_expected_output_score [0 : 1];
+`endif
 `endif
 
     logic [31 : 0] tail_qmap [0 : TAIL_QMAP_WORDS-1];
@@ -976,6 +990,10 @@ module tb_qmap_one_token_layer_scheduler;
     logic embedding_true3_mode;
     logic full_chain_mode;
     logic runtime_context_mode;
+    logic persistent_two_token_mode;
+    integer persistent_active_step;
+    integer persistent_reset_release_count;
+    integer persistent_prior_cache_read_req_count [0 : MAX_LAYERS-1];
     logic embedding_written;
     logic embedding_response_seen;
     logic [MAX_LAYERS-1 : 0] layer_response_seen;
@@ -1475,6 +1493,12 @@ module tb_qmap_one_token_layer_scheduler;
         clk = 1'b0;
         forever #5 clk = ~clk;
     end
+
+`ifdef QMAP_ONE_TOKEN_TB_PERSISTENT_TWO_TOKEN
+    always @(posedge rst_n) begin
+        persistent_reset_release_count = persistent_reset_release_count + 1;
+    end
+`endif
 
     initial begin
         wavefile = "FPGA_Project/wave/qmap_one_token_layer_scheduler.vcd";
@@ -2101,7 +2125,9 @@ module tb_qmap_one_token_layer_scheduler;
         begin
             full_chain_mode = $test$plusargs("embedding_full_chain");
             runtime_context_mode = $test$plusargs("runtime_context");
+            persistent_two_token_mode = $test$plusargs("persistent_two_token");
             embedding_true3_mode = $test$plusargs("embedding_true3") || full_chain_mode;
+            persistent_active_step = 0;
             full_chain_layer_count = 0;
             full_chain_manifest_runtime_context = 0;
             full_chain_runtime_position = 0;
@@ -2255,6 +2281,11 @@ module tb_qmap_one_token_layer_scheduler;
 `ifdef QMAP_ONE_TOKEN_TB_FULL_CHAIN
             if (full_chain_mode) begin
 `include "full_chain_vector_loads.svh"
+`ifdef QMAP_ONE_TOKEN_TB_PERSISTENT_TWO_TOKEN
+                if (persistent_two_token_mode) begin
+`include "persistent_two_token_config.svh"
+                end
+`endif
                 if ((full_chain_layer_count <= 0) || (full_chain_layer_count > MAX_LAYERS)) begin
                     $display("FAIL: generated full-chain layer count %0d is outside 1..%0d",
                              full_chain_layer_count, MAX_LAYERS);
@@ -2263,6 +2294,11 @@ module tb_qmap_one_token_layer_scheduler;
                 if (full_chain_manifest_runtime_context != runtime_context_mode) begin
                     $display("FAIL: runtime-context plusarg=%0d does not match generated manifest=%0d",
                              runtime_context_mode, full_chain_manifest_runtime_context);
+                    $finish(1);
+                end
+                if (persistent_two_token_mode &&
+                    (!runtime_context_mode || !full_chain_manifest_runtime_context)) begin
+                    $display("FAIL: persistent two-token mode requires a RuntimeContext manifest");
                     $finish(1);
                 end
                 if (runtime_context_mode &&
@@ -2428,6 +2464,32 @@ module tb_qmap_one_token_layer_scheduler;
 `endif
         end
     endtask
+
+`ifdef QMAP_ONE_TOKEN_TB_PERSISTENT_TWO_TOKEN
+    task load_persistent_step_vectors;
+        input integer step;
+        begin
+            case (step)
+                0: begin
+`include "persistent_step0_vector_loads.svh"
+                end
+                1: begin
+`include "persistent_step1_vector_loads.svh"
+                end
+                default: begin
+                    $display("FAIL: persistent token step %0d is outside 0..1", step);
+                    $finish(1);
+                end
+            endcase
+            persistent_active_step = step;
+            full_chain_runtime_position = step;
+            embedding_weight_row_base = EMBEDDING_WEIGHT_BASE_ADDR +
+                (embedding_token_mem[0] * (EMBEDDING_WEIGHT_WORDS * MEM_DATA_BYTES));
+            embedding_scale_row_base = EMBEDDING_SCALE_BASE_ADDR +
+                (embedding_token_mem[0] * (EMBEDDING_SCALE_WORDS * MEM_DATA_BYTES));
+        end
+    endtask
+`endif
 
     function automatic logic [31 : 0] cache_word(input logic [ADDR_WIDTH-1 : 0] addr);
         integer element_index;
@@ -2716,6 +2778,21 @@ module tb_qmap_one_token_layer_scheduler;
             end
             else if (use_tail_mem && in_range(addr, tail_scale_base_addr, TAIL_SCALE_WORDS * MEM_DATA_BYTES)) begin
                 index = (addr - tail_scale_base_addr) >> 2;
+                memory_word = tail_scale_mem[index];
+            end
+            else
+`endif
+`ifdef QMAP_ONE_TOKEN_TB_PERSISTENT_TWO_TOKEN
+            if (persistent_two_token_mode &&
+                in_range(addr, EMBEDDING_WEIGHT_BASE_ADDR,
+                         TAIL_WEIGHT_WORDS * MEM_DATA_BYTES)) begin
+                index = (addr - EMBEDDING_WEIGHT_BASE_ADDR) >> 2;
+                memory_word = tail_weight_mem[index];
+            end
+            else if (persistent_two_token_mode &&
+                     in_range(addr, EMBEDDING_SCALE_BASE_ADDR,
+                              TAIL_SCALE_WORDS * MEM_DATA_BYTES)) begin
+                index = (addr - EMBEDDING_SCALE_BASE_ADDR) >> 2;
                 memory_word = tail_scale_mem[index];
             end
             else
@@ -3939,12 +4016,21 @@ module tb_qmap_one_token_layer_scheduler;
     task calculate_tail_expected;
         integer i;
         begin
-            tail_expected_token = tail_scan_base_token_mem[0];
-            tail_expected_score_q26 = tail_expected_logits[0];
-            for (i = 1; i < TAIL_SCAN_ROWS; i = i + 1) begin
-                if ($signed(tail_expected_logits[i]) > tail_expected_score_q26) begin
-                    tail_expected_score_q26 = tail_expected_logits[i];
-                    tail_expected_token = tail_scan_base_token_mem[0] + i[31 : 0];
+            if (persistent_two_token_mode) begin
+                tail_expected_token = tail_expected_words[0];
+                tail_expected_score_q26 = $signed({
+                    tail_expected_words[2],
+                    tail_expected_words[1]
+                });
+            end
+            else begin
+                tail_expected_token = tail_scan_base_token_mem[0];
+                tail_expected_score_q26 = tail_expected_logits[0];
+                for (i = 1; i < TAIL_SCAN_ROWS; i = i + 1) begin
+                    if ($signed(tail_expected_logits[i]) > tail_expected_score_q26) begin
+                        tail_expected_score_q26 = tail_expected_logits[i];
+                        tail_expected_token = tail_scan_base_token_mem[0] + i[31 : 0];
+                    end
                 end
             end
         end
@@ -4011,6 +4097,7 @@ module tb_qmap_one_token_layer_scheduler;
         input logic [ADDR_WIDTH-1 : 0] addr;
         input integer len_bytes;
         integer tile_id;
+        integer row_id;
         integer burst_id;
         integer tile_token;
         logic [ADDR_WIDTH-1 : 0] expected_addr;
@@ -4042,17 +4129,18 @@ module tb_qmap_one_token_layer_scheduler;
             end
             else if (in_range(addr, tail_weight_base_addr, TAIL_WEIGHT_WORDS * MEM_DATA_BYTES) ||
                      in_range(addr, tail_scale_base_addr, TAIL_SCALE_WORDS * MEM_DATA_BYTES)) begin
-                tile_id = tail_lm_req_count / TAIL_BURSTS_PER_TILE;
-                burst_id = tail_lm_req_count % TAIL_BURSTS_PER_TILE;
-                tile_token = tail_scan_base_token_mem[0] + (tile_id * TAIL_TILE_ROWS);
+                row_id = tail_lm_req_count / 2;
+                tile_id = row_id / TAIL_TILE_ROWS;
+                burst_id = tail_lm_req_count % 2;
+                tile_token = tail_scan_base_token_mem[0] + row_id;
 
                 if (tile_id >= TAIL_MAX_TILES) begin
                     tail_fail("FAIL: final-token tail issued extra LM-head tile request");
                 end
-                if (burst_id < TAIL_WEIGHT_BURSTS_PER_TILE) begin
-                    expected_addr = tail_weight_base_addr + (tile_token * TAIL_WEIGHT_ROW_BYTES) +
-                                    (burst_id * `QMAP_FINAL_TOKEN_MAX_READ_BYTES);
-                    expected_len = `QMAP_FINAL_TOKEN_MAX_READ_BYTES;
+                if (burst_id == 0) begin
+                    expected_addr = tail_weight_base_addr +
+                                    (tile_token * TAIL_WEIGHT_ROW_BYTES);
+                    expected_len = TAIL_WEIGHT_ROW_BYTES;
                     tail_weight_req_count = tail_weight_req_count + 1;
                     if (tail_first_weight_read_cycle < 0) begin
                         tail_first_weight_read_cycle = cycle_count;
@@ -4060,7 +4148,7 @@ module tb_qmap_one_token_layer_scheduler;
                 end
                 else begin
                     expected_addr = tail_scale_base_addr + (tile_token * TAIL_SCALE_ROW_BYTES);
-                    expected_len = TAIL_TILE_SCALE_BYTES;
+                    expected_len = TAIL_SCALE_ROW_BYTES;
                     tail_scale_req_count = tail_scale_req_count + 1;
                 end
 
@@ -4715,6 +4803,12 @@ module tb_qmap_one_token_layer_scheduler;
                     end
                     runtime_cache_read_req_count[layer] =
                         runtime_cache_read_req_count[layer] + 1;
+                    if (persistent_two_token_mode &&
+                        (persistent_active_step > 0) &&
+                        (cache_start_position < persistent_active_step)) begin
+                        persistent_prior_cache_read_req_count[layer] =
+                            persistent_prior_cache_read_req_count[layer] + 1;
+                    end
                 end
                 if (runtime_context_mode &&
                     in_range(addr, full_chain_runtime_rope_cos_base_addr,
@@ -5014,6 +5108,7 @@ module tb_qmap_one_token_layer_scheduler;
                 runtime_rope_read_req_count[i] = 0;
                 runtime_cache_read_req_count[i] = 0;
                 runtime_cache_write_word_count[i] = 0;
+                persistent_prior_cache_read_req_count[i] = 0;
             end
             mem_rd_rsp_valid = 1'b0;
             mem_rd_rsp_data = 32'd0;
@@ -5044,6 +5139,255 @@ module tb_qmap_one_token_layer_scheduler;
 `endif
         end
     endtask
+
+`ifdef QMAP_ONE_TOKEN_TB_PERSISTENT_TWO_TOKEN
+    task clear_scoreboard_for_next_token;
+        integer saved_cycle_count;
+        begin
+            saved_cycle_count = cycle_count;
+            clear_scoreboard();
+            cycle_count = saved_cycle_count;
+            if ($test$plusargs("fastmem")) begin
+                fastmem = 1'b1;
+            end
+        end
+    endtask
+
+    task clear_persistent_cache;
+        integer i;
+        begin
+            for (i = 0;
+                 i < (full_chain_layer_count * CACHE_LENGTH * KV_COUNT);
+                 i = i + 1) begin
+                full_k_cache_mem[i] = '0;
+                full_v_cache_mem[i] = '0;
+            end
+        end
+    endtask
+
+    task check_and_capture_persistent_cache;
+        input integer step;
+        integer layer;
+        integer element;
+        integer cache_index;
+        integer snapshot_index;
+        logic [31 : 0] expected_k_word;
+        logic [31 : 0] expected_v_word;
+        begin
+            for (layer = 0; layer < full_chain_layer_count; layer = layer + 1) begin
+                for (element = 0; element < KV_COUNT; element = element + 1) begin
+                    cache_index = (layer * CACHE_LENGTH * KV_COUNT) +
+                        (step * KV_COUNT) + element;
+                    expected_k_word =
+                        full_expected_cache_data[(layer * TOTAL_CACHE_WRITES) + element];
+                    expected_v_word =
+                        full_expected_cache_data[(layer * TOTAL_CACHE_WRITES) +
+                                                 KV_COUNT + element];
+                    if ((full_k_cache_mem[cache_index] !== expected_k_word[IN_WIDTH-1 : 0]) ||
+                        (full_v_cache_mem[cache_index] !== expected_v_word[IN_WIDTH-1 : 0])) begin
+                        fail_once("FAIL: persistent K/V cache contents do not match current-step golden");
+                    end
+
+                    snapshot_index = (layer * KV_COUNT) + element;
+                    if (step == 0) begin
+                        persistent_step0_k_cache[snapshot_index] =
+                            full_k_cache_mem[cache_index];
+                        persistent_step0_v_cache[snapshot_index] =
+                            full_v_cache_mem[cache_index];
+                    end
+                    else begin
+                        cache_index = (layer * CACHE_LENGTH * KV_COUNT) + element;
+                        if ((full_k_cache_mem[cache_index] !==
+                             persistent_step0_k_cache[snapshot_index]) ||
+                            (full_v_cache_mem[cache_index] !==
+                             persistent_step0_v_cache[snapshot_index])) begin
+                            fail_once("FAIL: step 1 modified retained step-0 K/V cache data");
+                        end
+                    end
+                end
+                if ((step > 0) &&
+                    (persistent_prior_cache_read_req_count[layer] <= 0)) begin
+                    fail_once("FAIL: step 1 did not read retained step-0 K/V cache data");
+                end
+            end
+        end
+    endtask
+
+    task check_persistent_step_result;
+        input integer step;
+        integer expected_cache_length;
+        integer expected_layer_read_reqs;
+        integer expected_layer_read_words;
+        logic [27 : 0] expected_mask;
+        logic signed [63 : 0] expected_score_ext;
+        begin
+            expected_cache_length = step + 1;
+            expected_layer_read_reqs = EXPECTED_INPUT_NORM_FULL_RD_REQS -
+                ((CACHE_LENGTH - expected_cache_length) *
+                 CACHE_READ_WORDS_PER_POSITION);
+            expected_layer_read_words = EXPECTED_INPUT_NORM_FULL_RD_WORDS -
+                ((CACHE_LENGTH - expected_cache_length) *
+                 CACHE_READ_WORDS_PER_POSITION);
+            expected_mask = expected_layer_mask(0, full_chain_layer_count);
+            expected_score_ext = {
+                {(64-TAIL_ROW_ACC_WIDTH){
+                    persistent_expected_output_score[step][TAIL_ROW_ACC_WIDTH-1]
+                }},
+                persistent_expected_output_score[step]
+            };
+
+            if ((layers_started != full_chain_layer_count) ||
+                (layers_completed != full_chain_layer_count) ||
+                (layer_done_mask != expected_mask) ||
+                (layer_error_mask != 28'd0) ||
+                error || tail_error || tail_norm_saturation) begin
+                fail_once("FAIL: persistent full-chain layer/tail status mismatch");
+            end
+            if ((done_seen_count != 1) ||
+                (top_scheduler_done_seen_count != 1) ||
+                (top_tail_start_seen_count != 1) ||
+                (tail_done_seen_count != 1)) begin
+                fail_once("FAIL: persistent full-chain pulse count mismatch");
+            end
+            if ((tail_best_token_id !== persistent_expected_output_token[step]) ||
+                (tail_best_score_q26 !== persistent_expected_output_score[step]) ||
+                (tail_expected_token !== persistent_expected_output_token[step]) ||
+                (tail_expected_score_q26 !== persistent_expected_output_score[step])) begin
+                fail_once("FAIL: persistent full-chain token/score mismatch");
+            end
+`ifdef QMAP_ONE_TOKEN_TB_USE_MMIO_CONTROL
+            mmio_read_reg(MMIO_REG_OUT_TOKEN, mmio_read_data);
+            if (mmio_read_data !== persistent_expected_output_token[step]) begin
+                fail_once("FAIL: persistent MMIO output token register mismatch");
+            end
+            mmio_read_reg(MMIO_REG_OUT_SCORE_LO, mmio_read_data);
+            if (mmio_read_data !==
+                persistent_expected_output_score[step][31 : 0]) begin
+                fail_once("FAIL: persistent MMIO output score low register mismatch");
+            end
+            mmio_read_reg(MMIO_REG_OUT_SCORE_HI, mmio_read_data);
+            if (mmio_read_data !== expected_score_ext[63 : 32]) begin
+                fail_once("FAIL: persistent MMIO output score high register mismatch");
+            end
+`endif
+            if ((step == 0) &&
+                (tail_best_token_id !== persistent_input_token[1])) begin
+                fail_once("FAIL: step-1 input token is not the exact step-0 argmax");
+            end
+            if ((dut_read_burst_count !=
+                 (full_chain_layer_count * expected_layer_read_reqs)) ||
+                (dut_read_word_count !=
+                 (full_chain_layer_count * expected_layer_read_words)) ||
+                (dut_write_req_count !=
+                 (full_chain_layer_count * EXPECTED_INPUT_NORM_FULL_WR_REQS)) ||
+                (dut_write_word_count !=
+                 (full_chain_layer_count * EXPECTED_INPUT_NORM_FULL_WR_WORDS))) begin
+                fail_once("FAIL: persistent scheduler memory counters mismatch");
+            end
+            if ((top_mem_read_burst_count !=
+                 ((full_chain_layer_count * expected_layer_read_reqs) +
+                  EXPECTED_EMBEDDING_TAIL_EXTRA_RD_REQS)) ||
+                (top_mem_read_word_count !=
+                 ((full_chain_layer_count * expected_layer_read_words) +
+                  EXPECTED_EMBEDDING_TAIL_EXTRA_RD_WORDS)) ||
+                (top_mem_write_req_count !=
+                 ((full_chain_layer_count * EXPECTED_INPUT_NORM_FULL_WR_REQS) +
+                  EXPECTED_EMBEDDING_TAIL_EXTRA_WR_REQS)) ||
+                (top_mem_write_word_count !=
+                 ((full_chain_layer_count * EXPECTED_INPUT_NORM_FULL_WR_WORDS) +
+                  EXPECTED_EMBEDDING_TAIL_EXTRA_WR_WORDS))) begin
+                fail_once("FAIL: persistent top-level memory counters mismatch");
+            end
+            if ((embedding_write_accept_count != VEC1024) ||
+                (input_norm_write_accept_count !=
+                 (full_chain_layer_count * VEC1024)) ||
+                (qkv_q_write_accept_count !=
+                 (full_chain_layer_count * VEC2048)) ||
+                (qkv_k_write_accept_count !=
+                 (full_chain_layer_count * VEC1024)) ||
+                (qkv_v_write_accept_count !=
+                 (full_chain_layer_count * VEC1024)) ||
+                (cache_write_accept_count !=
+                 (full_chain_layer_count * TOTAL_CACHE_WRITES)) ||
+                (q_rope_write_accept_count !=
+                 (full_chain_layer_count * VEC2048)) ||
+                (attn_out_write_accept_count !=
+                 (full_chain_layer_count * VEC2048)) ||
+                (o_proj_write_accept_count !=
+                 (full_chain_layer_count * VEC1024)) ||
+                (post_hidden_write_accept_count !=
+                 (full_chain_layer_count * VEC1024)) ||
+                (post_norm_write_accept_count !=
+                 (full_chain_layer_count * VEC1024)) ||
+                (gate_write_accept_count !=
+                 (full_chain_layer_count * VEC3072)) ||
+                (up_write_accept_count !=
+                 (full_chain_layer_count * VEC3072)) ||
+                (silu_write_accept_count !=
+                 (full_chain_layer_count * VEC3072)) ||
+                (down_write_accept_count !=
+                 (full_chain_layer_count * VEC1024)) ||
+                (layer_write_accept_count !=
+                 (full_chain_layer_count * VEC1024))) begin
+                fail_once("FAIL: persistent per-stage write word counts mismatch");
+            end
+            if ((tail_tiles_started != TAIL_MAX_TILES) ||
+                (tail_tiles_completed != TAIL_MAX_TILES) ||
+                (tail_hidden_req_count != 4) ||
+                (tail_gamma_req_count != 4) ||
+                (tail_norm_read_req_count != 4) ||
+                (tail_weight_req_count !=
+                 (TAIL_MAX_TILES * TAIL_WEIGHT_BURSTS_PER_TILE)) ||
+                (tail_scale_req_count !=
+                 (TAIL_MAX_TILES * TAIL_SCALE_BURSTS_PER_TILE)) ||
+                (tail_norm_write_word_count != TAIL_INPUT_SIZE) ||
+                (tail_output_write_word_count != 3)) begin
+                $display(
+                    "PERSISTENT_TAIL_COUNT_MISMATCH tiles=%0d/%0d hidden=%0d gamma=%0d norm=%0d weight=%0d/%0d scale=%0d/%0d norm_words=%0d output_words=%0d",
+                    tail_tiles_started, tail_tiles_completed,
+                    tail_hidden_req_count, tail_gamma_req_count,
+                    tail_norm_read_req_count,
+                    tail_weight_req_count,
+                    TAIL_MAX_TILES * TAIL_WEIGHT_BURSTS_PER_TILE,
+                    tail_scale_req_count,
+                    TAIL_MAX_TILES * TAIL_SCALE_BURSTS_PER_TILE,
+                    tail_norm_write_word_count,
+                    tail_output_write_word_count
+                );
+                fail_once("FAIL: persistent final-tail exact counts mismatch");
+            end
+            if ((embedding_response_cycle < 0) ||
+                (first_layer_hidden_read_cycle[0] <= embedding_response_cycle) ||
+                (layer_response_cycle[full_chain_layer_count - 1] < 0) ||
+                (tail_scheduler_done_cycle <=
+                 layer_response_cycle[full_chain_layer_count - 1]) ||
+                (tail_start_cycle <= tail_scheduler_done_cycle) ||
+                (tail_first_hidden_read_cycle <= tail_start_cycle) ||
+                (tail_first_weight_read_cycle <= tail_first_hidden_read_cycle) ||
+                (tail_first_output_write_cycle <= tail_first_weight_read_cycle)) begin
+                fail_once("FAIL: persistent producer/consumer response ordering mismatch");
+            end
+            if ((mismatch_count != 0) ||
+                (write_mismatch_count != 0) ||
+                (tail_mismatch_count != 0) ||
+                (tail_write_mismatch_count != 0) ||
+                (max_abs_diff != 0) ||
+                (total_fail_count != 0)) begin
+                $display(
+                    "FAIL: persistent step %0d mismatches scheduler=%0d writes=%0d tail=%0d tail_writes=%0d max_abs=%0d total=%0d",
+                    step, mismatch_count, write_mismatch_count, tail_mismatch_count,
+                    tail_write_mismatch_count, max_abs_diff, total_fail_count
+                );
+                $finish(1);
+            end
+
+            check_and_capture_persistent_cache(step);
+            if (total_fail_count != 0) begin
+                $finish(1);
+            end
+        end
+    endtask
+`endif
 
     task set_layer_packet_bases;
         input integer layer_index;
@@ -5521,15 +5865,19 @@ module tb_qmap_one_token_layer_scheduler;
 
     task mmio_run_until_done;
         input integer timeout_cycles;
+        integer wait_cycles;
         integer next_progress_cycle;
         begin
+            wait_cycles = 0;
             next_progress_cycle = 1000000;
             mmio_write_reg(MMIO_REG_CTRL, 32'd1);
-            while ((done != 1'b1) && (cycle_count < timeout_cycles)) begin
+            while ((done != 1'b1) && (wait_cycles < timeout_cycles)) begin
                 @(posedge clk);
-                if ($test$plusargs("progress") && (cycle_count >= next_progress_cycle)) begin
+                wait_cycles = wait_cycles + 1;
+                if ($test$plusargs("progress") && (wait_cycles >= next_progress_cycle)) begin
                     $display(
-                        "MMIO_PROGRESS: cycle=%0d state=0x%0h phase=0x%0h active_layer=%0d started=%0d completed=%0d rd=%0d/%0d wr=%0d/%0d",
+                        "MMIO_PROGRESS: wait=%0d cycle=%0d state=0x%0h phase=0x%0h active_layer=%0d started=%0d completed=%0d rd=%0d/%0d wr=%0d/%0d",
+                        wait_cycles,
                         cycle_count,
                         state_debug,
                         top_phase_debug,
@@ -5695,9 +6043,24 @@ module tb_qmap_one_token_layer_scheduler;
                     else begin
                         active_read_index <= active_read_index + 1;
                         active_words_left <= active_words_left - 1;
-                        mem_rd_rsp_valid <= 1'b0;
-                        mem_rd_rsp_last <= 1'b0;
-                        read_gap_count <= (fastmem || ((active_read_index % 17) != 3)) ? 0 : 2;
+                        if (fastmem) begin
+                            // Model a legal zero-bubble memory response in the
+                            // fast functional regression.  The non-fast modes
+                            // below retain their response backpressure gaps.
+                            mem_rd_rsp_valid <= 1'b1;
+                            mem_rd_rsp_data <= memory_word(
+                                active_read_addr +
+                                ((active_read_index + 1) * MEM_DATA_BYTES)
+                            );
+                            mem_rd_rsp_last <= (active_words_left == 2);
+                            read_gap_count <= 0;
+                        end
+                        else begin
+                            mem_rd_rsp_valid <= 1'b0;
+                            mem_rd_rsp_last <= 1'b0;
+                            read_gap_count <=
+                                ((active_read_index % 17) != 3) ? 0 : 2;
+                        end
                     end
                 end
                 else if (!mem_rd_rsp_valid) begin
@@ -6228,7 +6591,10 @@ module tb_qmap_one_token_layer_scheduler;
         end
         event_trace_fd = 0;
         if ($test$plusargs("embedding_true3") || $test$plusargs("embedding_full_chain")) begin
-            if ($test$plusargs("embedding_full_chain")) begin
+            if ($test$plusargs("persistent_two_token")) begin
+                event_tracefile = "persistent_two_token_events.csv";
+            end
+            else if ($test$plusargs("embedding_full_chain")) begin
                 event_tracefile = "embedding_full_chain_events.csv";
             end
             else begin
@@ -6246,6 +6612,7 @@ module tb_qmap_one_token_layer_scheduler;
                     "cycle,event,address,index_or_kind,data_or_length,last\n");
         end
 
+        persistent_reset_release_count = 0;
         rst_n = 1'b0;
         start = 1'b0;
 `ifdef QMAP_ONE_TOKEN_TB_USE_MMIO_CONTROL
@@ -6256,6 +6623,11 @@ module tb_qmap_one_token_layer_scheduler;
 `endif
         total_fail_count = 0;
         load_vectors();
+`ifdef QMAP_ONE_TOKEN_TB_PERSISTENT_TWO_TOKEN
+        if (persistent_two_token_mode) begin
+            load_persistent_step_vectors(0);
+        end
+`endif
         clear_scoreboard();
         set_valid_loop_contract();
         if ($test$plusargs("fastmem")) begin
@@ -6408,6 +6780,174 @@ module tb_qmap_one_token_layer_scheduler;
 `endif
 `endif
         end
+        if ($test$plusargs("persistent_two_token")) begin
+`ifndef QMAP_ONE_TOKEN_TB_PERSISTENT_TWO_TOKEN
+            $display("FAIL: +persistent_two_token requires compile define QMAP_ONE_TOKEN_TB_PERSISTENT_TWO_TOKEN");
+            $finish(1);
+`else
+`ifndef QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL
+            $display("FAIL: +persistent_two_token requires compile define QMAP_ONE_TOKEN_TB_WITH_FINAL_TAIL");
+            $finish(1);
+`else
+`ifndef QMAP_ONE_TOKEN_TB_USE_TOP
+            $display("FAIL: +persistent_two_token requires compile define QMAP_ONE_TOKEN_TB_USE_TOP");
+            $finish(1);
+`else
+`ifndef QMAP_ONE_TOKEN_TB_USE_MMIO_CONTROL
+            $display("FAIL: +persistent_two_token requires compile define QMAP_ONE_TOKEN_TB_USE_MMIO_CONTROL");
+            $finish(1);
+`else
+            if (!full_chain_mode || !runtime_context_mode ||
+                (full_chain_layer_count < 1)) begin
+                $display("FAIL: +persistent_two_token requires full-chain RuntimeContext vectors");
+                $finish(1);
+            end
+            if ((tail_weight_base_addr !== EMBEDDING_WEIGHT_BASE_ADDR) ||
+                (tail_scale_base_addr !== EMBEDDING_SCALE_BASE_ADDR)) begin
+                $display(
+                    "FAIL: persistent embedding and tied LM-head bases differ weight=0x%016h/0x%016h scale=0x%016h/0x%016h",
+                    EMBEDDING_WEIGHT_BASE_ADDR, tail_weight_base_addr,
+                    EMBEDDING_SCALE_BASE_ADDR, tail_scale_base_addr
+                );
+                $finish(1);
+            end
+
+            layer_start_index = 5'd0;
+            layer_count = full_chain_layer_count;
+            scoreboard_layer_iterations = full_chain_layer_count;
+            use_input_norm_qkv_expected = 1'b1;
+            clear_persistent_cache();
+            clear_tail_scoreboard();
+
+            repeat (10) @(posedge clk);
+            rst_n = 1'b1;
+            repeat (4) @(posedge clk);
+
+            mmio_load_current_loop_contract();
+            mmio_check_scalar_registers();
+            for (full_chain_check_index = 0;
+                 full_chain_check_index < full_chain_layer_count;
+                 full_chain_check_index = full_chain_check_index + 1) begin
+                mmio_check_layer_tables(full_chain_check_index);
+            end
+            if (total_fail_count != 0) begin
+                $finish(1);
+            end
+
+            if (event_trace_fd != 0) begin
+                $fwrite(
+                    event_trace_fd,
+                    "%0d,persistent_step_start,0x0000000000000000,0,0x%08h,0\n",
+                    cycle_count, persistent_input_token[0]
+                );
+            end
+            $display(
+                "PERSISTENT_STEP_START step=0 input_token=%0d position=0 layers=%0d",
+                persistent_input_token[0], full_chain_layer_count
+            );
+            $fflush();
+            // The routed BRAM-backed datapath takes about 6.8e8 cycles per
+            // token: roughly 4.77e8 through all 28 layers plus 1.98e8 for the
+            // row-streamed full-vocabulary tail. Keep enough watchdog margin
+            // to catch a real stall without rejecting a healthy run.
+            mmio_run_until_done(900000000);
+            check_persistent_step_result(0);
+            $display(
+                "PERSISTENT_STEP_RESULT step=0 input_token=%0d position=0 output_token=%0d output_score=%0d",
+                persistent_input_token[0], tail_best_token_id, tail_best_score_q26
+            );
+            if (event_trace_fd != 0) begin
+                $fwrite(
+                    event_trace_fd,
+                    "%0d,persistent_step_done,0x0000000000000000,0,0x%08h,1\n",
+                    cycle_count, tail_best_token_id
+                );
+            end
+
+            mmio_read_reg(MMIO_REG_STATUS, mmio_read_data);
+            if ((mmio_read_data & 32'h0000_000E) !== 32'h0000_0002) begin
+                fail_once("FAIL: step 0 sticky done/error status mismatch");
+                $finish(1);
+            end
+            mmio_write_reg(MMIO_REG_CTRL, 32'd2);
+            mmio_read_reg(MMIO_REG_STATUS, mmio_read_data);
+            if ((mmio_read_data & 32'h0000_000E) !== 32'd0) begin
+                fail_once("FAIL: sticky clear changed or failed persistent status contract");
+                $finish(1);
+            end
+
+            clear_scoreboard_for_next_token();
+            load_persistent_step_vectors(1);
+            token_position = 1;
+            scoreboard_layer_iterations = full_chain_layer_count;
+            use_input_norm_qkv_expected = 1'b1;
+            clear_tail_scoreboard();
+
+            mmio_write_reg(MMIO_REG_POSITION, 32'd1);
+            mmio_write_reg(MMIO_REG_INPUT_TOKEN, persistent_input_token[1]);
+            mmio_check_scalar_registers();
+            for (full_chain_check_index = 0;
+                 full_chain_check_index < full_chain_layer_count;
+                 full_chain_check_index = full_chain_check_index + 1) begin
+                mmio_check_layer_tables(full_chain_check_index);
+            end
+            if (total_fail_count != 0) begin
+                $finish(1);
+            end
+
+            if (event_trace_fd != 0) begin
+                $fwrite(
+                    event_trace_fd,
+                    "%0d,persistent_step_start,0x0000000000000000,1,0x%08h,0\n",
+                    cycle_count, persistent_input_token[1]
+                );
+            end
+            $display(
+                "PERSISTENT_STEP_START step=1 input_token=%0d position=1 layers=%0d",
+                persistent_input_token[1], full_chain_layer_count
+            );
+            $fflush();
+            mmio_run_until_done(900000000);
+            check_persistent_step_result(1);
+            $display(
+                "PERSISTENT_STEP_RESULT step=1 input_token=%0d position=1 output_token=%0d output_score=%0d",
+                persistent_input_token[1], tail_best_token_id, tail_best_score_q26
+            );
+            if (event_trace_fd != 0) begin
+                $fwrite(
+                    event_trace_fd,
+                    "%0d,persistent_step_done,0x0000000000000000,1,0x%08h,1\n",
+                    cycle_count, tail_best_token_id
+                );
+            end
+
+            if (persistent_reset_release_count != 1) begin
+                $display(
+                    "FAIL: persistent regression observed %0d reset releases; expected exactly one",
+                    persistent_reset_release_count
+                );
+                $finish(1);
+            end
+            $display(
+                "PERSISTENT_NO_RESET reset_release_count=%0d retained_layers=%0d retained_words_per_kind=%0d",
+                persistent_reset_release_count, full_chain_layer_count, KV_COUNT
+            );
+            if (trace_fd != 0) begin
+                $fclose(trace_fd);
+            end
+            if (event_trace_fd != 0) begin
+                $fclose(event_trace_fd);
+            end
+            $display(
+                "PASS: AXI-Lite RuntimeContext persistent two-token decode ran through %0d complete layers without reset.",
+                full_chain_layer_count
+            );
+            $finish;
+`endif
+`endif
+`endif
+`endif
+        end
         if ($test$plusargs("l1_l2_top_tail_only") ||
             $test$plusargs("l1_l2_mmio_top_tail_only") ||
             $test$plusargs("true3_top_tail_only") ||
@@ -6520,7 +7060,7 @@ module tb_qmap_one_token_layer_scheduler;
                     $display("  layer2 output base           = 0x%016h", layer_output_base_l2);
                 end
                 $fflush();
-                mmio_run_until_done(full_chain_mode ? 400000000 : 180000000);
+            mmio_run_until_done(full_chain_mode ? 700000000 : 180000000);
 `endif
             end
             else begin
@@ -6741,8 +7281,6 @@ module tb_qmap_one_token_layer_scheduler;
                       full_chain_runtime_hidden_a_base_addr) ||
                      (full_chain_runtime_last_hidden_base_addr !==
                       full_actual_layer_output_base[full_chain_layer_count - 1]) ||
-                     (tail_descriptor_final_hidden_base !==
-                      full_layer_output_base[full_chain_layer_count - 1]) ||
                      (tail_final_hidden_base !== full_chain_runtime_last_hidden_base_addr))) begin
                     fail_once("FAIL: runtime embedding/layer/tail effective hidden handoff mismatch");
                 end

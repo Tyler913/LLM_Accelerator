@@ -33,6 +33,7 @@ module qmap_post_attention_residual_norm_compute_path #(
     parameter int DIV_NUM_WIDTH   = 48,
     parameter int DIV_NUM_SHIFT   = RMS_FRAC + INV_RMS_FRAC,
     parameter int EPS_Q20         = 1,
+    parameter int USE_BRAM_STREAMING = 1,
     parameter int MEM_DATA_WIDTH  = 32,
     parameter int MAX_READ_BYTES  = 1024
 )
@@ -102,6 +103,8 @@ module qmap_post_attention_residual_norm_compute_path #(
     localparam int CHUNK_WORDS    = MAX_READ_BYTES / MEM_DATA_BYTES;
     localparam int VECTOR_BYTES   = INPUT_SIZE * MEM_DATA_BYTES;
     localparam int CHUNK_COUNT    = VECTOR_BYTES / MAX_READ_BYTES;
+    localparam int ELEMENT_INDEX_W =
+        (INPUT_SIZE <= 1) ? 1 : $clog2(INPUT_SIZE);
     localparam logic [15 : 0] MAX_READ_BYTES_U16 = MAX_READ_BYTES;
     localparam logic [15 : 0] VECTOR_BYTES_U16   = VECTOR_BYTES;
 
@@ -115,6 +118,7 @@ module qmap_post_attention_residual_norm_compute_path #(
         S_STAGE_START,
         S_STAGE_WAIT,
         S_WRITE_REQ,
+        S_WRITE_PRIME,
         S_WRITE_DATA,
         S_WRITE_WAIT,
         S_DONE
@@ -211,6 +215,14 @@ module qmap_post_attention_residual_norm_compute_path #(
     logic [SUM_WIDTH-1 : 0] stage_sum_squares;
     logic [SUM_WIDTH-1 : 0] stage_mean_square;
     logic [INV_RMS_WIDTH-1 : 0] stage_inv_rms;
+    logic stage_residual_wr_en;
+    logic stage_o_proj_wr_en;
+    logic stage_gamma_wr_en;
+    logic [ELEMENT_INDEX_W-1 : 0] stage_load_wr_addr;
+    logic [ELEMENT_INDEX_W-1 : 0] stage_hidden_rd_addr;
+    logic [ELEMENT_INDEX_W-1 : 0] stage_norm_rd_addr;
+    logic [RESIDUAL_WIDTH-1 : 0] stage_hidden_rd_data;
+    logic [NORM_OUT_WIDTH-1 : 0] stage_norm_rd_data;
 
     genvar desc_index;
     generate
@@ -283,46 +295,107 @@ module qmap_post_attention_residual_norm_compute_path #(
         .o_desc_aux3_flat(reader_desc_aux3_flat)
     );
 
-    post_attention_residual_norm_stage #(
-        .INPUT_SIZE(INPUT_SIZE),
-        .RESIDUAL_WIDTH(RESIDUAL_WIDTH),
-        .RESIDUAL_FRAC(RESIDUAL_FRAC),
-        .O_PROJ_WIDTH(O_PROJ_WIDTH),
-        .O_PROJ_FRAC(O_PROJ_FRAC),
-        .GAMMA_WIDTH(GAMMA_WIDTH),
-        .GAMMA_FRAC(GAMMA_FRAC),
-        .INV_RMS_WIDTH(INV_RMS_WIDTH),
-        .INV_RMS_FRAC(INV_RMS_FRAC),
-        .NORM_OUT_WIDTH(NORM_OUT_WIDTH),
-        .NORM_OUT_FRAC(NORM_OUT_FRAC),
-        .SUM_WIDTH(SUM_WIDTH),
-        .SUM_FRAC(SUM_FRAC),
-        .MEAN_SHIFT(MEAN_SHIFT),
-        .RMS_WIDTH(RMS_WIDTH),
-        .RMS_FRAC(RMS_FRAC),
-        .DIV_NUM_WIDTH(DIV_NUM_WIDTH),
-        .DIV_NUM_SHIFT(DIV_NUM_SHIFT),
-        .EPS_Q20(EPS_Q20)
-    ) post_attention_stage (
-        .i_clk(i_clk),
-        .i_rst_n(i_rst_n),
-        .i_start(stage_start),
-        .i_residual_flat(residual_flat),
-        .i_o_proj_flat(o_proj_flat),
-        .i_gamma_flat(gamma_flat),
-        .o_busy(stage_busy),
-        .o_done(stage_done),
-        .o_error(stage_error),
-        .o_residual_saturation(stage_residual_saturation),
-        .o_norm_saturation(stage_norm_saturation),
-        .o_residual_count(stage_residual_count),
-        .o_cycle_count(stage_cycle_count),
-        .o_post_attention_hidden_flat(post_hidden_flat),
-        .o_post_norm_flat(post_norm_flat),
-        .o_sum_squares(stage_sum_squares),
-        .o_mean_square(stage_mean_square),
-        .o_inv_rms(stage_inv_rms)
-    );
+    generate
+        if (USE_BRAM_STREAMING != 0) begin : gen_bram_stage
+            post_attention_residual_norm_bram_stage #(
+                .INPUT_SIZE(INPUT_SIZE),
+                .RESIDUAL_WIDTH(RESIDUAL_WIDTH),
+                .RESIDUAL_FRAC(RESIDUAL_FRAC),
+                .O_PROJ_WIDTH(O_PROJ_WIDTH),
+                .O_PROJ_FRAC(O_PROJ_FRAC),
+                .GAMMA_WIDTH(GAMMA_WIDTH),
+                .GAMMA_FRAC(GAMMA_FRAC),
+                .INV_RMS_WIDTH(INV_RMS_WIDTH),
+                .INV_RMS_FRAC(INV_RMS_FRAC),
+                .NORM_OUT_WIDTH(NORM_OUT_WIDTH),
+                .NORM_OUT_FRAC(NORM_OUT_FRAC),
+                .SUM_WIDTH(SUM_WIDTH),
+                .SUM_FRAC(SUM_FRAC),
+                .MEAN_SHIFT(MEAN_SHIFT),
+                .RMS_WIDTH(RMS_WIDTH),
+                .RMS_FRAC(RMS_FRAC),
+                .DIV_NUM_WIDTH(DIV_NUM_WIDTH),
+                .DIV_NUM_SHIFT(DIV_NUM_SHIFT),
+                .EPS_Q20(EPS_Q20),
+                .ELEMENT_INDEX_W(ELEMENT_INDEX_W)
+            ) post_attention_stage_bram (
+                .i_clk(i_clk),
+                .i_rst_n(i_rst_n),
+                .i_residual_wr_en(stage_residual_wr_en),
+                .i_residual_wr_addr(stage_load_wr_addr),
+                .i_residual_wr_data(
+                    i_mem_rd_rsp_data[RESIDUAL_WIDTH-1 : 0]),
+                .i_o_proj_wr_en(stage_o_proj_wr_en),
+                .i_o_proj_wr_addr(stage_load_wr_addr),
+                .i_o_proj_wr_data(
+                    i_mem_rd_rsp_data[O_PROJ_WIDTH-1 : 0]),
+                .i_gamma_wr_en(stage_gamma_wr_en),
+                .i_gamma_wr_addr(stage_load_wr_addr),
+                .i_gamma_wr_data(
+                    i_mem_rd_rsp_data[GAMMA_WIDTH-1 : 0]),
+                .i_start(stage_start),
+                .o_busy(stage_busy),
+                .o_done(stage_done),
+                .o_error(stage_error),
+                .o_residual_saturation(stage_residual_saturation),
+                .o_norm_saturation(stage_norm_saturation),
+                .o_residual_count(stage_residual_count),
+                .o_cycle_count(stage_cycle_count),
+                .i_post_hidden_rd_addr(stage_hidden_rd_addr),
+                .o_post_hidden_rd_data(stage_hidden_rd_data),
+                .i_post_norm_rd_addr(stage_norm_rd_addr),
+                .o_post_norm_rd_data(stage_norm_rd_data),
+                .o_sum_squares(stage_sum_squares),
+                .o_mean_square(stage_mean_square),
+                .o_inv_rms(stage_inv_rms)
+            );
+        end
+        else begin : gen_legacy_stage
+            assign stage_hidden_rd_data = '0;
+            assign stage_norm_rd_data = '0;
+
+            post_attention_residual_norm_stage #(
+                .INPUT_SIZE(INPUT_SIZE),
+                .RESIDUAL_WIDTH(RESIDUAL_WIDTH),
+                .RESIDUAL_FRAC(RESIDUAL_FRAC),
+                .O_PROJ_WIDTH(O_PROJ_WIDTH),
+                .O_PROJ_FRAC(O_PROJ_FRAC),
+                .GAMMA_WIDTH(GAMMA_WIDTH),
+                .GAMMA_FRAC(GAMMA_FRAC),
+                .INV_RMS_WIDTH(INV_RMS_WIDTH),
+                .INV_RMS_FRAC(INV_RMS_FRAC),
+                .NORM_OUT_WIDTH(NORM_OUT_WIDTH),
+                .NORM_OUT_FRAC(NORM_OUT_FRAC),
+                .SUM_WIDTH(SUM_WIDTH),
+                .SUM_FRAC(SUM_FRAC),
+                .MEAN_SHIFT(MEAN_SHIFT),
+                .RMS_WIDTH(RMS_WIDTH),
+                .RMS_FRAC(RMS_FRAC),
+                .DIV_NUM_WIDTH(DIV_NUM_WIDTH),
+                .DIV_NUM_SHIFT(DIV_NUM_SHIFT),
+                .EPS_Q20(EPS_Q20)
+            ) post_attention_stage (
+                .i_clk(i_clk),
+                .i_rst_n(i_rst_n),
+                .i_start(stage_start),
+                .i_residual_flat(residual_flat),
+                .i_o_proj_flat(o_proj_flat),
+                .i_gamma_flat(gamma_flat),
+                .o_busy(stage_busy),
+                .o_done(stage_done),
+                .o_error(stage_error),
+                .o_residual_saturation(stage_residual_saturation),
+                .o_norm_saturation(stage_norm_saturation),
+                .o_residual_count(stage_residual_count),
+                .o_cycle_count(stage_cycle_count),
+                .o_post_attention_hidden_flat(post_hidden_flat),
+                .o_post_norm_flat(post_norm_flat),
+                .o_sum_squares(stage_sum_squares),
+                .o_mean_square(stage_mean_square),
+                .o_inv_rms(stage_inv_rms)
+            );
+        end
+    endgenerate
 
     assign reader_start = (state == S_READER_START);
     assign stage_start = (state == S_STAGE_START);
@@ -358,6 +431,42 @@ module qmap_post_attention_residual_norm_compute_path #(
     assign o_mem_wr_data_valid = (state == S_WRITE_DATA);
     assign o_mem_wr_data = write_data_word;
     assign o_mem_wr_data_last = (state == S_WRITE_DATA) && (write_word_index == (INPUT_SIZE - 1));
+    assign stage_load_wr_addr =
+        element_index[ELEMENT_INDEX_W-1 : 0];
+    assign stage_residual_wr_en =
+        (USE_BRAM_STREAMING != 0) &&
+        (state == S_READ_DATA) &&
+        i_mem_rd_rsp_valid &&
+        !read_protocol_error &&
+        (active_read_slot == R_RESIDUAL);
+    assign stage_o_proj_wr_en =
+        (USE_BRAM_STREAMING != 0) &&
+        (state == S_READ_DATA) &&
+        i_mem_rd_rsp_valid &&
+        !read_protocol_error &&
+        (active_read_slot == R_O_PROJ);
+    assign stage_gamma_wr_en =
+        (USE_BRAM_STREAMING != 0) &&
+        (state == S_READ_DATA) &&
+        i_mem_rd_rsp_valid &&
+        !read_protocol_error &&
+        (active_read_slot == R_GAMMA);
+    assign stage_hidden_rd_addr =
+        ((state == S_WRITE_DATA) &&
+         (active_write_slot == W_HIDDEN) &&
+         o_mem_wr_data_valid &&
+         i_mem_wr_data_ready &&
+         !o_mem_wr_data_last) ?
+        (write_word_index[ELEMENT_INDEX_W-1 : 0] + 1'b1) :
+        write_word_index[ELEMENT_INDEX_W-1 : 0];
+    assign stage_norm_rd_addr =
+        ((state == S_WRITE_DATA) &&
+         (active_write_slot == W_NORM) &&
+         o_mem_wr_data_valid &&
+         i_mem_wr_data_ready &&
+         !o_mem_wr_data_last) ?
+        (write_word_index[ELEMENT_INDEX_W-1 : 0] + 1'b1) :
+        write_word_index[ELEMENT_INDEX_W-1 : 0];
 
     assign element_index = (state == S_WRITE_DATA) ?
         write_word_index :
@@ -388,17 +497,43 @@ module qmap_post_attention_residual_norm_compute_path #(
 
     always @* begin
         write_data_word = 32'd0;
-        if (active_write_slot == W_HIDDEN) begin
-            write_data_word = {
-                {8{post_hidden_flat[(element_index*RESIDUAL_WIDTH) + (RESIDUAL_WIDTH-1)]}},
-                post_hidden_flat[element_index*RESIDUAL_WIDTH +: RESIDUAL_WIDTH]
-            };
+        if (USE_BRAM_STREAMING != 0) begin
+            if (active_write_slot == W_HIDDEN) begin
+                write_data_word = {
+                    {(MEM_DATA_WIDTH-RESIDUAL_WIDTH){
+                        stage_hidden_rd_data[RESIDUAL_WIDTH-1]}},
+                    stage_hidden_rd_data
+                };
+            end
+            else begin
+                write_data_word = {
+                    {(MEM_DATA_WIDTH-NORM_OUT_WIDTH){
+                        stage_norm_rd_data[NORM_OUT_WIDTH-1]}},
+                    stage_norm_rd_data
+                };
+            end
         end
         else begin
-            write_data_word = {
-                {8{post_norm_flat[(element_index*NORM_OUT_WIDTH) + (NORM_OUT_WIDTH-1)]}},
-                post_norm_flat[element_index*NORM_OUT_WIDTH +: NORM_OUT_WIDTH]
-            };
+            if (active_write_slot == W_HIDDEN) begin
+                write_data_word = {
+                    {(MEM_DATA_WIDTH-RESIDUAL_WIDTH){
+                        post_hidden_flat[
+                            (element_index*RESIDUAL_WIDTH) +
+                            (RESIDUAL_WIDTH-1)]}},
+                    post_hidden_flat[
+                        element_index*RESIDUAL_WIDTH +: RESIDUAL_WIDTH]
+                };
+            end
+            else begin
+                write_data_word = {
+                    {(MEM_DATA_WIDTH-NORM_OUT_WIDTH){
+                        post_norm_flat[
+                            (element_index*NORM_OUT_WIDTH) +
+                            (NORM_OUT_WIDTH-1)]}},
+                    post_norm_flat[
+                        element_index*NORM_OUT_WIDTH +: NORM_OUT_WIDTH]
+                };
+            end
         end
     end
 
@@ -504,9 +639,11 @@ module qmap_post_attention_residual_norm_compute_path #(
             read_chunk_index <= 32'd0;
             read_word_index <= 32'd0;
             write_word_index <= 32'd0;
-            residual_flat <= '0;
-            o_proj_flat <= '0;
-            gamma_flat <= '0;
+            if (USE_BRAM_STREAMING == 0) begin
+                residual_flat <= '0;
+                o_proj_flat <= '0;
+                gamma_flat <= '0;
+            end
             residual_base_override_valid_reg <= 1'b0;
             residual_base_override_addr_reg <= '0;
             o_done <= 1'b0;
@@ -619,17 +756,28 @@ module qmap_post_attention_residual_norm_compute_path #(
                             state <= S_DONE;
                         end
                         else begin
-                            if (active_read_slot == R_RESIDUAL) begin
-                                residual_flat[element_index*RESIDUAL_WIDTH +: RESIDUAL_WIDTH] <=
-                                    i_mem_rd_rsp_data[RESIDUAL_WIDTH-1 : 0];
-                            end
-                            else if (active_read_slot == R_O_PROJ) begin
-                                o_proj_flat[element_index*O_PROJ_WIDTH +: O_PROJ_WIDTH] <=
-                                    i_mem_rd_rsp_data[O_PROJ_WIDTH-1 : 0];
-                            end
-                            else begin
-                                gamma_flat[element_index*GAMMA_WIDTH +: GAMMA_WIDTH] <=
-                                    i_mem_rd_rsp_data[GAMMA_WIDTH-1 : 0];
+                            if (USE_BRAM_STREAMING == 0) begin
+                                if (active_read_slot == R_RESIDUAL) begin
+                                    residual_flat[
+                                        element_index*RESIDUAL_WIDTH +:
+                                        RESIDUAL_WIDTH] <=
+                                        i_mem_rd_rsp_data[
+                                            RESIDUAL_WIDTH-1 : 0];
+                                end
+                                else if (active_read_slot == R_O_PROJ) begin
+                                    o_proj_flat[
+                                        element_index*O_PROJ_WIDTH +:
+                                        O_PROJ_WIDTH] <=
+                                        i_mem_rd_rsp_data[
+                                            O_PROJ_WIDTH-1 : 0];
+                                end
+                                else begin
+                                    gamma_flat[
+                                        element_index*GAMMA_WIDTH +:
+                                        GAMMA_WIDTH] <=
+                                        i_mem_rd_rsp_data[
+                                            GAMMA_WIDTH-1 : 0];
+                                end
                             end
 
                             if (i_mem_rd_rsp_last) begin
@@ -689,8 +837,13 @@ module qmap_post_attention_residual_norm_compute_path #(
                 S_WRITE_REQ: begin
                     if (i_mem_wr_req_ready) begin
                         write_word_index <= 32'd0;
-                        state <= S_WRITE_DATA;
+                        state <= S_WRITE_PRIME;
                     end
+                end
+
+                S_WRITE_PRIME: begin
+                    write_word_index <= 32'd0;
+                    state <= S_WRITE_DATA;
                 end
 
                 S_WRITE_DATA: begin

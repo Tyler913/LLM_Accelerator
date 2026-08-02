@@ -28,6 +28,11 @@
 module tb_q4_gemv_tile_1024;
 
     localparam int OUT_ROWS      = 4;
+`ifdef Q4_GEMV_TILE_ROW_PARALLEL
+    localparam int ROW_PARALLEL  = `Q4_GEMV_TILE_ROW_PARALLEL;
+`else
+    localparam int ROW_PARALLEL  = OUT_ROWS;
+`endif
     localparam int INPUT_SIZE    = 1024;
     localparam int GROUP_SIZE    = 64;
     localparam int GROUP_COUNT   = INPUT_SIZE / GROUP_SIZE;
@@ -39,6 +44,8 @@ module tb_q4_gemv_tile_1024;
     localparam int PARTIAL_WIDTH = ACT_WIDTH + WEIGHT_WIDTH + $clog2(GROUP_SIZE);
     localparam int SCALED_WIDTH  = PARTIAL_WIDTH + SCALE_WIDTH;
     localparam int ROW_ACC_WIDTH = SCALED_WIDTH + $clog2(GROUP_COUNT) + 2;
+    localparam int TIMEOUT_CYCLES =
+        600 * ((OUT_ROWS + ROW_PARALLEL - 1) / ROW_PARALLEL);
 
     logic clk;
     logic rst_n;
@@ -67,6 +74,7 @@ module tb_q4_gemv_tile_1024;
 
     q4_gemv_tile_1024 #(
         .OUT_ROWS     (OUT_ROWS),
+        .ROW_PARALLEL (ROW_PARALLEL),
         .INPUT_SIZE   (INPUT_SIZE),
         .GROUP_SIZE   (GROUP_SIZE),
         .GROUP_COUNT  (GROUP_COUNT),
@@ -160,7 +168,7 @@ module tb_q4_gemv_tile_1024;
         @(negedge clk);
         start = 1'b0;
 
-        while ((done != 1'b1) && (cycle_count < 600)) begin
+        while ((done != 1'b1) && (cycle_count < TIMEOUT_CYCLES)) begin
             @(negedge clk);
             cycle_count = cycle_count + 1;
         end
@@ -190,7 +198,10 @@ module tb_q4_gemv_tile_1024;
             $finish(1);
         end
 
-        $display("PASS: q4_gemv_tile_1024 q_proj rows 0..3 vectors matched.");
+        $display(
+            "PASS: q4_gemv_tile_1024 q_proj rows 0..3 vectors matched (ROW_PARALLEL=%0d).",
+            ROW_PARALLEL
+        );
         $display("Waveform: %s", wavefile);
 
         repeat (4) @(posedge clk);

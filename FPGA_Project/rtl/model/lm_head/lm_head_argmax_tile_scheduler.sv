@@ -3,17 +3,22 @@
 // Runtime tile scheduler for the memory-backed Q4 LM-head argmax path.
 //
 // The scheduler scans a descriptor-provided number of TILE_ROWS-row LM-head
-// tiles. Each tile reuses the already validated memory-backed argmax stage with
-// SCAN_ROWS=TILE_ROWS; this block keeps the global best token/score across
-// tile runs and aggregates memory counters.
+// tiles. ROW_PARALLEL controls how many rows are fetched and computed at once:
+// a board build can keep the external TILE_ROWS-row QMAP contract while
+// issuing several smaller memory-backed sub-runs per outer tile. This avoids a
+// very wide dynamic row selector when ROW_PARALLEL is smaller than TILE_ROWS.
+// The block keeps the global best token/score across all sub-runs and reports
+// outer-tile counters to preserve the software-visible contract.
 module lm_head_argmax_tile_scheduler #(
     parameter int ADDR_WIDTH       = 64,
     parameter int MAX_TILES        = 9496,
     parameter int TILE_COUNT_WIDTH = (MAX_TILES <= 1) ? 1 : $clog2(MAX_TILES + 1),
     parameter int TILE_ROWS        = 16,
+    parameter int ROW_PARALLEL     = 1,
     parameter int INPUT_SIZE       = 1024,
     parameter int GROUP_SIZE       = 64,
     parameter int GROUP_COUNT      = INPUT_SIZE / GROUP_SIZE,
+    parameter int GROUP_PARALLEL   = 1,
     parameter int ACT_WIDTH        = 24,
     parameter int ACT_FRAC         = 12,
     parameter int WEIGHT_WIDTH     = 4,
@@ -60,7 +65,14 @@ module lm_head_argmax_tile_scheduler #(
     output logic [31 : 0]                          o_mem_read_word_count
 );
 
-    localparam int SINGLE_TILE_SCAN_ROWS = TILE_ROWS;
+    localparam int ROW_PARALLEL_LOCAL =
+        (ROW_PARALLEL < 1) ? 1 :
+        ((ROW_PARALLEL > TILE_ROWS) ? TILE_ROWS : ROW_PARALLEL);
+    localparam int ROW_BATCH_COUNT =
+        (TILE_ROWS + ROW_PARALLEL_LOCAL - 1) / ROW_PARALLEL_LOCAL;
+    localparam int ROW_BATCH_INDEX_WIDTH =
+        (ROW_BATCH_COUNT <= 1) ? 1 : $clog2(ROW_BATCH_COUNT);
+    localparam int SINGLE_TILE_SCAN_ROWS = ROW_PARALLEL_LOCAL;
 
     typedef enum logic [1 : 0] {
         S_IDLE,
@@ -75,6 +87,7 @@ module lm_head_argmax_tile_scheduler #(
     logic [TOKEN_ID_WIDTH-1 : 0] token_base_reg;
     logic [TILE_COUNT_WIDTH-1 : 0] tile_count_reg;
     logic [TILE_COUNT_WIDTH-1 : 0] current_tile_index;
+    logic [ROW_BATCH_INDEX_WIDTH-1 : 0] row_batch_index;
     logic best_valid_reg;
     logic error_reg;
 
@@ -90,6 +103,7 @@ module lm_head_argmax_tile_scheduler #(
     logic [31 : 0] tile_stage_compute_cycle_count;
     logic [31 : 0] tile_stage_mem_read_burst_count;
     logic [31 : 0] tile_stage_mem_read_word_count;
+    logic last_row_batch;
     logic last_scheduler_tile;
 
     assign o_busy = (state != S_IDLE) && (state != S_DONE);
@@ -100,8 +114,12 @@ module lm_head_argmax_tile_scheduler #(
     assign tile_stage_start = (state == S_START_TILE);
     assign tile_stage_token_base =
         token_base_reg +
-        ({{(TOKEN_ID_WIDTH-TILE_COUNT_WIDTH){1'b0}}, current_tile_index} * TILE_ROWS);
-    assign last_scheduler_tile = ((current_tile_index + 1'b1) >= tile_count_reg);
+        ({{(TOKEN_ID_WIDTH-TILE_COUNT_WIDTH){1'b0}}, current_tile_index} * TILE_ROWS) +
+        ({{(TOKEN_ID_WIDTH-ROW_BATCH_INDEX_WIDTH){1'b0}}, row_batch_index} *
+         ROW_PARALLEL_LOCAL);
+    assign last_row_batch = (row_batch_index == (ROW_BATCH_COUNT - 1));
+    assign last_scheduler_tile =
+        last_row_batch && ((current_tile_index + 1'b1) >= tile_count_reg);
 
     always_comb begin
         next_state = state;
@@ -124,7 +142,7 @@ module lm_head_argmax_tile_scheduler #(
 
             S_WAIT_TILE: begin
                 if (tile_stage_done == 1'b1) begin
-                    if ((current_tile_index + 1'b1) >= tile_count_reg) begin
+                    if (last_scheduler_tile) begin
                         next_state = S_DONE;
                     end
                     else begin
@@ -146,10 +164,12 @@ module lm_head_argmax_tile_scheduler #(
     lm_head_argmax_mem_stage #(
         .ADDR_WIDTH     (ADDR_WIDTH),
         .SCAN_ROWS      (SINGLE_TILE_SCAN_ROWS),
-        .TILE_ROWS      (TILE_ROWS),
+        .TILE_ROWS      (ROW_PARALLEL_LOCAL),
+        .ROW_PARALLEL   (ROW_PARALLEL_LOCAL),
         .INPUT_SIZE     (INPUT_SIZE),
         .GROUP_SIZE     (GROUP_SIZE),
         .GROUP_COUNT    (GROUP_COUNT),
+        .GROUP_PARALLEL (GROUP_PARALLEL),
         .ACT_WIDTH      (ACT_WIDTH),
         .ACT_FRAC       (ACT_FRAC),
         .WEIGHT_WIDTH   (WEIGHT_WIDTH),
@@ -205,6 +225,7 @@ module lm_head_argmax_tile_scheduler #(
             token_base_reg          <= 'd0;
             tile_count_reg          <= 'd0;
             current_tile_index      <= 'd0;
+            row_batch_index         <= 'd0;
             best_valid_reg          <= 1'b0;
             error_reg               <= 1'b0;
             o_best_token_id         <= 'd0;
@@ -234,6 +255,7 @@ module lm_head_argmax_tile_scheduler #(
                         token_base_reg         <= i_token_base;
                         tile_count_reg         <= i_tile_count;
                         current_tile_index     <= 'd0;
+                        row_batch_index        <= 'd0;
                         best_valid_reg         <= 1'b0;
                         error_reg              <= (i_tile_count == 'd0) || (i_tile_count > MAX_TILES);
                         o_best_token_id        <= 'd0;
@@ -247,12 +269,16 @@ module lm_head_argmax_tile_scheduler #(
                 end
 
                 S_START_TILE: begin
-                    o_tiles_started <= o_tiles_started + 1'b1;
+                    if (row_batch_index == 'd0) begin
+                        o_tiles_started <= o_tiles_started + 1'b1;
+                    end
                 end
 
                 S_WAIT_TILE: begin
                     if (tile_stage_done == 1'b1) begin
-                        o_tiles_completed <= o_tiles_completed + 1'b1;
+                        if (last_row_batch) begin
+                            o_tiles_completed <= o_tiles_completed + 1'b1;
+                        end
                         error_reg <=
                             error_reg ||
                             tile_stage_error ||
@@ -271,8 +297,14 @@ module lm_head_argmax_tile_scheduler #(
                             o_best_token_id <= tile_stage_best_token_id;
                         end
 
-                        if ((current_tile_index + 1'b1) < tile_count_reg) begin
-                            current_tile_index <= current_tile_index + 1'b1;
+                        if (last_row_batch) begin
+                            row_batch_index <= 'd0;
+                            if ((current_tile_index + 1'b1) < tile_count_reg) begin
+                                current_tile_index <= current_tile_index + 1'b1;
+                            end
+                        end
+                        else begin
+                            row_batch_index <= row_batch_index + 1'b1;
                         end
                     end
                 end
@@ -284,13 +316,25 @@ module lm_head_argmax_tile_scheduler #(
                         (o_tiles_started != tile_count_reg) ||
                         (o_tiles_completed != tile_count_reg);
                     current_tile_index <= 'd0;
+                    row_batch_index <= 'd0;
                 end
 
                 default: begin
                     error_reg <= 1'b1;
                     current_tile_index <= 'd0;
+                    row_batch_index <= 'd0;
                 end
             endcase
+        end
+    end
+
+    if ((TILE_ROWS % ROW_PARALLEL_LOCAL) != 0) begin : gen_invalid_row_parallel
+        initial begin
+            $error(
+                "lm_head_argmax_tile_scheduler requires TILE_ROWS (%0d) to be divisible by ROW_PARALLEL (%0d)",
+                TILE_ROWS,
+                ROW_PARALLEL_LOCAL
+            );
         end
     end
 

@@ -24,7 +24,8 @@ module qmap_layer0_compute_scheduler #(
     parameter int INPUT_SIZE     = 1024,
     parameter int GROUP_SIZE     = 64,
     parameter int GROUP_COUNT    = INPUT_SIZE / GROUP_SIZE,
-    parameter int GROUP_PARALLEL = 4,
+    parameter int GROUP_PARALLEL = 1,
+    parameter int BODY_GROUP_PARALLEL = 1,
     parameter int ACT_WIDTH      = 24,
     parameter int ACT_FRAC       = 12,
     parameter int WEIGHT_WIDTH   = 4,
@@ -390,7 +391,8 @@ module qmap_layer0_compute_scheduler #(
         .NUM_LAYERS(NUM_LAYERS),
         .MAX_CONTEXT(MAX_CONTEXT),
         .LAYER_INDEX_WIDTH(LAYER_INDEX_WIDTH),
-        .POSITION_WIDTH(POSITION_WIDTH)
+        .POSITION_WIDTH(POSITION_WIDTH),
+        .GROUP_PARALLEL(BODY_GROUP_PARALLEL)
     ) layer0_full (
         .i_clk(i_clk),
         .i_rst_n(i_rst_n),

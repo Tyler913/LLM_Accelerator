@@ -5,7 +5,8 @@
 // QMAP-backed per-layer MLP down projection wrapper:
 //
 //   mlp_hidden[3072] + persistent down_proj Q4 weight/scale
-//       -> q4_gemv_row_1024 instantiated with INPUT_SIZE=3072
+//       -> q4_gemv_row_bram when GROUP_PARALLEL == 1
+//       -> legacy q4_gemv_row_1024 when GROUP_PARALLEL > 1
 //       -> write post-MLP vector[1024]
 //
 // The runtime QMAP packet carries descriptors, activation, output, and golden
@@ -18,7 +19,7 @@ module qmap_mlp_down_compute_path #(
     parameter int OUT_FEATURES     = 1024,
     parameter int GROUP_SIZE       = 64,
     parameter int GROUP_COUNT      = INPUT_SIZE / GROUP_SIZE,
-    parameter int GROUP_PARALLEL   = 8,
+    parameter int GROUP_PARALLEL   = 1,
     parameter int ACT_WIDTH        = 24,
     parameter int ACT_FRAC         = 12,
     parameter int WEIGHT_WIDTH     = 4,
@@ -91,6 +92,10 @@ module qmap_mlp_down_compute_path #(
     localparam int ACTIVATION_CHUNK_COUNT  = ACTIVATION_BYTES / ACTIVATION_CHUNK_BYTES;
     localparam int WEIGHT_ROW_BYTES        = (INPUT_SIZE * WEIGHT_WIDTH) / 8;
     localparam int WEIGHT_ROW_WORDS        = WEIGHT_ROW_BYTES / MEM_DATA_BYTES;
+    localparam int ACT_ADDR_WIDTH          =
+        (INPUT_SIZE <= 1) ? 1 : $clog2(INPUT_SIZE);
+    localparam int WEIGHT_ADDR_WIDTH       =
+        (WEIGHT_ROW_WORDS <= 1) ? 1 : $clog2(WEIGHT_ROW_WORDS);
     localparam int WEIGHT_CHUNK_BYTES      = MAX_READ_BYTES;
     localparam int WEIGHT_CHUNK_WORDS      = WEIGHT_CHUNK_BYTES / MEM_DATA_BYTES;
     localparam int WEIGHT_CHUNK_COUNT      = (WEIGHT_ROW_BYTES + WEIGHT_CHUNK_BYTES - 1) / WEIGHT_CHUNK_BYTES;
@@ -98,6 +103,10 @@ module qmap_mlp_down_compute_path #(
     localparam int WEIGHT_LAST_CHUNK_WORDS = WEIGHT_LAST_CHUNK_BYTES / MEM_DATA_BYTES;
     localparam int SCALE_ROW_BYTES         = GROUP_COUNT * (SCALE_WIDTH / 8);
     localparam int SCALE_ROW_WORDS         = SCALE_ROW_BYTES / MEM_DATA_BYTES;
+    localparam int SCALE_ADDR_WIDTH        =
+        (SCALE_ROW_WORDS <= 1) ? 1 : $clog2(SCALE_ROW_WORDS);
+    localparam int OUTPUT_ADDR_WIDTH       =
+        (OUT_FEATURES <= 1) ? 1 : $clog2(OUT_FEATURES);
     localparam int WEIGHT_BYTES            = OUT_FEATURES * WEIGHT_ROW_BYTES;
     localparam int SCALE_BYTES             = OUT_FEATURES * SCALE_ROW_BYTES;
     localparam int OUTPUT_BYTES            = OUT_FEATURES * MEM_DATA_BYTES;
@@ -189,10 +198,10 @@ module qmap_mlp_down_compute_path #(
     logic [31 : 0] desc_aux2 [0 : DESCRIPTOR_SLOTS-1];
     logic [31 : 0] desc_aux3 [0 : DESCRIPTOR_SLOTS-1];
 
-    logic [INPUT_SIZE*ACT_WIDTH-1 : 0] activation_flat;
-    logic [INPUT_SIZE*WEIGHT_WIDTH-1 : 0] weight_packed;
-    logic [GROUP_COUNT*SCALE_WIDTH-1 : 0] scale_flat;
+    (* ram_style = "block" *)
     logic [31 : 0] output_words [0 : OUT_FEATURES-1];
+    logic [OUTPUT_ADDR_WIDTH-1 : 0] output_read_addr;
+    logic [31 : 0] output_read_data;
 
     logic [31 : 0] row_index;
     logic [31 : 0] activation_chunk_index;
@@ -210,6 +219,10 @@ module qmap_mlp_down_compute_path #(
 
     logic row_start;
     logic row_done;
+    logic row_engine_error;
+    logic row_act_fill_ready;
+    logic row_weight_fill_ready;
+    logic row_scale_fill_ready;
     logic signed [ROW_ACC_WIDTH-1 : 0] row_sum_q26;
     logic signed [ROW_ACC_WIDTH-1 : 0] shifted_q12_12;
     logic signed [31 : 0] converted_output_q12_12;
@@ -286,30 +299,164 @@ module qmap_mlp_down_compute_path #(
         .o_desc_aux3_flat(reader_desc_aux3_flat)
     );
 
-    q4_gemv_row_1024 #(
-        .INPUT_SIZE    (INPUT_SIZE),
-        .GROUP_SIZE    (GROUP_SIZE),
-        .GROUP_COUNT   (GROUP_COUNT),
-        .GROUP_PARALLEL(GROUP_PARALLEL),
-        .ACT_WIDTH     (ACT_WIDTH),
-        .ACT_FRAC      (ACT_FRAC),
-        .WEIGHT_WIDTH  (WEIGHT_WIDTH),
-        .SCALE_WIDTH   (SCALE_WIDTH),
-        .SCALE_FRAC    (SCALE_FRAC),
-        .PARTIAL_WIDTH (PARTIAL_WIDTH),
-        .SCALED_WIDTH  (SCALED_WIDTH),
-        .ROW_ACC_WIDTH (ROW_ACC_WIDTH)
-    ) row_gemv (
-        .i_clk(i_clk),
-        .i_rst_n(i_rst_n),
-        .i_start(row_start),
-        .i_activation_flat(activation_flat),
-        .i_weight_packed(weight_packed),
-        .i_scale_flat(scale_flat),
-        .o_busy(),
-        .o_done(row_done),
-        .o_row_sum_q26(row_sum_q26)
-    );
+    generate
+        if (GROUP_PARALLEL == 1) begin : gen_bram_row_gemv
+            // Each accepted DDR response is written directly into the native
+            // row memory. In particular, the second 3072-wide weight chunk
+            // starts at word 256 rather than overwriting word zero.
+            q4_gemv_row_bram #(
+                .INPUT_SIZE       (INPUT_SIZE),
+                .GROUP_SIZE       (GROUP_SIZE),
+                .GROUP_COUNT      (GROUP_COUNT),
+                .ACT_WIDTH        (ACT_WIDTH),
+                .ACT_FRAC         (ACT_FRAC),
+                .WEIGHT_WIDTH     (WEIGHT_WIDTH),
+                .SCALE_WIDTH      (SCALE_WIDTH),
+                .SCALE_FRAC       (SCALE_FRAC),
+                .PARTIAL_WIDTH    (PARTIAL_WIDTH),
+                .SCALED_WIDTH     (SCALED_WIDTH),
+                .ROW_ACC_WIDTH    (ROW_ACC_WIDTH),
+                .ACT_ADDR_WIDTH   (ACT_ADDR_WIDTH),
+                .WEIGHT_WORDS     (WEIGHT_ROW_WORDS),
+                .WEIGHT_ADDR_WIDTH(WEIGHT_ADDR_WIDTH),
+                .SCALE_WORDS      (SCALE_ROW_WORDS),
+                .SCALE_ADDR_WIDTH (SCALE_ADDR_WIDTH)
+            ) row_gemv (
+                .i_clk            (i_clk),
+                .i_rst_n          (i_rst_n),
+                .i_act_wr_valid   (
+                    (state == S_ACT_READ) &&
+                    i_mem_rd_rsp_valid &&
+                    !payload_protocol_error
+                ),
+                .o_act_wr_ready   (row_act_fill_ready),
+                .i_act_wr_addr    (
+                    activation_element_index[ACT_ADDR_WIDTH-1 : 0]
+                ),
+                .i_act_wr_data    (i_mem_rd_rsp_data[ACT_WIDTH-1 : 0]),
+                .i_weight_wr_valid(
+                    (state == S_WEIGHT_READ) &&
+                    i_mem_rd_rsp_valid &&
+                    !payload_protocol_error
+                ),
+                .o_weight_wr_ready(row_weight_fill_ready),
+                .i_weight_wr_addr (
+                    weight_word_index[WEIGHT_ADDR_WIDTH-1 : 0]
+                ),
+                .i_weight_wr_data (i_mem_rd_rsp_data),
+                .i_scale_wr_valid (
+                    (state == S_SCALE_READ) &&
+                    i_mem_rd_rsp_valid &&
+                    !payload_protocol_error
+                ),
+                .o_scale_wr_ready (row_scale_fill_ready),
+                .i_scale_wr_addr  (
+                    read_word_index[SCALE_ADDR_WIDTH-1 : 0]
+                ),
+                .i_scale_wr_data  (i_mem_rd_rsp_data),
+                .i_start          (row_start),
+                .o_busy           (),
+                .o_done           (row_done),
+                .o_error          (row_engine_error),
+                .o_row_sum_q26    (row_sum_q26)
+            );
+        end
+        else begin : gen_legacy_parallel_row_gemv
+            logic [INPUT_SIZE*ACT_WIDTH-1 : 0] activation_flat;
+            logic [INPUT_SIZE*WEIGHT_WIDTH-1 : 0] weight_packed;
+            logic [GROUP_COUNT*SCALE_WIDTH-1 : 0] scale_flat;
+
+            assign row_act_fill_ready = 1'b1;
+            assign row_weight_fill_ready = 1'b1;
+            assign row_scale_fill_ready = 1'b1;
+            assign row_engine_error = 1'b0;
+
+            q4_gemv_row_1024 #(
+                .INPUT_SIZE    (INPUT_SIZE),
+                .GROUP_SIZE    (GROUP_SIZE),
+                .GROUP_COUNT   (GROUP_COUNT),
+                .GROUP_PARALLEL(GROUP_PARALLEL),
+                .ACT_WIDTH     (ACT_WIDTH),
+                .ACT_FRAC      (ACT_FRAC),
+                .WEIGHT_WIDTH  (WEIGHT_WIDTH),
+                .SCALE_WIDTH   (SCALE_WIDTH),
+                .SCALE_FRAC    (SCALE_FRAC),
+                .PARTIAL_WIDTH (PARTIAL_WIDTH),
+                .SCALED_WIDTH  (SCALED_WIDTH),
+                .ROW_ACC_WIDTH (ROW_ACC_WIDTH)
+            ) row_gemv (
+                .i_clk            (i_clk),
+                .i_rst_n          (i_rst_n),
+                .i_start          (row_start),
+                .i_activation_flat(activation_flat),
+                .i_weight_packed  (weight_packed),
+                .i_scale_flat     (scale_flat),
+                .o_busy           (),
+                .o_done           (row_done),
+                .o_row_sum_q26    (row_sum_q26)
+            );
+
+            always_ff @(posedge i_clk or negedge i_rst_n) begin
+                if (!i_rst_n) begin
+                    activation_flat <= '0;
+                    weight_packed <= '0;
+                    scale_flat <= '0;
+                end
+                else begin
+                    case (state)
+                        S_IDLE: begin
+                            if (i_start) begin
+                                activation_flat <= '0;
+                                weight_packed <= '0;
+                                scale_flat <= '0;
+                            end
+                        end
+
+                        S_ACT_READ: begin
+                            if (i_mem_rd_rsp_valid &&
+                                o_mem_rd_rsp_ready &&
+                                !payload_protocol_error) begin
+                                activation_flat[
+                                    activation_element_index*ACT_WIDTH
+                                    +: ACT_WIDTH
+                                ] <= i_mem_rd_rsp_data[ACT_WIDTH-1 : 0];
+                            end
+                        end
+
+                        S_ROW_SETUP: begin
+                            weight_packed <= '0;
+                            scale_flat <= '0;
+                        end
+
+                        S_WEIGHT_READ: begin
+                            if (i_mem_rd_rsp_valid &&
+                                o_mem_rd_rsp_ready &&
+                                !payload_protocol_error) begin
+                                weight_packed[
+                                    weight_word_index*MEM_DATA_WIDTH
+                                    +: MEM_DATA_WIDTH
+                                ] <= i_mem_rd_rsp_data;
+                            end
+                        end
+
+                        S_SCALE_READ: begin
+                            if (i_mem_rd_rsp_valid &&
+                                o_mem_rd_rsp_ready &&
+                                !payload_protocol_error) begin
+                                scale_flat[
+                                    read_word_index*MEM_DATA_WIDTH
+                                    +: MEM_DATA_WIDTH
+                                ] <= i_mem_rd_rsp_data;
+                            end
+                        end
+
+                        default: begin
+                        end
+                    endcase
+                end
+            end
+        end
+    endgenerate
 
     assign reader_start = (state == S_READER_START);
     assign row_start = (state == S_COMPUTE_START);
@@ -335,18 +482,24 @@ module qmap_mlp_down_compute_path #(
         (state == S_READER_WAIT) ? reader_req_len_bytes : payload_req_len_bytes;
     assign o_mem_rd_rsp_ready =
         (state == S_READER_WAIT) ? reader_rsp_ready :
-        ((state == S_ACT_READ) ||
-         (state == S_WEIGHT_READ) ||
-         (state == S_SCALE_READ)) ? 1'b1 :
+        (state == S_ACT_READ) ? row_act_fill_ready :
+        (state == S_WEIGHT_READ) ? row_weight_fill_ready :
+        (state == S_SCALE_READ) ? row_scale_fill_ready :
         1'b0;
 
     assign o_mem_wr_req_valid = (state == S_WRITE_REQ);
     assign o_mem_wr_req_addr = desc_base_addr[SLOT_OUTPUT];
     assign o_mem_wr_req_len_bytes = OUTPUT_BYTES_U16;
     assign o_mem_wr_data_valid = (state == S_WRITE_DATA);
-    assign o_mem_wr_data = output_words[write_word_index];
+    assign o_mem_wr_data = output_read_data;
     assign o_mem_wr_data_last =
         (state == S_WRITE_DATA) && (write_word_index == (OUT_FEATURES - 1));
+    assign output_read_addr =
+        ((state == S_WRITE_DATA) &&
+         i_mem_wr_data_ready &&
+         (write_word_index < (OUT_FEATURES - 1))) ?
+        OUTPUT_ADDR_WIDTH'(write_word_index + 1'b1) :
+        OUTPUT_ADDR_WIDTH'(write_word_index);
 
     assign activation_element_index =
         (activation_chunk_index * ACTIVATION_CHUNK_WORDS) + read_word_index;
@@ -529,6 +682,15 @@ module qmap_mlp_down_compute_path #(
         end
     end
 
+    // Keep the full output vector on a reset-free write process so Vivado can
+    // infer RAM. Every entry is overwritten before the writeback phase.
+    always_ff @(posedge i_clk) begin
+        if (i_rst_n && (state == S_STORE_ROW)) begin
+            output_words[row_index] <= converted_output_q12_12;
+        end
+        output_read_data <= output_words[output_read_addr];
+    end
+
     always_ff @(posedge i_clk or negedge i_rst_n) begin
         if (i_rst_n == 1'b0) begin
             state <= S_IDLE;
@@ -538,9 +700,6 @@ module qmap_mlp_down_compute_path #(
             weight_chunk_index <= 32'd0;
             read_word_index <= 32'd0;
             write_word_index <= 32'd0;
-            activation_flat <= '0;
-            weight_packed <= '0;
-            scale_flat <= '0;
             o_done <= 1'b0;
             o_error <= 1'b0;
             o_saturation <= 1'b0;
@@ -579,9 +738,6 @@ module qmap_mlp_down_compute_path #(
                         weight_chunk_index <= 32'd0;
                         read_word_index <= 32'd0;
                         write_word_index <= 32'd0;
-                        activation_flat <= '0;
-                        weight_packed <= '0;
-                        scale_flat <= '0;
                         o_error <= 1'b0;
                         o_saturation <= 1'b0;
                         o_rows_done <= 32'd0;
@@ -633,14 +789,12 @@ module qmap_mlp_down_compute_path #(
                 end
 
                 S_ACT_READ: begin
-                    if (i_mem_rd_rsp_valid) begin
+                    if (i_mem_rd_rsp_valid && o_mem_rd_rsp_ready) begin
                         if (payload_protocol_error) begin
                             o_error <= 1'b1;
                             state <= S_DONE;
                         end
                         else begin
-                            activation_flat[activation_element_index*ACT_WIDTH +: ACT_WIDTH] <=
-                                i_mem_rd_rsp_data[ACT_WIDTH-1 : 0];
                             if (expected_payload_last) begin
                                 read_word_index <= 32'd0;
                                 if (activation_chunk_index == (ACTIVATION_CHUNK_COUNT - 1)) begin
@@ -663,8 +817,6 @@ module qmap_mlp_down_compute_path #(
                     active_read_slot <= R_WEIGHT;
                     read_word_index <= 32'd0;
                     weight_chunk_index <= 32'd0;
-                    weight_packed <= '0;
-                    scale_flat <= '0;
                     state <= S_WEIGHT_REQ;
                 end
 
@@ -676,14 +828,12 @@ module qmap_mlp_down_compute_path #(
                 end
 
                 S_WEIGHT_READ: begin
-                    if (i_mem_rd_rsp_valid) begin
+                    if (i_mem_rd_rsp_valid && o_mem_rd_rsp_ready) begin
                         if (payload_protocol_error) begin
                             o_error <= 1'b1;
                             state <= S_DONE;
                         end
                         else begin
-                            weight_packed[weight_word_index*MEM_DATA_WIDTH +: MEM_DATA_WIDTH] <=
-                                i_mem_rd_rsp_data;
                             if (expected_payload_last) begin
                                 read_word_index <= 32'd0;
                                 if (weight_chunk_index == (WEIGHT_CHUNK_COUNT - 1)) begin
@@ -710,14 +860,12 @@ module qmap_mlp_down_compute_path #(
                 end
 
                 S_SCALE_READ: begin
-                    if (i_mem_rd_rsp_valid) begin
+                    if (i_mem_rd_rsp_valid && o_mem_rd_rsp_ready) begin
                         if (payload_protocol_error) begin
                             o_error <= 1'b1;
                             state <= S_DONE;
                         end
                         else begin
-                            scale_flat[read_word_index*MEM_DATA_WIDTH +: MEM_DATA_WIDTH] <=
-                                i_mem_rd_rsp_data;
                             if (expected_payload_last) begin
                                 read_word_index <= 32'd0;
                                 state <= S_COMPUTE_START;
@@ -734,13 +882,16 @@ module qmap_mlp_down_compute_path #(
                 end
 
                 S_COMPUTE_WAIT: begin
-                    if (row_done) begin
+                    if (row_engine_error) begin
+                        o_error <= 1'b1;
+                        state <= S_DONE;
+                    end
+                    else if (row_done) begin
                         state <= S_STORE_ROW;
                     end
                 end
 
                 S_STORE_ROW: begin
-                    output_words[row_index] <= converted_output_q12_12;
                     o_last_row_sum_q26 <= row_sum_q26;
                     o_last_output_q12_12 <= converted_output_q12_12;
                     o_saturation <= o_saturation || converted_saturated;

@@ -105,13 +105,32 @@ Script map:
 - `44_export_qmap_mlp_residual_add_image.py`: wraps
   `post_attn_hidden[1024]`, `down_out[1024]`, layer-output scratch, and
   expected layer-output debug data into the next QMAP per-layer body packet
-- `56_export_persistent_multitoken_layer_golden.py`: loads the checkpoint once,
-  quantizes one decoder layer once, then runs a token-id sequence from position
-  zero through the exact fixed-point embedding/RMSNorm/QKV/RoPE, retained K/V,
-  attention, output projection, residual, and MLP arithmetic. It emits physical
-  K/V write address/data traces plus word32 seam vectors for every position.
-  Its root `layer_output_q14_10_words32.hex` can be passed back with
-  `--input-hidden-hex --layer-id N+1` to validate the same two-token sequence in
-  the next layer without invoking the full 28-layer artifact exporter.
+- `55_export_qmap_runtime_bundle.py`: validates a RuntimeContext full-chain
+  manifest, emits the generated C address table, and writes a load plan whose
+  paths are relative to the load-plan directory. Because embedding and LM head
+  are tied, the plan loads the complete tied-Q4 matrix once, verifies that the
+  requested embedding token row is an exact slice, and records that row as a
+  verified view rather than a second load.
+- `56_export_persistent_multitoken_layer_golden.py`: loads the checkpoint once
+  and runs a token-id sequence from position zero through exact fixed-point
+  embedding/RMSNorm/QKV/RoPE, retained K/V, attention, output projection,
+  residual, and MLP arithmetic. Its mutually exclusive layer modes are the
+  default/`--layer-id N` single-layer seam export, `--layer-count N` for Layers
+  `0..N-1` followed by final RMSNorm plus a full-vocabulary tied-Q4 LM-head
+  scan, and `--all-layers` for the same chain across all 28 layers.
+  Prefixes shorter than 28 layers are deliberately classified as
+  `truncated_prefix_diagnostic`: their full-vocabulary argmax checks RTL
+  feedback plumbing but is not a Qwen full-model prediction. A 28-layer
+  prefix is classified as complete, while regression runners use
+  `--all-layers` explicitly for full-model decode. The
+  `--layer-count 3` mode writes a self-contained three-layer persistent-token
+  golden under `Temp/persistent_multitoken_first3_golden` by default. A
+  single-layer root `layer_output_q14_10_words32.hex` can still be passed back
+  with `--input-hidden-hex --layer-id N+1` to validate the next layer.
+- `57_pack_qmap_runtime_load_plan.py`: validates every source load-plan range
+  and hash, coalesces the full28 runtime into 61 non-overlapping binary
+  segments inside the 512 MiB PL-DDR aperture, preserves both load-plan and
+  full-chain-manifest provenance hashes, and emits a relative-path XSDB
+  `dow -data` loader plus a per-segment SHA256 manifest.
 - `run_all_module_validations.py`: runs the core validation scripts `01`-`10`
   in order

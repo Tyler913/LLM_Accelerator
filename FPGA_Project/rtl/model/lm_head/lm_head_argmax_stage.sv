@@ -9,9 +9,11 @@
 module lm_head_argmax_stage #(
     parameter int SCAN_ROWS       = 1024,
     parameter int TILE_ROWS       = 16,
+    parameter int ROW_PARALLEL    = 1,
     parameter int INPUT_SIZE      = 1024,
     parameter int GROUP_SIZE      = 64,
     parameter int GROUP_COUNT     = INPUT_SIZE / GROUP_SIZE,
+    parameter int GROUP_PARALLEL  = 1,
     parameter int ACT_WIDTH       = 24,
     parameter int ACT_FRAC        = 12,
     parameter int WEIGHT_WIDTH    = 4,
@@ -271,9 +273,11 @@ module lm_head_argmax_stage #(
 
     q4_gemv_tile_1024 #(
         .OUT_ROWS      (TILE_ROWS),
+        .ROW_PARALLEL  (ROW_PARALLEL),
         .INPUT_SIZE    (INPUT_SIZE),
         .GROUP_SIZE    (GROUP_SIZE),
         .GROUP_COUNT   (GROUP_COUNT),
+        .GROUP_PARALLEL(GROUP_PARALLEL),
         .ACT_WIDTH     (ACT_WIDTH),
         .ACT_FRAC      (ACT_FRAC),
         .WEIGHT_WIDTH  (WEIGHT_WIDTH),

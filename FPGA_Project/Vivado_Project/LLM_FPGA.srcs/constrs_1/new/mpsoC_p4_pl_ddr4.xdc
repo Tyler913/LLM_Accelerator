@@ -3,8 +3,8 @@
 
 set_property BITSTREAM.GENERAL.COMPRESS TRUE [current_design]
 
-# 100 MHz differential PL reference clock for the DDR4 MIG.
-create_clock -period 10.000 -name pl_ddr4_ref_clk [get_ports {C0_SYS_CLK_0_clk_p}]
+# The DDR4 IP emits the authoritative 9.996 ns input-clock constraint. Keep
+# only board pin/electrical properties here so the clock is not redefined.
 set_property IOSTANDARD DIFF_HSTL_I_12 [get_ports {C0_SYS_CLK_0_clk_p}]
 set_property IOSTANDARD DIFF_HSTL_I_12 [get_ports {C0_SYS_CLK_0_clk_n}]
 set_property PACKAGE_PIN AE5 [get_ports {C0_SYS_CLK_0_clk_p}]

@@ -1,126 +1,209 @@
-# One-token AXI-Lite / AXI4 Vivado integration plan
+# Qwen3 one-token AXI-Lite / AXI4 board integration
 
-Status: the local RTL seam, tied-Q4 embedding path, AXI4-Lite control path, and
-BD-facing AXI memory path pass focused Icarus and Vivado XSim regressions. The
-checked-in Vivado block design still contains the row1024 smoke design. Current
-project direction is to finish the local inference RTL chain before applying BD
-changes; do not replace the proven row1024 bitstream yet.
+Last updated: 2026-08-01
 
-## Current BD baseline
+Status: the one-token accelerator is integrated into `llm_system.bd`, and the
+current board candidate has completed synthesis, implementation, routing,
+bitstream generation, fixed XSA export, Vitis application builds, the full28
+persistent two-token XSim/audit, and self-contained package verification. The
+previous row1024 design remains valuable hardware history, but it is no longer
+the current block-design contents.
 
-Current checked-in BD: `LLM_FPGA.srcs/sources_1/bd/llm_system/llm_system.bd`.
+The current board candidate is intentionally resource-reduced, not
+function-reduced:
 
-Known PS-visible apertures in the current design:
+- one reusable Q4 group lane for the projection datapaths;
+- one reusable LM-head row lane;
+- BRAM-backed QMAP base tables and large matrix/activation storage;
+- the same 28-layer QMAP packet contract, fixed-point math, KV-cache layout,
+  full `151936`-row LM-head scan, and token/score results as the local model
+  reference.
 
-| Purpose | Address | Range | Status |
-| --- | ---: | ---: | --- |
-| AXI BRAM smoke | `0xA000_0000` | `8 KiB` | current BD |
-| DDR4 status GPIO | `0xA001_0000` | `64 KiB` | current BD |
-| QMAP row1024 smoke control/status GPIO | `0xA002_0000` | `64 KiB` | current BD |
-| QMAP row1024 smoke result GPIO | `0xA003_0000` | `64 KiB` | current BD |
-| PL DDR4 memory map | `0x4_0000_0000` | `512 MiB` | current BD |
+## Current block design
 
-Recommended first one-token register aperture: `0xA004_0000`, range `64 KiB`.
-The RTL register map only consumes the low 4 KiB (`AXI_ADDR_WIDTH=12`), but the
-64 KiB BD aperture matches the surrounding smoke-test address granularity and
-keeps `xparameters.h` simple.
+Checked-in BD:
+`FPGA_Project/Vivado_Project/LLM_FPGA.srcs/sources_1/bd/llm_system/llm_system.bd`.
 
-## New RTL seam
+Accelerator module-reference seam:
+`FPGA_Project/rtl/top/one_token/qmap_one_token_axi_bd.v`.
 
-`FPGA_Project/rtl/top/one_token/qmap_one_token_axi_top.sv` is the BD-facing shell. It exposes:
+The wrapper instantiates `qmap_one_token_axi_top.sv` and exposes:
 
-- `S_AXI`: 32-bit AXI4-Lite slave for `qmap_one_token_control_regs.sv`.
-- `M_AXI`: 32-bit AXI4 master for PL-DDR reads/writes, using the existing
-  `axi4_read_master.sv` and `axi4_write_master.sv` adapters.
-- Debug/status pins (`o_busy`, `o_done`, `o_error`, `o_mem_error`, counters,
-  token/score low word) that may be left internal initially or routed to debug
-  GPIO/ILA later.
+- `S_AXI`: 32-bit AXI4-Lite slave for software configuration, launch, status,
+  counters, and result readback;
+- `M_AXI`: 64-bit-address / 32-bit-data AXI4 master for QMAP, Q4, activation,
+  KV-cache, RoPE, and result traffic in PL DDR4.
 
-The wrapper is intentionally policy-free: register semantics stay in
-`qmap_one_token_control_regs.sv`, AXI4-Lite protocol handling stays in
-`axi4lite_to_mmio_regs.sv`, and compute sequencing stays in
-`qmap_one_token_top.sv`. When enabled, `q4_embedding_lookup.sv` reads one tied
-Q4 embedding row and writes the Q14.10 input hidden vector before the layer
-scheduler starts.
+Current address map:
 
-## Scripted scaffold
+| Purpose | Base | High | Size |
+| --- | ---: | ---: | ---: |
+| DDR4 status GPIO | `0xA001_0000` | `0xA001_FFFF` | 64 KiB |
+| Qwen one-token control | `0xA004_0000` | `0xA004_FFFF` | 64 KiB |
+| PL DDR4 | `0x4_0000_0000` | `0x4_1FFF_FFFF` | 512 MiB |
 
-A safe-by-default Tcl scaffold is available at
-`scripts/one_token_axi_top_bd_scaffold.tcl`.
+The old AXI BRAM aperture and row1024 control/result GPIO apertures at
+`0xA000_0000`, `0xA002_0000`, and `0xA003_0000` are historical only; they are
+not present in the current accelerator BD.
 
-Dry-run only, no BD edits:
+Fabric:
 
-```tcl
-vivado -mode batch -source FPGA_Project/Vivado_Project/scripts/one_token_axi_top_bd_scaffold.tcl
+```text
+PS M_AXI_HPM0_FPD
+  -> AXI SmartConnect
+      -> DDR4 status GPIO
+      -> qmap_one_token_axi_bd/S_AXI
+      -> AXI clock converter -> PL DDR4
+
+qmap_one_token_axi_bd/M_AXI
+  -> AXI SmartConnect
+      -> AXI clock converter -> PL DDR4
 ```
 
-Apply and validate when ready:
+The accelerator and PS-facing fabric run from the current `pl_clk0` clock
+(about 96.97 MHz). The DDR4 status word remains:
 
-```tcl
-vivado -mode batch -source FPGA_Project/Vivado_Project/scripts/one_token_axi_top_bd_scaffold.tcl -tclargs --apply --validate
+```text
+bit 0 = c0_init_calib_complete
+bit 1 = c0_ddr4_ui_clk_sync_rst
+bit 2 = peripheral_aresetn
+good value = 0x5
 ```
 
-The dry-run path has been executed under Vivado 2024.2 and prints the planned
-edits without opening/saving the current BD. The `--apply` path still needs a
-human review of `llm_system.bd`, synthesis/resource utilization, and address map
-before implementation or XSA export.
+## Reproducible Vivado build
 
-## Suggested BD wiring sequence
+Use:
 
-1. Add/sync RTL sources.
-   - Include `FPGA_Project/rtl/top/one_token/qmap_one_token_axi_top.sv` plus the existing RTL
-     dependencies already used by local xsim.
-   - Set `qmap_one_token_axi_top` as a module-reference BD cell, or package it as
-     custom IP only after the module-reference path validates.
-2. Clock/reset.
-   - Connect `aclk` to the same PL/DDR fabric clock domain used by the current
-     row1024 PL master smoke path.
-   - Connect `aresetn` to the corresponding active-low synchronized reset.
-3. Control path.
-   - Connect PS `M_AXI_HPM*_FPD` (through the existing/intermediate AXI
-     interconnect or SmartConnect) to `qmap_one_token_axi_top/S_AXI`.
-   - Assign `S_AXI` base `0xA004_0000`, range `64 KiB`.
-4. Memory path.
-   - Connect `qmap_one_token_axi_top/M_AXI` to the PL DDR4 slave path currently
-     used by the row1024 PL master smoke.
-   - Preserve PL DDR4 base `0x4_0000_0000`, range `512 MiB` for first bring-up.
-5. Validation/build gates.
-   - Validate BD.
-   - Generate wrapper.
-   - Synthesis first; do not launch implementation until synthesis/resource
-     utilization is reviewed.
-   - Export XSA only after synthesis and address-map inspection are sane.
-6. Vitis no-memory smoke.
-   - Build `FPGA_Project/software/qmap_one_token_runtime/main.c`.
-   - Define `QOT_BASEADDR` from the generated `xparameters.h` symbol or compiler
-     flags if the symbol name differs.
-   - Run the no-memory validation smoke before loading model artifacts into PL
-     DDR. A pass is done+error with layer0 error and all memory counters zero.
+```powershell
+vivado -mode batch `
+  -source FPGA_Project/Vivado_Project/scripts/build_one_token_board.tcl `
+  -tclargs --jobs=4 --out-dir=<Temp output directory>
+```
 
-## Required local regressions before board-facing changes
+The build script:
 
-- `tb_axi4lite_to_mmio_regs.sv` Icarus smoke.
-- `tb_qmap_one_token_axil_top.sv` Icarus no-memory smoke.
-- `qmap_one_token_axil_l1_l2_tail_xsim` positive Layer1 -> Layer2 -> tail xsim.
-- `qmap_one_token_axil_true3_tail_mixed_xsim` bounded mixed true3 top-to-tail
-  xsim.
-- `tb_qmap_one_token_axi_top.sv` Icarus no-memory smoke for the BD-facing
-  `S_AXI`/`M_AXI` shell.
-- `run_q4_embedding_regression.ps1`, including exact model-vector export,
-  standalone embedding, AXI-Lite composition, BD-facing AXI burst splitting,
-  and a fresh Vivado XSim compile/elaboration/run.
-- `tb_axi4_write_master.sv`, including local writes larger than one AXI burst,
-  256-beat splitting, and 4 KiB boundary splitting.
-- `one_token_axi_top_bd_scaffold.tcl` Vivado dry-run before any `--apply` run.
-- Host syntax check for `FPGA_Project/software/qmap_one_token_runtime/main.c`.
-- Header/RTL register-map consistency check for `qmap_one_token_regs.h`.
+1. validates and regenerates the BD;
+2. disables stale incremental synthesis reuse;
+3. resets the accelerator OOC child and top synthesis;
+4. resets implementation even when a current synthesis is reused;
+5. implements through `write_bitstream`;
+6. emits post-route timing, routing, utilization, DRC, methodology, clock, and
+   power reports;
+7. copies the bitstream and exports a fixed XSA containing that exact bitstream.
 
-## Open items before real model runtime
+Current routed candidate:
+`Temp/boardready_board_build_20260726/full_board_impl_v8_current/`.
 
-- Full model artifact manifest and PS loader for all 28 layer QMAP packet bases.
-- Cache coherency policy for PS writes into PL DDR and PL writes read back by PS.
-- Whether to keep direct PS memory-mapped 32-bit artifact copies or add DMA.
-- Layer 0 input-RMSNorm full-chain artifacts regenerated from the exact Q4
-  embedding output. This is the immediate local-RTL task; the current mixed
-  true3 baseline still uses a QKV-first Layer 0 and therefore does not yet
-  consume the new embedding output in its full layer chain.
+Release numbers:
+
+| Gate | Result |
+| --- | ---: |
+| CLB LUT | `43,726 / 47,232` (`92.58%`) |
+| CLB registers | `72,621 / 94,464` (`76.88%`) |
+| Block RAM tiles | `94.5 / 150` (`63.00%`) |
+| DSP | `68 / 240` (`28.33%`) |
+| WNS | `+0.208 ns` |
+| WHS | `+0.010 ns` |
+| WPWS | `+0.039 ns` |
+| routed nets | `119,383 / 119,383` |
+| routing errors | `0` |
+| DRC Error / Critical Warning | `0 / 0` |
+| methodology Error / Critical Warning | `0 / 0` |
+| register/latch pins without clock | `0` |
+| unconstrained internal endpoints | `0` |
+| accepted asynchronous output-delay exception | `C0_DDR4_0_reset_n` only |
+
+Warning-only rules are retained in `board_readiness_audit.json` by name and
+count. The release script permits only the reviewed DSP pipeline/reset,
+debug-hub/MIG asynchronous-reset, inferred-BRAM write-enable, control-set, and
+unused AXI-converter-load advisory categories present in this implementation;
+any new warning rule blocks a future package until reviewed.
+
+The LUT margin is small. Do not make speculative parallelism or debug-logic
+increases before the first full28 hardware run; any RTL change must repeat the
+complete implementation gate.
+
+## Runtime image and software
+
+The board runtime is generated as 61 non-overlapping binary segments:
+
+- total loaded bytes: `394,547,200`;
+- first loaded address: `0x4_0010_0000`;
+- last end-exclusive address: `0x4_1A14_0000`;
+- QMAP headers checked by the board launcher: `281`;
+- accelerator-writable regions required to be zero before launch: `397`.
+
+The zero-region rule covers every stage output, both hidden buffers, all 28
+layers' KV-cache storage, and the final-tail scratch/output. It prevents a
+preloaded golden output from hiding a compute or write-back failure.
+
+Durable PS-side source:
+`FPGA_Project/software/qmap_one_token_runtime/`.
+
+The reproducible short-path Vitis workspace is `F:\vws`:
+
+| Component | Purpose |
+| --- | --- |
+| `p_qot` | standalone Cortex-A53 platform from the current fixed XSA |
+| `a_qctl` | AXI-Lite no-memory validation smoke |
+| `a_qmdl` | full28 persistent two-token model smoke |
+
+Both launches use FSBL and `runPsuInit=false`. The model launch stops at entry
+so the PL-DDR runtime can be loaded before the application runs.
+
+## Board launch order
+
+The release package is created by
+`FPGA_Project/software/qmap_one_token_runtime/package_board_release.py`.
+It refuses to package a candidate unless the implementation, XSA/bitstream,
+runtime image, Vitis workspace, and full28 persistent regression all pass.
+
+The packaged `launch_qwen3_board.tcl` performs:
+
+1. system reset and bitstream programming;
+2. XSA memory-map load;
+3. FSBL execution through `XFsbl_Exit`;
+4. PL DDR4 calibration polling for status `0x5`;
+5. all 61 runtime segment downloads;
+6. all 281 QMAP header checks;
+7. control or model ELF download and launch.
+
+Always test in this order:
+
+```powershell
+.\run_board_smoke.ps1 -Mode control
+.\run_board_smoke.ps1 -Mode model
+```
+
+Control acceptance:
+
+```text
+PASS qot_run_no_memory_validation_smoke
+```
+
+Model acceptance:
+
+```text
+PASS token position=0 output=28458 score=1227344433
+PASS token position=1 output=64 score=1015661901
+PASS Qwen3-0.6B full28 persistent two-token board smoke
+```
+
+Only those UART results establish a hardware PASS. Successful routing,
+bitstream generation, packaging, or local simulation establishes readiness to
+test, not board validation.
+
+## Local release gates closed
+
+The resource-reduced full28 no-reset two-token XSim passed in
+`Temp/boardready_full28_persistent_regression_v6_20260801/20260801_181607`.
+It produced token/score `28458/1227344433` then `64/1015661901`, with one reset
+release. The independent event audit proves exact per-stage writes, all 281
+QMAP packets per token, and that position 1 reads every layer's retained
+position-0 K/V only after position-0 writes complete.
+
+The self-contained release `Temp/boardready_qwen3_full28_20260801` then passed
+its 92-file inventory, size, SHA256, and board-readme semantic verifier. Its
+state is `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`. No additional planned
+RTL change remains before the first physical board run; execute control mode,
+then model mode, and preserve the UART log.

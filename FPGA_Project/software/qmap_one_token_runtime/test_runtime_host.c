@@ -32,8 +32,12 @@ int main(void)
     qot_run_config_t cfg;
     qot_result_t result;
     uint32_t prompt[] = {10u, 11u};
+    uint32_t invalid_prompt[] = {10u, QOT_VOCAB_SIZE};
     uint32_t generated[3] = {0u, 0u, 0u};
     uint32_t generated_count = 0u;
+    uint32_t saved_position;
+    uint32_t saved_input_token;
+    uint32_t saved_ctrl;
     uintptr_t base = (uintptr_t)&regs[0];
     int rc;
 
@@ -72,6 +76,33 @@ int main(void)
         printf("FAIL: final token-step register state is incorrect\n");
         return 1;
     }
+
+    saved_position = regs[QOT_REG_POSITION / 4u];
+    saved_input_token = regs[QOT_REG_INPUT_TOKEN / 4u];
+    saved_ctrl = regs[QOT_REG_CTRL / 4u];
+    generated_count = 123u;
+    rc = qot_decode_token_ids(base, &cfg, invalid_prompt, 2u, 1u,
+                              generated, 3u, 8u,
+                              &generated_count, &result);
+    if (rc != QOT_ERR_BAD_TOKEN || generated_count != 0u ||
+        regs[QOT_REG_POSITION / 4u] != saved_position ||
+        regs[QOT_REG_INPUT_TOKEN / 4u] != saved_input_token ||
+        regs[QOT_REG_CTRL / 4u] != saved_ctrl) {
+        printf("FAIL: invalid prompt was not rejected before hardware state changed\n");
+        return 1;
+    }
+
+    regs[QOT_REG_OUT_TOKEN / 4u] = QOT_VOCAB_SIZE;
+    generated_count = 123u;
+    rc = qot_decode_token_ids(base, &cfg, prompt, 1u, 1u,
+                              generated, 3u, 8u,
+                              &generated_count, &result);
+    if (rc != QOT_ERR_BAD_TOKEN || generated_count != 0u ||
+        result.token_id != QOT_VOCAB_SIZE) {
+        printf("FAIL: final out-of-vocabulary LM token was accepted\n");
+        return 1;
+    }
+    regs[QOT_REG_OUT_TOKEN / 4u] = 42u;
 
     cfg.position = QOT_MAX_CONTEXT - 1u;
     rc = qot_decode_token_ids(base, &cfg, prompt, 2u, 1u,

@@ -15,7 +15,8 @@
 // per-layer body simulation.
 module qmap_layer0_body_scheduler #(
     parameter int ADDR_WIDTH     = 64,
-    parameter int MEM_DATA_WIDTH = 32
+    parameter int MEM_DATA_WIDTH = 32,
+    parameter int GROUP_PARALLEL = 1
 )
 (
     input  wire logic                         i_clk,
@@ -352,7 +353,9 @@ module qmap_layer0_body_scheduler #(
         .i_mem_wr_error(post_active ? i_mem_wr_error : 1'b0)
     );
 
-    qmap_mlp_gate_up_compute_path mlp_gate_up (
+    qmap_mlp_gate_up_compute_path #(
+        .GROUP_PARALLEL(GROUP_PARALLEL)
+    ) mlp_gate_up (
         .i_clk(i_clk),
         .i_rst_n(i_rst_n),
         .i_start(gate_start),
@@ -434,7 +437,9 @@ module qmap_layer0_body_scheduler #(
         .i_mem_wr_error(silu_active ? i_mem_wr_error : 1'b0)
     );
 
-    qmap_mlp_down_compute_path mlp_down (
+    qmap_mlp_down_compute_path #(
+        .GROUP_PARALLEL(GROUP_PARALLEL)
+    ) mlp_down (
         .i_clk(i_clk),
         .i_rst_n(i_rst_n),
         .i_start(down_start),

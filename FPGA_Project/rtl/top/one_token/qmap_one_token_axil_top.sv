@@ -19,7 +19,8 @@ module qmap_one_token_axil_top #(
     parameter int INPUT_SIZE       = 1024,
     parameter int GROUP_SIZE       = 64,
     parameter int GROUP_COUNT      = INPUT_SIZE / GROUP_SIZE,
-    parameter int GROUP_PARALLEL   = 4,
+    parameter int GROUP_PARALLEL   = 1,
+    parameter int BODY_GROUP_PARALLEL = 1,
     parameter int ACT_WIDTH        = 24,
     parameter int ACT_FRAC         = 12,
     parameter int WEIGHT_WIDTH     = 4,
@@ -30,6 +31,7 @@ module qmap_one_token_axil_top #(
     parameter int ROW_ACC_WIDTH    = SCALED_WIDTH + $clog2(GROUP_COUNT) + 2,
     parameter int TAIL_MAX_TILES   = 9496,
     parameter int TAIL_TILE_ROWS   = 16,
+    parameter int TAIL_ROW_PARALLEL = 1,
     parameter int TOKEN_ID_WIDTH   = 32,
     parameter int SCORE_WIDTH      = ROW_ACC_WIDTH
 ) (
@@ -181,6 +183,7 @@ module qmap_one_token_axil_top #(
         .GROUP_SIZE        (GROUP_SIZE),
         .GROUP_COUNT       (GROUP_COUNT),
         .GROUP_PARALLEL    (GROUP_PARALLEL),
+        .BODY_GROUP_PARALLEL(BODY_GROUP_PARALLEL),
         .ACT_WIDTH         (ACT_WIDTH),
         .ACT_FRAC          (ACT_FRAC),
         .WEIGHT_WIDTH      (WEIGHT_WIDTH),
@@ -191,6 +194,7 @@ module qmap_one_token_axil_top #(
         .ROW_ACC_WIDTH     (ROW_ACC_WIDTH),
         .TAIL_MAX_TILES    (TAIL_MAX_TILES),
         .TAIL_TILE_ROWS    (TAIL_TILE_ROWS),
+        .TAIL_ROW_PARALLEL (TAIL_ROW_PARALLEL),
         .TOKEN_ID_WIDTH    (TOKEN_ID_WIDTH),
         .SCORE_WIDTH       (SCORE_WIDTH)
     ) mmio_top (

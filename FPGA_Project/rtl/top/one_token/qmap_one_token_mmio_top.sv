@@ -18,7 +18,8 @@ module qmap_one_token_mmio_top #(
     parameter int INPUT_SIZE        = 1024,
     parameter int GROUP_SIZE        = 64,
     parameter int GROUP_COUNT       = INPUT_SIZE / GROUP_SIZE,
-    parameter int GROUP_PARALLEL    = 4,
+    parameter int GROUP_PARALLEL    = 1,
+    parameter int BODY_GROUP_PARALLEL = 1,
     parameter int ACT_WIDTH         = 24,
     parameter int ACT_FRAC          = 12,
     parameter int WEIGHT_WIDTH      = 4,
@@ -29,6 +30,7 @@ module qmap_one_token_mmio_top #(
     parameter int ROW_ACC_WIDTH     = SCALED_WIDTH + $clog2(GROUP_COUNT) + 2,
     parameter int TAIL_MAX_TILES    = 9496,
     parameter int TAIL_TILE_ROWS    = 16,
+    parameter int TAIL_ROW_PARALLEL = 1,
     parameter int TOKEN_ID_WIDTH    = 32,
     parameter int SCORE_WIDTH       = ROW_ACC_WIDTH
 ) (
@@ -136,6 +138,18 @@ module qmap_one_token_mmio_top #(
     logic [MAX_LAYERS*ADDR_WIDTH-1 : 0] mlp_silu_mul_qmap_base_addr_table;
     logic [MAX_LAYERS*ADDR_WIDTH-1 : 0] mlp_down_qmap_base_addr_table;
     logic [MAX_LAYERS*ADDR_WIDTH-1 : 0] mlp_residual_add_qmap_base_addr_table;
+    logic [ADDR_WIDTH-1 : 0] qkv_qmap_base_addr;
+    logic [ADDR_WIDTH-1 : 0] input_norm_qmap_base_addr;
+    logic [ADDR_WIDTH-1 : 0] attn_frontend_qmap_base_addr;
+    logic [ADDR_WIDTH-1 : 0] attn_score_value_qmap_base_addr;
+    logic [ADDR_WIDTH-1 : 0] o_proj_qmap_base_addr;
+    logic [ADDR_WIDTH-1 : 0] post_attn_norm_qmap_base_addr;
+    logic [ADDR_WIDTH-1 : 0] mlp_gate_up_qmap_base_addr;
+    logic [ADDR_WIDTH-1 : 0] mlp_silu_mul_qmap_base_addr;
+    logic [ADDR_WIDTH-1 : 0] mlp_down_qmap_base_addr;
+    logic [ADDR_WIDTH-1 : 0] mlp_residual_add_qmap_base_addr;
+    logic runtime_base_addr_valid;
+    logic [LAYER_INDEX_WIDTH-1:0] runtime_base_addr_layer;
 
     qmap_one_token_control_regs #(
         .ADDR_WIDTH        (ADDR_WIDTH),
@@ -145,7 +159,8 @@ module qmap_one_token_mmio_top #(
         .SCORE_WIDTH       (SCORE_WIDTH),
         .LAYER_INDEX_WIDTH (LAYER_INDEX_WIDTH),
         .LAYER_COUNT_WIDTH (LAYER_COUNT_WIDTH),
-        .POSITION_WIDTH    (POSITION_WIDTH)
+        .POSITION_WIDTH    (POSITION_WIDTH),
+        .USE_BRAM_BASE_TABLES(1'b1)
     ) control_regs (
         .i_clk(i_clk),
         .i_rst_n(i_rst_n),
@@ -182,6 +197,19 @@ module qmap_one_token_mmio_top #(
         .o_mlp_silu_mul_qmap_base_addr_table(mlp_silu_mul_qmap_base_addr_table),
         .o_mlp_down_qmap_base_addr_table(mlp_down_qmap_base_addr_table),
         .o_mlp_residual_add_qmap_base_addr_table(mlp_residual_add_qmap_base_addr_table),
+        .i_runtime_table_layer(o_active_layer_index),
+        .o_qkv_qmap_base_addr(qkv_qmap_base_addr),
+        .o_input_norm_qmap_base_addr(input_norm_qmap_base_addr),
+        .o_attn_frontend_qmap_base_addr(attn_frontend_qmap_base_addr),
+        .o_attn_score_value_qmap_base_addr(attn_score_value_qmap_base_addr),
+        .o_o_proj_qmap_base_addr(o_proj_qmap_base_addr),
+        .o_post_attn_norm_qmap_base_addr(post_attn_norm_qmap_base_addr),
+        .o_mlp_gate_up_qmap_base_addr(mlp_gate_up_qmap_base_addr),
+        .o_mlp_silu_mul_qmap_base_addr(mlp_silu_mul_qmap_base_addr),
+        .o_mlp_down_qmap_base_addr(mlp_down_qmap_base_addr),
+        .o_mlp_residual_add_qmap_base_addr(mlp_residual_add_qmap_base_addr),
+        .o_runtime_table_valid(runtime_base_addr_valid),
+        .o_runtime_table_layer(runtime_base_addr_layer),
         .i_top_busy(o_busy),
         .i_top_done(o_done),
         .i_top_error(o_error),
@@ -217,6 +245,7 @@ module qmap_one_token_mmio_top #(
         .GROUP_SIZE        (GROUP_SIZE),
         .GROUP_COUNT       (GROUP_COUNT),
         .GROUP_PARALLEL    (GROUP_PARALLEL),
+        .BODY_GROUP_PARALLEL(BODY_GROUP_PARALLEL),
         .ACT_WIDTH         (ACT_WIDTH),
         .ACT_FRAC          (ACT_FRAC),
         .WEIGHT_WIDTH      (WEIGHT_WIDTH),
@@ -227,7 +256,9 @@ module qmap_one_token_mmio_top #(
         .ROW_ACC_WIDTH     (ROW_ACC_WIDTH),
         .TAIL_MAX_TILES    (TAIL_MAX_TILES),
         .TAIL_TILE_ROWS    (TAIL_TILE_ROWS),
-        .TOKEN_ID_WIDTH    (TOKEN_ID_WIDTH)
+        .TAIL_ROW_PARALLEL (TAIL_ROW_PARALLEL),
+        .TOKEN_ID_WIDTH    (TOKEN_ID_WIDTH),
+        .USE_RUNTIME_BASE_ADDR_PORTS(1'b1)
     ) top (
         .i_clk(i_clk),
         .i_rst_n(i_rst_n),
@@ -256,6 +287,18 @@ module qmap_one_token_mmio_top #(
         .i_mlp_silu_mul_qmap_base_addr_table(mlp_silu_mul_qmap_base_addr_table),
         .i_mlp_down_qmap_base_addr_table(mlp_down_qmap_base_addr_table),
         .i_mlp_residual_add_qmap_base_addr_table(mlp_residual_add_qmap_base_addr_table),
+        .i_qkv_qmap_base_addr(qkv_qmap_base_addr),
+        .i_input_norm_qmap_base_addr(input_norm_qmap_base_addr),
+        .i_attn_frontend_qmap_base_addr(attn_frontend_qmap_base_addr),
+        .i_attn_score_value_qmap_base_addr(attn_score_value_qmap_base_addr),
+        .i_o_proj_qmap_base_addr(o_proj_qmap_base_addr),
+        .i_post_attn_norm_qmap_base_addr(post_attn_norm_qmap_base_addr),
+        .i_mlp_gate_up_qmap_base_addr(mlp_gate_up_qmap_base_addr),
+        .i_mlp_silu_mul_qmap_base_addr(mlp_silu_mul_qmap_base_addr),
+        .i_mlp_down_qmap_base_addr(mlp_down_qmap_base_addr),
+        .i_mlp_residual_add_qmap_base_addr(mlp_residual_add_qmap_base_addr),
+        .i_runtime_base_addr_valid(runtime_base_addr_valid),
+        .i_runtime_base_addr_layer(runtime_base_addr_layer),
         .o_busy(o_busy),
         .o_done(o_done),
         .o_error(o_error),

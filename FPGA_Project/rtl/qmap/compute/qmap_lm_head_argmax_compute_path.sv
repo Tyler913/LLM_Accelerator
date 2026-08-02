@@ -18,9 +18,11 @@ module qmap_lm_head_argmax_compute_path #(
     parameter int MAX_TILES        = 9496,
     parameter int TILE_COUNT_WIDTH = (MAX_TILES <= 1) ? 1 : $clog2(MAX_TILES + 1),
     parameter int TILE_ROWS        = 16,
+    parameter int ROW_PARALLEL     = 1,
     parameter int INPUT_SIZE       = 1024,
     parameter int GROUP_SIZE       = 64,
     parameter int GROUP_COUNT      = INPUT_SIZE / GROUP_SIZE,
+    parameter int GROUP_PARALLEL   = 1,
     parameter int ACT_WIDTH        = 24,
     parameter int ACT_FRAC         = 12,
     parameter int WEIGHT_WIDTH     = 4,
@@ -30,6 +32,7 @@ module qmap_lm_head_argmax_compute_path #(
     parameter int SCALED_WIDTH     = PARTIAL_WIDTH + SCALE_WIDTH,
     parameter int ROW_ACC_WIDTH    = SCALED_WIDTH + $clog2(GROUP_COUNT) + 2,
     parameter int TOKEN_ID_WIDTH   = 32,
+    parameter int USE_BRAM_STREAMING = 1,
     parameter int MEM_DATA_WIDTH   = 32,
     parameter int MAX_READ_BYTES   = 1024
 )
@@ -192,6 +195,15 @@ module qmap_lm_head_argmax_compute_path #(
     logic [31 : 0] scheduler_compute_cycle_count;
     logic [31 : 0] scheduler_mem_read_burst_count;
     logic [31 : 0] scheduler_mem_read_word_count;
+    logic scheduler_act_wr_valid;
+    logic scheduler_act_wr_ready;
+    logic scheduler_row_result_valid;
+    logic [TOKEN_ID_WIDTH-1 : 0] scheduler_row_result_token;
+    logic signed [ROW_ACC_WIDTH-1 : 0]
+        scheduler_row_result_score;
+    logic scheduler_tile_complete_pulse;
+    logic [3 : 0] scheduler_state_debug;
+    logic [2 : 0] scheduler_engine_state_debug;
 
     logic [1 : 0] write_word_index;
     logic signed [63 : 0] best_score_ext;
@@ -270,54 +282,142 @@ module qmap_lm_head_argmax_compute_path #(
         .o_desc_aux3_flat(reader_desc_aux3_flat)
     );
 
-    lm_head_argmax_tile_scheduler #(
-        .ADDR_WIDTH      (ADDR_WIDTH),
-        .MAX_TILES       (MAX_TILES),
-        .TILE_COUNT_WIDTH(TILE_COUNT_WIDTH),
-        .TILE_ROWS       (TILE_ROWS),
-        .INPUT_SIZE      (INPUT_SIZE),
-        .GROUP_SIZE      (GROUP_SIZE),
-        .GROUP_COUNT     (GROUP_COUNT),
-        .ACT_WIDTH       (ACT_WIDTH),
-        .ACT_FRAC        (ACT_FRAC),
-        .WEIGHT_WIDTH    (WEIGHT_WIDTH),
-        .SCALE_WIDTH     (SCALE_WIDTH),
-        .SCALE_FRAC      (SCALE_FRAC),
-        .PARTIAL_WIDTH   (PARTIAL_WIDTH),
-        .SCALED_WIDTH    (SCALED_WIDTH),
-        .ROW_ACC_WIDTH   (ROW_ACC_WIDTH),
-        .TOKEN_ID_WIDTH  (TOKEN_ID_WIDTH),
-        .MEM_DATA_WIDTH  (MEM_DATA_WIDTH),
-        .MAX_READ_BYTES  (MAX_READ_BYTES)
-    ) scheduler (
-        .i_clk                  (i_clk),
-        .i_rst_n                (i_rst_n),
-        .i_start                (scheduler_start),
-        .i_token_base           (scan_base_token[TOKEN_ID_WIDTH-1 : 0]),
-        .i_tile_count           (scheduler_tile_count),
-        .i_activation_flat      (activation_flat),
-        .i_weight_base_addr     (desc_base_addr[SLOT_WEIGHT]),
-        .i_scale_base_addr      (desc_base_addr[SLOT_SCALE]),
-        .o_mem_req_valid        (scheduler_req_valid),
-        .i_mem_req_ready        (scheduler_req_ready),
-        .o_mem_req_addr         (scheduler_req_addr),
-        .o_mem_req_len_bytes    (scheduler_req_len_bytes),
-        .i_mem_rsp_valid        (scheduler_rsp_valid),
-        .o_mem_rsp_ready        (scheduler_rsp_ready),
-        .i_mem_rsp_data         (scheduler_rsp_data),
-        .i_mem_rsp_last         (scheduler_rsp_last),
-        .o_busy                 (scheduler_busy),
-        .o_done                 (scheduler_done),
-        .o_error                (scheduler_error),
-        .o_best_token_id        (scheduler_best_token_id),
-        .o_best_score_q26       (scheduler_best_score_q26),
-        .o_current_tile_index   (scheduler_current_tile),
-        .o_tiles_started        (o_tiles_started),
-        .o_tiles_completed      (o_tiles_completed),
-        .o_compute_cycle_count  (scheduler_compute_cycle_count),
-        .o_mem_read_burst_count (scheduler_mem_read_burst_count),
-        .o_mem_read_word_count  (scheduler_mem_read_word_count)
-    );
+    generate
+        if (USE_BRAM_STREAMING != 0) begin : gen_bram_scheduler
+            lm_head_argmax_row_bram_scheduler #(
+                .ADDR_WIDTH(ADDR_WIDTH),
+                .MAX_TILES(MAX_TILES),
+                .TILE_COUNT_WIDTH(TILE_COUNT_WIDTH),
+                .TILE_ROWS(TILE_ROWS),
+                .INPUT_SIZE(INPUT_SIZE),
+                .GROUP_SIZE(GROUP_SIZE),
+                .GROUP_COUNT(GROUP_COUNT),
+                .ACT_WIDTH(ACT_WIDTH),
+                .ACT_FRAC(ACT_FRAC),
+                .WEIGHT_WIDTH(WEIGHT_WIDTH),
+                .SCALE_WIDTH(SCALE_WIDTH),
+                .SCALE_FRAC(SCALE_FRAC),
+                .PARTIAL_WIDTH(PARTIAL_WIDTH),
+                .SCALED_WIDTH(SCALED_WIDTH),
+                .ROW_ACC_WIDTH(ROW_ACC_WIDTH),
+                .TOKEN_ID_WIDTH(TOKEN_ID_WIDTH),
+                .MEM_DATA_WIDTH(MEM_DATA_WIDTH)
+            ) scheduler (
+                .i_clk(i_clk),
+                .i_rst_n(i_rst_n),
+                .i_act_wr_valid(scheduler_act_wr_valid),
+                .o_act_wr_ready(scheduler_act_wr_ready),
+                .i_act_wr_addr(
+                    activation_element_index[
+                        $clog2(INPUT_SIZE)-1 : 0]),
+                .i_act_wr_data(
+                    i_mem_rd_rsp_data[ACT_WIDTH-1 : 0]),
+                .i_start(scheduler_start),
+                .i_token_base(
+                    scan_base_token[TOKEN_ID_WIDTH-1 : 0]),
+                .i_tile_count(scheduler_tile_count),
+                .i_weight_base_addr(
+                    desc_base_addr[SLOT_WEIGHT]),
+                .i_scale_base_addr(
+                    desc_base_addr[SLOT_SCALE]),
+                .o_mem_req_valid(scheduler_req_valid),
+                .i_mem_req_ready(scheduler_req_ready),
+                .o_mem_req_addr(scheduler_req_addr),
+                .o_mem_req_len_bytes(scheduler_req_len_bytes),
+                .i_mem_rsp_valid(scheduler_rsp_valid),
+                .o_mem_rsp_ready(scheduler_rsp_ready),
+                .i_mem_rsp_data(scheduler_rsp_data),
+                .i_mem_rsp_last(scheduler_rsp_last),
+                .o_busy(scheduler_busy),
+                .o_done(scheduler_done),
+                .o_error(scheduler_error),
+                .o_best_token_id(scheduler_best_token_id),
+                .o_best_score_q26(scheduler_best_score_q26),
+                .o_current_tile_index(scheduler_current_tile),
+                .o_tiles_started(o_tiles_started),
+                .o_tiles_completed(o_tiles_completed),
+                .o_compute_cycle_count(
+                    scheduler_compute_cycle_count),
+                .o_mem_read_burst_count(
+                    scheduler_mem_read_burst_count),
+                .o_mem_read_word_count(
+                    scheduler_mem_read_word_count),
+                .o_row_result_valid(
+                    scheduler_row_result_valid),
+                .o_row_result_token(
+                    scheduler_row_result_token),
+                .o_row_result_score(
+                    scheduler_row_result_score),
+                .o_tile_complete_pulse(
+                    scheduler_tile_complete_pulse),
+                .o_state_debug(scheduler_state_debug),
+                .o_engine_state_debug(
+                    scheduler_engine_state_debug)
+            );
+        end
+        else begin : gen_legacy_scheduler
+            assign scheduler_act_wr_ready = 1'b1;
+            assign scheduler_row_result_valid = 1'b0;
+            assign scheduler_row_result_token = '0;
+            assign scheduler_row_result_score = '0;
+            assign scheduler_tile_complete_pulse = 1'b0;
+            assign scheduler_state_debug =
+                {2'b00, scheduler.state};
+            assign scheduler_engine_state_debug =
+                scheduler.tile_stage.argmax_core.current_state;
+
+            lm_head_argmax_tile_scheduler #(
+                .ADDR_WIDTH      (ADDR_WIDTH),
+                .MAX_TILES       (MAX_TILES),
+                .TILE_COUNT_WIDTH(TILE_COUNT_WIDTH),
+                .TILE_ROWS       (TILE_ROWS),
+                .ROW_PARALLEL    (ROW_PARALLEL),
+                .INPUT_SIZE      (INPUT_SIZE),
+                .GROUP_SIZE      (GROUP_SIZE),
+                .GROUP_COUNT     (GROUP_COUNT),
+                .GROUP_PARALLEL  (GROUP_PARALLEL),
+                .ACT_WIDTH       (ACT_WIDTH),
+                .ACT_FRAC        (ACT_FRAC),
+                .WEIGHT_WIDTH    (WEIGHT_WIDTH),
+                .SCALE_WIDTH     (SCALE_WIDTH),
+                .SCALE_FRAC      (SCALE_FRAC),
+                .PARTIAL_WIDTH   (PARTIAL_WIDTH),
+                .SCALED_WIDTH    (SCALED_WIDTH),
+                .ROW_ACC_WIDTH   (ROW_ACC_WIDTH),
+                .TOKEN_ID_WIDTH  (TOKEN_ID_WIDTH),
+                .MEM_DATA_WIDTH  (MEM_DATA_WIDTH),
+                .MAX_READ_BYTES  (MAX_READ_BYTES)
+            ) scheduler (
+                .i_clk                  (i_clk),
+                .i_rst_n                (i_rst_n),
+                .i_start                (scheduler_start),
+                .i_token_base           (scan_base_token[TOKEN_ID_WIDTH-1 : 0]),
+                .i_tile_count           (scheduler_tile_count),
+                .i_activation_flat      (activation_flat),
+                .i_weight_base_addr     (desc_base_addr[SLOT_WEIGHT]),
+                .i_scale_base_addr      (desc_base_addr[SLOT_SCALE]),
+                .o_mem_req_valid        (scheduler_req_valid),
+                .i_mem_req_ready        (scheduler_req_ready),
+                .o_mem_req_addr         (scheduler_req_addr),
+                .o_mem_req_len_bytes    (scheduler_req_len_bytes),
+                .i_mem_rsp_valid        (scheduler_rsp_valid),
+                .o_mem_rsp_ready        (scheduler_rsp_ready),
+                .i_mem_rsp_data         (scheduler_rsp_data),
+                .i_mem_rsp_last         (scheduler_rsp_last),
+                .o_busy                 (scheduler_busy),
+                .o_done                 (scheduler_done),
+                .o_error                (scheduler_error),
+                .o_best_token_id        (scheduler_best_token_id),
+                .o_best_score_q26       (scheduler_best_score_q26),
+                .o_current_tile_index   (scheduler_current_tile),
+                .o_tiles_started        (o_tiles_started),
+                .o_tiles_completed      (o_tiles_completed),
+                .o_compute_cycle_count  (scheduler_compute_cycle_count),
+                .o_mem_read_burst_count (scheduler_mem_read_burst_count),
+                .o_mem_read_word_count  (scheduler_mem_read_word_count)
+            );
+        end
+    endgenerate
 
     assign o_busy = (state != S_IDLE);
     assign reader_start = (state == S_READER_START);
@@ -332,6 +432,11 @@ module qmap_lm_head_argmax_compute_path #(
     assign activation_protocol_error =
         (state == S_ACT_READ) && i_mem_rd_rsp_valid &&
         (i_mem_rd_rsp_last != expected_activation_last);
+    assign scheduler_act_wr_valid =
+        (USE_BRAM_STREAMING != 0) &&
+        (state == S_ACT_READ) &&
+        i_mem_rd_rsp_valid &&
+        !activation_protocol_error;
 
     assign best_score_ext = {{(64-ROW_ACC_WIDTH){o_best_score_q26[ROW_ACC_WIDTH-1]}}, o_best_score_q26};
     assign write_data_word =
@@ -367,7 +472,9 @@ module qmap_lm_head_argmax_compute_path #(
 
     assign o_mem_rd_rsp_ready =
         (state == S_READER_WAIT) ? reader_rsp_ready :
-        (state == S_ACT_READ)    ? 1'b1 :
+        (state == S_ACT_READ)    ?
+            ((USE_BRAM_STREAMING != 0) ?
+             scheduler_act_wr_ready : 1'b1) :
         (state == S_SCHED_WAIT)  ? scheduler_rsp_ready :
         1'b0;
     assign reader_rsp_valid = (state == S_READER_WAIT) ? i_mem_rd_rsp_valid : 1'b0;
@@ -434,7 +541,9 @@ module qmap_lm_head_argmax_compute_path #(
             state                   <= S_IDLE;
             activation_chunk_index  <= 32'd0;
             read_word_index         <= 32'd0;
-            activation_flat         <= 'd0;
+            if (USE_BRAM_STREAMING == 0) begin
+                activation_flat <= 'd0;
+            end
             write_word_index        <= 2'd0;
             o_done                  <= 1'b0;
             o_error                 <= 1'b0;
@@ -462,7 +571,9 @@ module qmap_lm_head_argmax_compute_path #(
                     if (i_start) begin
                         activation_chunk_index <= 32'd0;
                         read_word_index        <= 32'd0;
-                        activation_flat        <= 'd0;
+                        if (USE_BRAM_STREAMING == 0) begin
+                            activation_flat <= 'd0;
+                        end
                         write_word_index       <= 2'd0;
                         o_error                <= 1'b0;
                         o_best_token_id         <= 'd0;
@@ -516,8 +627,13 @@ module qmap_lm_head_argmax_compute_path #(
                             state   <= S_DONE;
                         end
                         else begin
-                            activation_flat[activation_element_index*ACT_WIDTH +: ACT_WIDTH]
-                                <= i_mem_rd_rsp_data[ACT_WIDTH-1 : 0];
+                            if (USE_BRAM_STREAMING == 0) begin
+                                activation_flat[
+                                    activation_element_index*
+                                    ACT_WIDTH +: ACT_WIDTH] <=
+                                    i_mem_rd_rsp_data[
+                                        ACT_WIDTH-1 : 0];
+                            end
                             if (expected_activation_last) begin
                                 read_word_index <= 32'd0;
                                 if (activation_chunk_index == (ACTIVATION_CHUNK_COUNT - 1)) begin

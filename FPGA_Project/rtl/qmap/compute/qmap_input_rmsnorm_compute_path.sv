@@ -32,6 +32,7 @@ module qmap_input_rmsnorm_compute_path #(
     parameter int DIV_NUM_WIDTH    = 48,
     parameter int DIV_NUM_SHIFT    = RMS_FRAC + INV_RMS_FRAC,
     parameter int EPS_Q20          = 1,
+    parameter int USE_BRAM_STREAMING = 1,
     parameter int MEM_DATA_WIDTH   = 32,
     parameter int MAX_READ_BYTES   = 1024
 )
@@ -94,6 +95,8 @@ module qmap_input_rmsnorm_compute_path #(
     localparam int CHUNK_WORDS        = MAX_READ_BYTES / MEM_DATA_BYTES;
     localparam int VECTOR_BYTES       = INPUT_SIZE * MEM_DATA_BYTES;
     localparam int CHUNK_COUNT        = VECTOR_BYTES / MAX_READ_BYTES;
+    localparam int ELEMENT_INDEX_W    =
+        (INPUT_SIZE <= 1) ? 1 : $clog2(INPUT_SIZE);
     localparam logic [15 : 0] CHUNK_BYTES_U16 = MAX_READ_BYTES;
     localparam logic [15 : 0] VECTOR_BYTES_U16 = VECTOR_BYTES;
 
@@ -109,6 +112,7 @@ module qmap_input_rmsnorm_compute_path #(
         S_RMS_START,
         S_RMS_WAIT,
         S_NORM_WRITE_REQ,
+        S_NORM_WRITE_PRIME,
         S_NORM_WRITE_DATA,
         S_NORM_WRITE_WAIT,
         S_DONE
@@ -164,7 +168,14 @@ module qmap_input_rmsnorm_compute_path #(
     logic validate_error;
     logic norm_start;
     logic norm_done;
+    logic norm_error;
     logic [31 : 0] norm_write_data_word;
+    logic bram_input_wr_en;
+    logic bram_gamma_wr_en;
+    logic [ELEMENT_INDEX_W-1 : 0] bram_input_wr_addr;
+    logic [ELEMENT_INDEX_W-1 : 0] bram_gamma_wr_addr;
+    logic [ELEMENT_INDEX_W-1 : 0] norm_bram_output_rd_addr;
+    logic [NORM_WIDTH-1 : 0] norm_bram_output_rd_data;
     logic hidden_base_override_valid_reg;
     logic [ADDR_WIDTH-1 : 0] hidden_base_override_addr_reg;
 
@@ -231,39 +242,91 @@ module qmap_input_rmsnorm_compute_path #(
         .o_desc_aux3_flat()
     );
 
-    rmsnorm_1024 #(
-        .INPUT_SIZE(INPUT_SIZE),
-        .IN_WIDTH(HIDDEN_WIDTH),
-        .IN_FRAC(HIDDEN_FRAC),
-        .GAMMA_WIDTH(GAMMA_WIDTH),
-        .GAMMA_FRAC(GAMMA_FRAC),
-        .GAMMA_SIGNED(1),
-        .INV_RMS_WIDTH(INV_RMS_WIDTH),
-        .INV_RMS_FRAC(INV_RMS_FRAC),
-        .OUT_WIDTH(NORM_WIDTH),
-        .OUT_FRAC(NORM_FRAC),
-        .SUM_WIDTH(SUM_WIDTH),
-        .SUM_FRAC(SUM_FRAC),
-        .MEAN_SHIFT(MEAN_SHIFT),
-        .RMS_WIDTH(RMS_WIDTH),
-        .RMS_FRAC(RMS_FRAC),
-        .DIV_NUM_WIDTH(DIV_NUM_WIDTH),
-        .DIV_NUM_SHIFT(DIV_NUM_SHIFT),
-        .EPS_Q20(EPS_Q20)
-    ) input_rmsnorm (
-        .i_clk(i_clk),
-        .i_rst_n(i_rst_n),
-        .i_start(norm_start),
-        .i_input_flat(hidden_flat),
-        .i_gamma_flat(gamma_flat),
-        .o_busy(),
-        .o_done(norm_done),
-        .o_saturation(o_norm_saturation),
-        .o_output_flat(norm_output_flat),
-        .o_sum_squares(o_sum_squares),
-        .o_mean_square(o_mean_square),
-        .o_inv_rms(o_inv_rms)
-    );
+    generate
+        if (USE_BRAM_STREAMING != 0) begin : gen_bram_rmsnorm
+            rmsnorm_bram #(
+                .INPUT_SIZE(INPUT_SIZE),
+                .IN_WIDTH(HIDDEN_WIDTH),
+                .IN_FRAC(HIDDEN_FRAC),
+                .GAMMA_WIDTH(GAMMA_WIDTH),
+                .GAMMA_FRAC(GAMMA_FRAC),
+                .GAMMA_SIGNED(1),
+                .INV_RMS_WIDTH(INV_RMS_WIDTH),
+                .INV_RMS_FRAC(INV_RMS_FRAC),
+                .OUT_WIDTH(NORM_WIDTH),
+                .OUT_FRAC(NORM_FRAC),
+                .SUM_WIDTH(SUM_WIDTH),
+                .SUM_FRAC(SUM_FRAC),
+                .MEAN_SHIFT(MEAN_SHIFT),
+                .RMS_WIDTH(RMS_WIDTH),
+                .RMS_FRAC(RMS_FRAC),
+                .DIV_NUM_WIDTH(DIV_NUM_WIDTH),
+                .DIV_NUM_SHIFT(DIV_NUM_SHIFT),
+                .EPS_Q20(EPS_Q20),
+                .ELEMENT_INDEX_W(ELEMENT_INDEX_W)
+            ) input_rmsnorm_bram (
+                .i_clk(i_clk),
+                .i_rst_n(i_rst_n),
+                .i_input_wr_en(bram_input_wr_en),
+                .i_input_wr_addr(bram_input_wr_addr),
+                .i_input_wr_data(i_mem_rd_rsp_data[HIDDEN_WIDTH-1 : 0]),
+                .i_gamma_wr_en(bram_gamma_wr_en),
+                .i_gamma_wr_addr(bram_gamma_wr_addr),
+                .i_gamma_wr_data(i_mem_rd_rsp_data[GAMMA_WIDTH-1 : 0]),
+                .i_start(norm_start),
+                .o_busy(),
+                .o_done(norm_done),
+                .o_error(norm_error),
+                .o_saturation(o_norm_saturation),
+                .i_output_rd_addr(norm_bram_output_rd_addr),
+                .o_output_rd_data(norm_bram_output_rd_data),
+                .o_output_wr_valid(),
+                .o_output_wr_addr(),
+                .o_output_wr_data(),
+                .o_sum_squares(o_sum_squares),
+                .o_mean_square(o_mean_square),
+                .o_inv_rms(o_inv_rms)
+            );
+        end
+        else begin : gen_legacy_rmsnorm
+            assign norm_error = 1'b0;
+            assign norm_bram_output_rd_data = '0;
+
+            rmsnorm_1024 #(
+                .INPUT_SIZE(INPUT_SIZE),
+                .IN_WIDTH(HIDDEN_WIDTH),
+                .IN_FRAC(HIDDEN_FRAC),
+                .GAMMA_WIDTH(GAMMA_WIDTH),
+                .GAMMA_FRAC(GAMMA_FRAC),
+                .GAMMA_SIGNED(1),
+                .INV_RMS_WIDTH(INV_RMS_WIDTH),
+                .INV_RMS_FRAC(INV_RMS_FRAC),
+                .OUT_WIDTH(NORM_WIDTH),
+                .OUT_FRAC(NORM_FRAC),
+                .SUM_WIDTH(SUM_WIDTH),
+                .SUM_FRAC(SUM_FRAC),
+                .MEAN_SHIFT(MEAN_SHIFT),
+                .RMS_WIDTH(RMS_WIDTH),
+                .RMS_FRAC(RMS_FRAC),
+                .DIV_NUM_WIDTH(DIV_NUM_WIDTH),
+                .DIV_NUM_SHIFT(DIV_NUM_SHIFT),
+                .EPS_Q20(EPS_Q20)
+            ) input_rmsnorm (
+                .i_clk(i_clk),
+                .i_rst_n(i_rst_n),
+                .i_start(norm_start),
+                .i_input_flat(hidden_flat),
+                .i_gamma_flat(gamma_flat),
+                .o_busy(),
+                .o_done(norm_done),
+                .o_saturation(o_norm_saturation),
+                .o_output_flat(norm_output_flat),
+                .o_sum_squares(o_sum_squares),
+                .o_mean_square(o_mean_square),
+                .o_inv_rms(o_inv_rms)
+            );
+        end
+    endgenerate
 
     assign reader_start = (state == S_READER_START);
     assign norm_start = (state == S_RMS_START);
@@ -306,6 +369,25 @@ module qmap_input_rmsnorm_compute_path #(
     assign o_mem_wr_data = norm_write_data_word;
     assign o_mem_wr_data_last =
         (state == S_NORM_WRITE_DATA) && (norm_write_word_index == (INPUT_SIZE - 1));
+    assign bram_input_wr_en =
+        (USE_BRAM_STREAMING != 0) &&
+        (state == S_HIDDEN_READ) &&
+        i_mem_rd_rsp_valid &&
+        !read_protocol_error;
+    assign bram_gamma_wr_en =
+        (USE_BRAM_STREAMING != 0) &&
+        (state == S_GAMMA_READ) &&
+        i_mem_rd_rsp_valid &&
+        !read_protocol_error;
+    assign bram_input_wr_addr = element_index[ELEMENT_INDEX_W-1 : 0];
+    assign bram_gamma_wr_addr = element_index[ELEMENT_INDEX_W-1 : 0];
+    assign norm_bram_output_rd_addr =
+        ((state == S_NORM_WRITE_DATA) &&
+         o_mem_wr_data_valid &&
+         i_mem_wr_data_ready &&
+         !o_mem_wr_data_last) ?
+        (norm_write_word_index[ELEMENT_INDEX_W-1 : 0] + 1'b1) :
+        norm_write_word_index[ELEMENT_INDEX_W-1 : 0];
 
     assign element_index =
         (state == S_NORM_WRITE_DATA) ?
@@ -315,10 +397,21 @@ module qmap_input_rmsnorm_compute_path #(
         i_mem_rd_rsp_valid && (i_mem_rd_rsp_last != (read_word_index == (CHUNK_WORDS - 1)));
 
     always @* begin
-        norm_write_data_word = {
-            {8{norm_output_flat[(element_index*NORM_WIDTH) + (NORM_WIDTH-1)]}},
-            norm_output_flat[element_index*NORM_WIDTH +: NORM_WIDTH]
-        };
+        if (USE_BRAM_STREAMING != 0) begin
+            norm_write_data_word = {
+                {(MEM_DATA_WIDTH-NORM_WIDTH){
+                    norm_bram_output_rd_data[NORM_WIDTH-1]}},
+                norm_bram_output_rd_data
+            };
+        end
+        else begin
+            norm_write_data_word = {
+                {(MEM_DATA_WIDTH-NORM_WIDTH){
+                    norm_output_flat[(element_index*NORM_WIDTH) +
+                                     (NORM_WIDTH-1)]}},
+                norm_output_flat[element_index*NORM_WIDTH +: NORM_WIDTH]
+            };
+        end
     end
 
     always @* begin
@@ -370,8 +463,10 @@ module qmap_input_rmsnorm_compute_path #(
         if (i_rst_n == 1'b0) begin
             state <= S_IDLE;
             active_read_slot <= R_HIDDEN;
-            hidden_flat <= '0;
-            gamma_flat <= '0;
+            if (USE_BRAM_STREAMING == 0) begin
+                hidden_flat <= '0;
+                gamma_flat <= '0;
+            end
             read_chunk_index <= 32'd0;
             read_word_index <= 32'd0;
             norm_write_word_index <= 32'd0;
@@ -413,8 +508,10 @@ module qmap_input_rmsnorm_compute_path #(
                         hidden_base_override_addr_reg <= i_hidden_base_override_addr;
                         state <= S_READER_START;
                         active_read_slot <= R_HIDDEN;
-                        hidden_flat <= '0;
-                        gamma_flat <= '0;
+                        if (USE_BRAM_STREAMING == 0) begin
+                            hidden_flat <= '0;
+                            gamma_flat <= '0;
+                        end
                         read_chunk_index <= 32'd0;
                         read_word_index <= 32'd0;
                         norm_write_word_index <= 32'd0;
@@ -471,8 +568,10 @@ module qmap_input_rmsnorm_compute_path #(
                             state <= S_DONE;
                         end
                         else begin
-                            hidden_flat[element_index*HIDDEN_WIDTH +: HIDDEN_WIDTH] <=
-                                i_mem_rd_rsp_data[HIDDEN_WIDTH-1 : 0];
+                            if (USE_BRAM_STREAMING == 0) begin
+                                hidden_flat[element_index*HIDDEN_WIDTH +: HIDDEN_WIDTH] <=
+                                    i_mem_rd_rsp_data[HIDDEN_WIDTH-1 : 0];
+                            end
                             if (i_mem_rd_rsp_last) begin
                                 if (read_chunk_index == (CHUNK_COUNT - 1)) begin
                                     active_read_slot <= R_GAMMA;
@@ -507,8 +606,10 @@ module qmap_input_rmsnorm_compute_path #(
                             state <= S_DONE;
                         end
                         else begin
-                            gamma_flat[element_index*GAMMA_WIDTH +: GAMMA_WIDTH] <=
-                                i_mem_rd_rsp_data[GAMMA_WIDTH-1 : 0];
+                            if (USE_BRAM_STREAMING == 0) begin
+                                gamma_flat[element_index*GAMMA_WIDTH +: GAMMA_WIDTH] <=
+                                    i_mem_rd_rsp_data[GAMMA_WIDTH-1 : 0];
+                            end
                             if (i_mem_rd_rsp_last) begin
                                 if (read_chunk_index == (CHUNK_COUNT - 1)) begin
                                     state <= S_RMS_START;
@@ -533,15 +634,26 @@ module qmap_input_rmsnorm_compute_path #(
                 S_RMS_WAIT: begin
                     if (norm_done) begin
                         norm_write_word_index <= 32'd0;
-                        state <= S_NORM_WRITE_REQ;
+                        if (norm_error) begin
+                            o_error <= 1'b1;
+                            state <= S_DONE;
+                        end
+                        else begin
+                            state <= S_NORM_WRITE_REQ;
+                        end
                     end
                 end
 
                 S_NORM_WRITE_REQ: begin
                     if (i_mem_wr_req_ready) begin
                         norm_write_word_index <= 32'd0;
-                        state <= S_NORM_WRITE_DATA;
+                        state <= S_NORM_WRITE_PRIME;
                     end
+                end
+
+                S_NORM_WRITE_PRIME: begin
+                    norm_write_word_index <= 32'd0;
+                        state <= S_NORM_WRITE_DATA;
                 end
 
                 S_NORM_WRITE_DATA: begin

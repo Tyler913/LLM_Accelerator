@@ -19,6 +19,7 @@ module qmap_mlp_residual_add_compute_path #(
     parameter int DOWN_FRAC            = 12,
     parameter int OUT_WIDTH            = 24,
     parameter int OUT_FRAC             = 10,
+    parameter int USE_BRAM_STREAMING   = 1,
     parameter int MEM_DATA_WIDTH       = 32,
     parameter int MAX_READ_BYTES       = 1024
 )
@@ -80,6 +81,8 @@ module qmap_mlp_residual_add_compute_path #(
     localparam int VECTOR_BYTES   = INPUT_SIZE * MEM_DATA_BYTES;
     localparam int CHUNK_COUNT    = VECTOR_BYTES / MAX_READ_BYTES;
     localparam int METADATA_WORDS = 11;
+    localparam int ELEMENT_INDEX_W =
+        (INPUT_SIZE <= 1) ? 1 : $clog2(INPUT_SIZE);
 
     localparam logic [15 : 0] MAX_READ_BYTES_U16 = MAX_READ_BYTES;
     localparam logic [15 : 0] VECTOR_BYTES_U16   = VECTOR_BYTES;
@@ -94,6 +97,7 @@ module qmap_mlp_residual_add_compute_path #(
         S_STAGE_START,
         S_STAGE_WAIT,
         S_WRITE_REQ,
+        S_WRITE_PRIME,
         S_WRITE_DATA,
         S_WRITE_WAIT,
         S_DONE
@@ -176,6 +180,11 @@ module qmap_mlp_residual_add_compute_path #(
     logic stage_saturation;
     logic [31 : 0] stage_output_count;
     logic [31 : 0] stage_cycle_count;
+    logic stage_post_attn_wr_en;
+    logic stage_down_wr_en;
+    logic [ELEMENT_INDEX_W-1 : 0] stage_load_wr_addr;
+    logic [ELEMENT_INDEX_W-1 : 0] stage_output_rd_addr;
+    logic [OUT_WIDTH-1 : 0] stage_output_rd_data;
 
     genvar desc_index;
     generate
@@ -248,28 +257,68 @@ module qmap_mlp_residual_add_compute_path #(
         .o_desc_aux3_flat(reader_desc_aux3_flat)
     );
 
-    mlp_residual_add_stage #(
-        .INPUT_SIZE          (INPUT_SIZE),
-        .POST_ATTENTION_WIDTH(POST_ATTENTION_WIDTH),
-        .POST_ATTENTION_FRAC (POST_ATTENTION_FRAC),
-        .DOWN_WIDTH          (DOWN_WIDTH),
-        .DOWN_FRAC           (DOWN_FRAC),
-        .OUT_WIDTH           (OUT_WIDTH),
-        .OUT_FRAC            (OUT_FRAC)
-    ) residual_add_stage (
-        .i_clk                  (i_clk),
-        .i_rst_n                (i_rst_n),
-        .i_start                (stage_start),
-        .i_post_attn_hidden_flat(post_attn_hidden_flat),
-        .i_down_out_flat        (down_out_flat),
-        .o_busy                 (stage_busy),
-        .o_done                 (stage_done),
-        .o_error                (stage_error),
-        .o_saturation           (stage_saturation),
-        .o_output_count         (stage_output_count),
-        .o_cycle_count          (stage_cycle_count),
-        .o_layer_out_flat       (layer_out_flat)
-    );
+    generate
+        if (USE_BRAM_STREAMING != 0) begin : gen_bram_stage
+            residual_add_bram #(
+                .INPUT_SIZE(INPUT_SIZE),
+                .RESIDUAL_WIDTH(POST_ATTENTION_WIDTH),
+                .RESIDUAL_FRAC(POST_ATTENTION_FRAC),
+                .ADDEND_WIDTH(DOWN_WIDTH),
+                .ADDEND_FRAC(DOWN_FRAC),
+                .OUT_WIDTH(OUT_WIDTH),
+                .OUT_FRAC(OUT_FRAC),
+                .ELEMENT_INDEX_W(ELEMENT_INDEX_W),
+                .ACC_WIDTH(OUT_WIDTH + 2)
+            ) residual_add_stage_bram (
+                .i_clk(i_clk),
+                .i_rst_n(i_rst_n),
+                .i_residual_wr_en(stage_post_attn_wr_en),
+                .i_residual_wr_addr(stage_load_wr_addr),
+                .i_residual_wr_data(
+                    i_mem_rd_rsp_data[
+                        POST_ATTENTION_WIDTH-1 : 0]),
+                .i_addend_wr_en(stage_down_wr_en),
+                .i_addend_wr_addr(stage_load_wr_addr),
+                .i_addend_wr_data(
+                    i_mem_rd_rsp_data[DOWN_WIDTH-1 : 0]),
+                .i_start(stage_start),
+                .o_busy(stage_busy),
+                .o_done(stage_done),
+                .o_error(stage_error),
+                .o_saturation(stage_saturation),
+                .o_output_count(stage_output_count),
+                .o_cycle_count(stage_cycle_count),
+                .i_output_rd_addr(stage_output_rd_addr),
+                .o_output_rd_data(stage_output_rd_data)
+            );
+        end
+        else begin : gen_legacy_stage
+            assign stage_output_rd_data = '0;
+
+            mlp_residual_add_stage #(
+                .INPUT_SIZE          (INPUT_SIZE),
+                .POST_ATTENTION_WIDTH(POST_ATTENTION_WIDTH),
+                .POST_ATTENTION_FRAC (POST_ATTENTION_FRAC),
+                .DOWN_WIDTH          (DOWN_WIDTH),
+                .DOWN_FRAC           (DOWN_FRAC),
+                .OUT_WIDTH           (OUT_WIDTH),
+                .OUT_FRAC            (OUT_FRAC)
+            ) residual_add_stage (
+                .i_clk                  (i_clk),
+                .i_rst_n                (i_rst_n),
+                .i_start                (stage_start),
+                .i_post_attn_hidden_flat(post_attn_hidden_flat),
+                .i_down_out_flat        (down_out_flat),
+                .o_busy                 (stage_busy),
+                .o_done                 (stage_done),
+                .o_error                (stage_error),
+                .o_saturation           (stage_saturation),
+                .o_output_count         (stage_output_count),
+                .o_cycle_count          (stage_cycle_count),
+                .o_layer_out_flat       (layer_out_flat)
+            );
+        end
+    endgenerate
 
     assign reader_start = (state == S_READER_START);
     assign stage_start = (state == S_STAGE_START);
@@ -308,6 +357,27 @@ module qmap_mlp_residual_add_compute_path #(
     assign o_mem_wr_data_valid = (state == S_WRITE_DATA);
     assign o_mem_wr_data = write_data_word;
     assign o_mem_wr_data_last = (state == S_WRITE_DATA) && (write_word_index == (INPUT_SIZE - 1));
+    assign stage_load_wr_addr =
+        element_index[ELEMENT_INDEX_W-1 : 0];
+    assign stage_post_attn_wr_en =
+        (USE_BRAM_STREAMING != 0) &&
+        (state == S_READ_DATA) &&
+        i_mem_rd_rsp_valid &&
+        !read_protocol_error &&
+        (active_read_slot == R_POST_ATTN);
+    assign stage_down_wr_en =
+        (USE_BRAM_STREAMING != 0) &&
+        (state == S_READ_DATA) &&
+        i_mem_rd_rsp_valid &&
+        !read_protocol_error &&
+        (active_read_slot == R_DOWN);
+    assign stage_output_rd_addr =
+        ((state == S_WRITE_DATA) &&
+         o_mem_wr_data_valid &&
+         i_mem_wr_data_ready &&
+         !o_mem_wr_data_last) ?
+        (write_word_index[ELEMENT_INDEX_W-1 : 0] + 1'b1) :
+        write_word_index[ELEMENT_INDEX_W-1 : 0];
 
     assign element_index = (state == S_WRITE_DATA) ?
         write_word_index :
@@ -325,10 +395,23 @@ module qmap_mlp_residual_add_compute_path #(
     end
 
     always @* begin
-        write_data_word = {
-            {8{layer_out_flat[(element_index*OUT_WIDTH) + (OUT_WIDTH-1)]}},
-            layer_out_flat[element_index*OUT_WIDTH +: OUT_WIDTH]
-        };
+        if (USE_BRAM_STREAMING != 0) begin
+            write_data_word = {
+                {(MEM_DATA_WIDTH-OUT_WIDTH){
+                    stage_output_rd_data[OUT_WIDTH-1]}},
+                stage_output_rd_data
+            };
+        end
+        else begin
+            write_data_word = {
+                {(MEM_DATA_WIDTH-OUT_WIDTH){
+                    layer_out_flat[
+                        (element_index*OUT_WIDTH) +
+                        (OUT_WIDTH-1)]}},
+                layer_out_flat[
+                    element_index*OUT_WIDTH +: OUT_WIDTH]
+            };
+        end
     end
 
     always @* begin
@@ -421,8 +504,10 @@ module qmap_mlp_residual_add_compute_path #(
             read_chunk_index <= 32'd0;
             read_word_index <= 32'd0;
             write_word_index <= 32'd0;
-            post_attn_hidden_flat <= '0;
-            down_out_flat <= '0;
+            if (USE_BRAM_STREAMING == 0) begin
+                post_attn_hidden_flat <= '0;
+                down_out_flat <= '0;
+            end
             output_base_override_valid_reg <= 1'b0;
             output_base_override_addr_reg <= '0;
             o_done <= 1'b0;
@@ -519,13 +604,22 @@ module qmap_mlp_residual_add_compute_path #(
                             state <= S_DONE;
                         end
                         else begin
-                            if (active_read_slot == R_POST_ATTN) begin
-                                post_attn_hidden_flat[element_index*POST_ATTENTION_WIDTH +: POST_ATTENTION_WIDTH] <=
-                                    i_mem_rd_rsp_data[POST_ATTENTION_WIDTH-1 : 0];
-                            end
-                            else begin
-                                down_out_flat[element_index*DOWN_WIDTH +: DOWN_WIDTH] <=
-                                    i_mem_rd_rsp_data[DOWN_WIDTH-1 : 0];
+                            if (USE_BRAM_STREAMING == 0) begin
+                                if (active_read_slot == R_POST_ATTN) begin
+                                    post_attn_hidden_flat[
+                                        element_index*
+                                        POST_ATTENTION_WIDTH +:
+                                        POST_ATTENTION_WIDTH] <=
+                                        i_mem_rd_rsp_data[
+                                            POST_ATTENTION_WIDTH-1 : 0];
+                                end
+                                else begin
+                                    down_out_flat[
+                                        element_index*DOWN_WIDTH +:
+                                        DOWN_WIDTH] <=
+                                        i_mem_rd_rsp_data[
+                                            DOWN_WIDTH-1 : 0];
+                                end
                             end
 
                             if (i_mem_rd_rsp_last) begin
@@ -576,8 +670,13 @@ module qmap_mlp_residual_add_compute_path #(
                 S_WRITE_REQ: begin
                     if (i_mem_wr_req_ready) begin
                         write_word_index <= 32'd0;
-                        state <= S_WRITE_DATA;
+                        state <= S_WRITE_PRIME;
                     end
+                end
+
+                S_WRITE_PRIME: begin
+                    write_word_index <= 32'd0;
+                    state <= S_WRITE_DATA;
                 end
 
                 S_WRITE_DATA: begin

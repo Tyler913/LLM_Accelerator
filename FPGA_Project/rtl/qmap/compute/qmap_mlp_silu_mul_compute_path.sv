@@ -22,6 +22,7 @@ module qmap_mlp_silu_mul_compute_path #(
     parameter int SIGMOID_LUT_MAX_INT   = 8,
     parameter int OUT_WIDTH             = 24,
     parameter int OUT_FRAC              = 12,
+    parameter int USE_BRAM_STREAMING    = 1,
     parameter int MEM_DATA_WIDTH        = 32,
     parameter int MAX_READ_BYTES        = 1024
 )
@@ -90,6 +91,8 @@ module qmap_mlp_silu_mul_compute_path #(
     localparam int METADATA_WORDS         = 13;
     localparam int METADATA_BYTES         = METADATA_WORDS * MEM_DATA_BYTES;
     localparam int ROW_INDEX_W            = (FEATURES <= 1) ? 1 : $clog2(FEATURES);
+    localparam int LUT_INDEX_W            =
+        (SIGMOID_LUT_SIZE <= 1) ? 1 : $clog2(SIGMOID_LUT_SIZE);
 
     localparam logic [15 : 0] VECTOR_CHUNK_LEN_BYTES = VECTOR_CHUNK_BYTES;
     localparam logic [15 : 0] VECTOR_BYTES_U16       = VECTOR_BYTES;
@@ -108,6 +111,7 @@ module qmap_mlp_silu_mul_compute_path #(
         S_STAGE_START,
         S_STAGE_RUN,
         S_WRITE_REQ,
+        S_WRITE_PRIME,
         S_WRITE_DATA,
         S_WRITE_WAIT,
         S_DONE
@@ -208,6 +212,13 @@ module qmap_mlp_silu_mul_compute_path #(
     logic signed [31 : 0] stage_hidden_word_ext;
     logic stage_output_fire;
     logic [31 : 0] write_word_index;
+    logic stage_gate_wr_en;
+    logic stage_up_wr_en;
+    logic stage_lut_wr_en;
+    logic [ROW_INDEX_W-1 : 0] stage_vector_wr_addr;
+    logic [LUT_INDEX_W-1 : 0] stage_lut_wr_addr;
+    logic [ROW_INDEX_W-1 : 0] stage_hidden_rd_addr;
+    logic [OUT_WIDTH-1 : 0] stage_hidden_rd_data;
 
     genvar desc_index;
     generate
@@ -280,42 +291,95 @@ module qmap_mlp_silu_mul_compute_path #(
         .o_desc_aux3_flat(reader_desc_aux3_flat)
     );
 
-    mlp_silu_mul_stage #(
-        .FEATURES(FEATURES),
-        .IN_WIDTH(IN_WIDTH),
-        .IN_FRAC(IN_FRAC),
-        .SIGMOID_WIDTH(SIGMOID_WIDTH),
-        .SIGMOID_FRAC(SIGMOID_FRAC),
-        .SIGMOID_LUT_INDEX_FRAC(SIGMOID_LUT_INDEX_FRAC),
-        .SIGMOID_LUT_MIN_INT(SIGMOID_LUT_MIN_INT),
-        .SIGMOID_LUT_MAX_INT(SIGMOID_LUT_MAX_INT),
-        .SIGMOID_LUT_SIZE(SIGMOID_LUT_SIZE),
-        .OUT_WIDTH(OUT_WIDTH),
-        .OUT_FRAC(OUT_FRAC),
-        .ROW_INDEX_W(ROW_INDEX_W)
-    ) silu_mul_stage (
-        .i_clk(i_clk),
-        .i_rst_n(i_rst_n),
-        .i_start(stage_start),
-        .i_sigmoid_lut_flat(sigmoid_lut_flat),
-        .i_in_valid(stage_in_valid),
-        .o_in_ready(stage_in_ready),
-        .i_in_index(stage_in_index),
-        .i_gate_data(stage_gate_data),
-        .i_up_data(stage_up_data),
-        .i_in_last(stage_in_last),
-        .o_busy(stage_busy),
-        .o_done(stage_done),
-        .o_error(stage_error),
-        .o_saturation(stage_saturation),
-        .o_out_valid(stage_out_valid),
-        .i_out_ready(stage_out_ready),
-        .o_out_index(stage_out_index),
-        .o_hidden_data(stage_hidden_data),
-        .o_out_last(stage_out_last),
-        .o_input_count(stage_core_input_count),
-        .o_output_count(stage_core_output_count)
-    );
+    generate
+        if (USE_BRAM_STREAMING != 0) begin : gen_bram_stage
+            assign stage_in_ready = 1'b0;
+            assign stage_out_valid = 1'b0;
+            assign stage_out_index = '0;
+            assign stage_hidden_data = '0;
+            assign stage_out_last = 1'b0;
+
+            mlp_silu_mul_bram_stage #(
+                .FEATURES(FEATURES),
+                .IN_WIDTH(IN_WIDTH),
+                .IN_FRAC(IN_FRAC),
+                .SIGMOID_WIDTH(SIGMOID_WIDTH),
+                .SIGMOID_FRAC(SIGMOID_FRAC),
+                .SIGMOID_LUT_INDEX_FRAC(SIGMOID_LUT_INDEX_FRAC),
+                .SIGMOID_LUT_MIN_INT(SIGMOID_LUT_MIN_INT),
+                .SIGMOID_LUT_MAX_INT(SIGMOID_LUT_MAX_INT),
+                .SIGMOID_LUT_SIZE(SIGMOID_LUT_SIZE),
+                .OUT_WIDTH(OUT_WIDTH),
+                .OUT_FRAC(OUT_FRAC),
+                .ROW_INDEX_W(ROW_INDEX_W),
+                .LUT_INDEX_W(LUT_INDEX_W)
+            ) silu_mul_stage_bram (
+                .i_clk(i_clk),
+                .i_rst_n(i_rst_n),
+                .i_gate_wr_en(stage_gate_wr_en),
+                .i_gate_wr_addr(stage_vector_wr_addr),
+                .i_gate_wr_data(
+                    i_mem_rd_rsp_data[IN_WIDTH-1 : 0]),
+                .i_up_wr_en(stage_up_wr_en),
+                .i_up_wr_addr(stage_vector_wr_addr),
+                .i_up_wr_data(
+                    i_mem_rd_rsp_data[IN_WIDTH-1 : 0]),
+                .i_lut_wr_en(stage_lut_wr_en),
+                .i_lut_wr_addr(stage_lut_wr_addr),
+                .i_lut_wr_data(
+                    i_mem_rd_rsp_data[SIGMOID_WIDTH-1 : 0]),
+                .i_start(stage_start),
+                .o_busy(stage_busy),
+                .o_done(stage_done),
+                .o_error(stage_error),
+                .o_saturation(stage_saturation),
+                .o_input_count(stage_core_input_count),
+                .o_output_count(stage_core_output_count),
+                .i_hidden_rd_addr(stage_hidden_rd_addr),
+                .o_hidden_rd_data(stage_hidden_rd_data)
+            );
+        end
+        else begin : gen_legacy_stage
+            assign stage_hidden_rd_data = '0;
+
+            mlp_silu_mul_stage #(
+                .FEATURES(FEATURES),
+                .IN_WIDTH(IN_WIDTH),
+                .IN_FRAC(IN_FRAC),
+                .SIGMOID_WIDTH(SIGMOID_WIDTH),
+                .SIGMOID_FRAC(SIGMOID_FRAC),
+                .SIGMOID_LUT_INDEX_FRAC(SIGMOID_LUT_INDEX_FRAC),
+                .SIGMOID_LUT_MIN_INT(SIGMOID_LUT_MIN_INT),
+                .SIGMOID_LUT_MAX_INT(SIGMOID_LUT_MAX_INT),
+                .SIGMOID_LUT_SIZE(SIGMOID_LUT_SIZE),
+                .OUT_WIDTH(OUT_WIDTH),
+                .OUT_FRAC(OUT_FRAC),
+                .ROW_INDEX_W(ROW_INDEX_W)
+            ) silu_mul_stage (
+                .i_clk(i_clk),
+                .i_rst_n(i_rst_n),
+                .i_start(stage_start),
+                .i_sigmoid_lut_flat(sigmoid_lut_flat),
+                .i_in_valid(stage_in_valid),
+                .o_in_ready(stage_in_ready),
+                .i_in_index(stage_in_index),
+                .i_gate_data(stage_gate_data),
+                .i_up_data(stage_up_data),
+                .i_in_last(stage_in_last),
+                .o_busy(stage_busy),
+                .o_done(stage_done),
+                .o_error(stage_error),
+                .o_saturation(stage_saturation),
+                .o_out_valid(stage_out_valid),
+                .i_out_ready(stage_out_ready),
+                .o_out_index(stage_out_index),
+                .o_hidden_data(stage_hidden_data),
+                .o_out_last(stage_out_last),
+                .o_input_count(stage_core_input_count),
+                .o_output_count(stage_core_output_count)
+            );
+        end
+    endgenerate
 
     assign reader_start = (state == S_READER_START);
     assign stage_start = (state == S_STAGE_START);
@@ -347,7 +411,12 @@ module qmap_mlp_silu_mul_compute_path #(
     assign o_mem_wr_req_addr = desc_base_addr[SLOT_HIDDEN];
     assign o_mem_wr_req_len_bytes = VECTOR_BYTES_U16;
     assign o_mem_wr_data_valid = (state == S_WRITE_DATA);
-    assign o_mem_wr_data = hidden_words[write_word_index];
+    assign o_mem_wr_data =
+        (USE_BRAM_STREAMING != 0) ?
+        {{(MEM_DATA_WIDTH-OUT_WIDTH){
+            stage_hidden_rd_data[OUT_WIDTH-1]}},
+         stage_hidden_rd_data} :
+        hidden_words[write_word_index];
     assign o_mem_wr_data_last = (state == S_WRITE_DATA) && (write_word_index == (FEATURES - 1));
 
     assign stage_feed_index = (stage_input_index < FEATURES) ? stage_input_index : 32'd0;
@@ -359,6 +428,33 @@ module qmap_mlp_silu_mul_compute_path #(
     assign stage_out_ready = (state == S_STAGE_RUN);
     assign stage_output_fire = stage_out_valid && stage_out_ready;
     assign stage_hidden_word_ext = {{(32-OUT_WIDTH){stage_hidden_data[OUT_WIDTH-1]}}, stage_hidden_data};
+    assign stage_vector_wr_addr =
+        read_element_index[ROW_INDEX_W-1 : 0];
+    assign stage_lut_wr_addr =
+        read_element_index[LUT_INDEX_W-1 : 0];
+    assign stage_gate_wr_en =
+        (USE_BRAM_STREAMING != 0) &&
+        (state == S_GATE_READ) &&
+        i_mem_rd_rsp_valid &&
+        !payload_protocol_error;
+    assign stage_up_wr_en =
+        (USE_BRAM_STREAMING != 0) &&
+        (state == S_UP_READ) &&
+        i_mem_rd_rsp_valid &&
+        !payload_protocol_error;
+    assign stage_lut_wr_en =
+        (USE_BRAM_STREAMING != 0) &&
+        (state == S_LUT_READ) &&
+        i_mem_rd_rsp_valid &&
+        !payload_protocol_error &&
+        (read_element_index < SIGMOID_LUT_SIZE);
+    assign stage_hidden_rd_addr =
+        ((state == S_WRITE_DATA) &&
+         o_mem_wr_data_valid &&
+         i_mem_wr_data_ready &&
+         !o_mem_wr_data_last) ?
+        (write_word_index[ROW_INDEX_W-1 : 0] + 1'b1) :
+        write_word_index[ROW_INDEX_W-1 : 0];
 
     always @* begin
         active_read_words = VECTOR_CHUNK_WORDS;
@@ -504,6 +600,31 @@ module qmap_mlp_silu_mul_compute_path #(
         end
     end
 
+    // Keep the vector buffers on reset-free write processes so Vivado can
+    // infer RAM. Control state guarantees that each entry is written before it
+    // is read by the next phase.
+    always_ff @(posedge i_clk) begin
+        if (i_rst_n) begin
+            if ((USE_BRAM_STREAMING == 0) &&
+                (state == S_GATE_READ) &&
+                i_mem_rd_rsp_valid &&
+                !payload_protocol_error) begin
+                gate_words[read_element_index] <= i_mem_rd_rsp_data;
+            end
+            if ((USE_BRAM_STREAMING == 0) &&
+                (state == S_UP_READ) &&
+                i_mem_rd_rsp_valid &&
+                !payload_protocol_error) begin
+                up_words[read_element_index] <= i_mem_rd_rsp_data;
+            end
+            if ((USE_BRAM_STREAMING == 0) &&
+                (state == S_STAGE_RUN) &&
+                stage_output_fire) begin
+                hidden_words[stage_output_index] <= stage_hidden_word_ext;
+            end
+        end
+    end
+
     always_ff @(posedge i_clk or negedge i_rst_n) begin
         if (i_rst_n == 1'b0) begin
             state <= S_IDLE;
@@ -513,7 +634,9 @@ module qmap_mlp_silu_mul_compute_path #(
             stage_input_index <= 32'd0;
             stage_output_index <= 32'd0;
             write_word_index <= 32'd0;
-            sigmoid_lut_flat <= '0;
+            if (USE_BRAM_STREAMING == 0) begin
+                sigmoid_lut_flat <= '0;
+            end
             o_done <= 1'b0;
             o_error <= 1'b0;
             o_saturation <= 1'b0;
@@ -605,7 +728,6 @@ module qmap_mlp_silu_mul_compute_path #(
                             state <= S_DONE;
                         end
                         else begin
-                            gate_words[read_element_index] <= i_mem_rd_rsp_data;
                             if (expected_payload_last) begin
                                 read_word_index <= 32'd0;
                                 if (read_chunk_index == (VECTOR_CHUNK_COUNT - 1)) begin
@@ -639,7 +761,6 @@ module qmap_mlp_silu_mul_compute_path #(
                             state <= S_DONE;
                         end
                         else begin
-                            up_words[read_element_index] <= i_mem_rd_rsp_data;
                             if (expected_payload_last) begin
                                 read_word_index <= 32'd0;
                                 if (read_chunk_index == (VECTOR_CHUNK_COUNT - 1)) begin
@@ -673,8 +794,13 @@ module qmap_mlp_silu_mul_compute_path #(
                             state <= S_DONE;
                         end
                         else begin
-                            sigmoid_lut_flat[read_element_index*SIGMOID_WIDTH +: SIGMOID_WIDTH] <=
-                                i_mem_rd_rsp_data[SIGMOID_WIDTH-1 : 0];
+                            if (USE_BRAM_STREAMING == 0) begin
+                                sigmoid_lut_flat[
+                                    read_element_index*SIGMOID_WIDTH +:
+                                    SIGMOID_WIDTH] <=
+                                    i_mem_rd_rsp_data[
+                                        SIGMOID_WIDTH-1 : 0];
+                            end
                             if (expected_payload_last) begin
                                 read_word_index <= 32'd0;
                                 if (read_chunk_index == (LUT_CHUNK_COUNT - 1)) begin
@@ -711,7 +837,6 @@ module qmap_mlp_silu_mul_compute_path #(
                             (stage_out_last != (stage_output_index == (FEATURES - 1)))) begin
                             o_error <= 1'b1;
                         end
-                        hidden_words[stage_output_index] <= stage_hidden_word_ext;
                         stage_output_index <= stage_output_index + 1'b1;
                     end
 
@@ -719,8 +844,9 @@ module qmap_mlp_silu_mul_compute_path #(
                         if (stage_error ||
                             (stage_core_input_count != FEATURES) ||
                             (stage_core_output_count != FEATURES) ||
-                            (stage_input_index != FEATURES) ||
-                            (stage_output_index != FEATURES)) begin
+                            ((USE_BRAM_STREAMING == 0) &&
+                             ((stage_input_index != FEATURES) ||
+                              (stage_output_index != FEATURES)))) begin
                             o_error <= 1'b1;
                         end
                         o_saturation <= o_saturation || stage_saturation;
@@ -732,8 +858,13 @@ module qmap_mlp_silu_mul_compute_path #(
                 S_WRITE_REQ: begin
                     if (i_mem_wr_req_ready) begin
                         write_word_index <= 32'd0;
-                        state <= S_WRITE_DATA;
+                        state <= S_WRITE_PRIME;
                     end
+                end
+
+                S_WRITE_PRIME: begin
+                    write_word_index <= 32'd0;
+                    state <= S_WRITE_DATA;
                 end
 
                 S_WRITE_DATA: begin

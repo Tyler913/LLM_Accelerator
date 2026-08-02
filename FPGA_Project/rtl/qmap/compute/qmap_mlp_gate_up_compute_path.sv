@@ -19,7 +19,7 @@ module qmap_mlp_gate_up_compute_path #(
     parameter int OUT_FEATURES     = 3072,
     parameter int GROUP_SIZE       = 64,
     parameter int GROUP_COUNT      = INPUT_SIZE / GROUP_SIZE,
-    parameter int GROUP_PARALLEL   = 8,
+    parameter int GROUP_PARALLEL   = 1,
     parameter int ACT_WIDTH        = 24,
     parameter int ACT_FRAC         = 12,
     parameter int WEIGHT_WIDTH     = 4,
@@ -104,6 +104,15 @@ module qmap_mlp_gate_up_compute_path #(
     localparam int WEIGHT_BYTES           = OUT_FEATURES * WEIGHT_ROW_BYTES;
     localparam int SCALE_BYTES            = OUT_FEATURES * SCALE_ROW_BYTES;
     localparam int OUTPUT_BYTES           = OUT_FEATURES * MEM_DATA_BYTES;
+    localparam bit USE_BRAM_ROW_ENGINE     = (GROUP_PARALLEL == 1);
+    localparam int ROW_ACT_ADDR_WIDTH      =
+        (INPUT_SIZE <= 1) ? 1 : $clog2(INPUT_SIZE);
+    localparam int ROW_WEIGHT_ADDR_WIDTH   =
+        (WEIGHT_ROW_WORDS <= 1) ? 1 : $clog2(WEIGHT_ROW_WORDS);
+    localparam int ROW_SCALE_ADDR_WIDTH    =
+        (SCALE_ROW_WORDS <= 1) ? 1 : $clog2(SCALE_ROW_WORDS);
+    localparam int OUTPUT_ADDR_WIDTH       =
+        (OUT_FEATURES <= 1) ? 1 : $clog2(OUT_FEATURES);
 
     localparam logic [15 : 0] ACTIVATION_CHUNK_LEN_BYTES = ACTIVATION_CHUNK_BYTES;
     localparam logic [15 : 0] WEIGHT_ROW_LEN_BYTES       = WEIGHT_ROW_BYTES;
@@ -202,8 +211,13 @@ module qmap_mlp_gate_up_compute_path #(
     logic [GROUP_COUNT*SCALE_WIDTH-1 : 0] gate_scale_flat;
     logic [INPUT_SIZE*WEIGHT_WIDTH-1 : 0] up_weight_packed;
     logic [GROUP_COUNT*SCALE_WIDTH-1 : 0] up_scale_flat;
+    (* ram_style = "block" *)
     logic [31 : 0] gate_output_words [0 : OUT_FEATURES-1];
+    (* ram_style = "block" *)
     logic [31 : 0] up_output_words [0 : OUT_FEATURES-1];
+    logic [OUTPUT_ADDR_WIDTH-1 : 0] output_read_addr;
+    logic [31 : 0] gate_output_read_data;
+    logic [31 : 0] up_output_read_data;
 
     logic [31 : 0] row_index;
     logic [31 : 0] activation_chunk_index;
@@ -219,6 +233,20 @@ module qmap_mlp_gate_up_compute_path #(
     logic row_start;
     logic gate_row_done;
     logic up_row_done;
+    logic gate_row_error;
+    logic up_row_error;
+    logic row_payload_fill_ready;
+    logic row_act_wr_valid;
+    logic gate_row_weight_wr_valid;
+    logic gate_row_scale_wr_valid;
+    logic up_row_weight_wr_valid;
+    logic up_row_scale_wr_valid;
+    logic gate_row_act_wr_ready;
+    logic up_row_act_wr_ready;
+    logic gate_row_weight_wr_ready;
+    logic gate_row_scale_wr_ready;
+    logic up_row_weight_wr_ready;
+    logic up_row_scale_wr_ready;
     logic signed [ROW_ACC_WIDTH-1 : 0] gate_row_sum_q26;
     logic signed [ROW_ACC_WIDTH-1 : 0] up_row_sum_q26;
     logic signed [ROW_ACC_WIDTH-1 : 0] gate_shifted_q12_12;
@@ -299,58 +327,201 @@ module qmap_mlp_gate_up_compute_path #(
         .o_desc_aux3_flat(reader_desc_aux3_flat)
     );
 
-    q4_gemv_row_1024 #(
-        .INPUT_SIZE    (INPUT_SIZE),
-        .GROUP_SIZE    (GROUP_SIZE),
-        .GROUP_COUNT   (GROUP_COUNT),
-        .GROUP_PARALLEL(GROUP_PARALLEL),
-        .ACT_WIDTH     (ACT_WIDTH),
-        .ACT_FRAC      (ACT_FRAC),
-        .WEIGHT_WIDTH  (WEIGHT_WIDTH),
-        .SCALE_WIDTH   (SCALE_WIDTH),
-        .SCALE_FRAC    (SCALE_FRAC),
-        .PARTIAL_WIDTH (PARTIAL_WIDTH),
-        .SCALED_WIDTH  (SCALED_WIDTH),
-        .ROW_ACC_WIDTH (ROW_ACC_WIDTH)
-    ) gate_row_gemv (
-        .i_clk(i_clk),
-        .i_rst_n(i_rst_n),
-        .i_start(row_start),
-        .i_activation_flat(activation_flat),
-        .i_weight_packed(gate_weight_packed),
-        .i_scale_flat(gate_scale_flat),
-        .o_busy(),
-        .o_done(gate_row_done),
-        .o_row_sum_q26(gate_row_sum_q26)
-    );
+    generate
+        if (USE_BRAM_ROW_ENGINE) begin : gen_bram_row_engines
+            q4_gemv_row_bram #(
+                .INPUT_SIZE       (INPUT_SIZE),
+                .GROUP_SIZE       (GROUP_SIZE),
+                .GROUP_COUNT      (GROUP_COUNT),
+                .ACT_WIDTH        (ACT_WIDTH),
+                .ACT_FRAC         (ACT_FRAC),
+                .WEIGHT_WIDTH     (WEIGHT_WIDTH),
+                .SCALE_WIDTH      (SCALE_WIDTH),
+                .SCALE_FRAC       (SCALE_FRAC),
+                .PARTIAL_WIDTH    (PARTIAL_WIDTH),
+                .SCALED_WIDTH     (SCALED_WIDTH),
+                .ROW_ACC_WIDTH    (ROW_ACC_WIDTH),
+                .ACT_ADDR_WIDTH   (ROW_ACT_ADDR_WIDTH),
+                .WEIGHT_WORDS     (WEIGHT_ROW_WORDS),
+                .WEIGHT_ADDR_WIDTH(ROW_WEIGHT_ADDR_WIDTH),
+                .SCALE_WORDS      (SCALE_ROW_WORDS),
+                .SCALE_ADDR_WIDTH (ROW_SCALE_ADDR_WIDTH)
+            ) gate_row_gemv_bram (
+                .i_clk            (i_clk),
+                .i_rst_n          (i_rst_n),
+                .i_act_wr_valid   (row_act_wr_valid),
+                .o_act_wr_ready   (gate_row_act_wr_ready),
+                .i_act_wr_addr    (
+                    activation_element_index[ROW_ACT_ADDR_WIDTH-1 : 0]
+                ),
+                .i_act_wr_data    (
+                    $signed(i_mem_rd_rsp_data[ACT_WIDTH-1 : 0])
+                ),
+                .i_weight_wr_valid(gate_row_weight_wr_valid),
+                .o_weight_wr_ready(gate_row_weight_wr_ready),
+                .i_weight_wr_addr (
+                    read_word_index[ROW_WEIGHT_ADDR_WIDTH-1 : 0]
+                ),
+                .i_weight_wr_data (i_mem_rd_rsp_data),
+                .i_scale_wr_valid (gate_row_scale_wr_valid),
+                .o_scale_wr_ready (gate_row_scale_wr_ready),
+                .i_scale_wr_addr  (
+                    read_word_index[ROW_SCALE_ADDR_WIDTH-1 : 0]
+                ),
+                .i_scale_wr_data  (i_mem_rd_rsp_data),
+                .i_start          (row_start),
+                .o_busy           (),
+                .o_done           (gate_row_done),
+                .o_error          (gate_row_error),
+                .o_row_sum_q26    (gate_row_sum_q26)
+            );
 
-    q4_gemv_row_1024 #(
-        .INPUT_SIZE    (INPUT_SIZE),
-        .GROUP_SIZE    (GROUP_SIZE),
-        .GROUP_COUNT   (GROUP_COUNT),
-        .GROUP_PARALLEL(GROUP_PARALLEL),
-        .ACT_WIDTH     (ACT_WIDTH),
-        .ACT_FRAC      (ACT_FRAC),
-        .WEIGHT_WIDTH  (WEIGHT_WIDTH),
-        .SCALE_WIDTH   (SCALE_WIDTH),
-        .SCALE_FRAC    (SCALE_FRAC),
-        .PARTIAL_WIDTH (PARTIAL_WIDTH),
-        .SCALED_WIDTH  (SCALED_WIDTH),
-        .ROW_ACC_WIDTH (ROW_ACC_WIDTH)
-    ) up_row_gemv (
-        .i_clk(i_clk),
-        .i_rst_n(i_rst_n),
-        .i_start(row_start),
-        .i_activation_flat(activation_flat),
-        .i_weight_packed(up_weight_packed),
-        .i_scale_flat(up_scale_flat),
-        .o_busy(),
-        .o_done(up_row_done),
-        .o_row_sum_q26(up_row_sum_q26)
-    );
+            q4_gemv_row_bram #(
+                .INPUT_SIZE       (INPUT_SIZE),
+                .GROUP_SIZE       (GROUP_SIZE),
+                .GROUP_COUNT      (GROUP_COUNT),
+                .ACT_WIDTH        (ACT_WIDTH),
+                .ACT_FRAC         (ACT_FRAC),
+                .WEIGHT_WIDTH     (WEIGHT_WIDTH),
+                .SCALE_WIDTH      (SCALE_WIDTH),
+                .SCALE_FRAC       (SCALE_FRAC),
+                .PARTIAL_WIDTH    (PARTIAL_WIDTH),
+                .SCALED_WIDTH     (SCALED_WIDTH),
+                .ROW_ACC_WIDTH    (ROW_ACC_WIDTH),
+                .ACT_ADDR_WIDTH   (ROW_ACT_ADDR_WIDTH),
+                .WEIGHT_WORDS     (WEIGHT_ROW_WORDS),
+                .WEIGHT_ADDR_WIDTH(ROW_WEIGHT_ADDR_WIDTH),
+                .SCALE_WORDS      (SCALE_ROW_WORDS),
+                .SCALE_ADDR_WIDTH (ROW_SCALE_ADDR_WIDTH)
+            ) up_row_gemv_bram (
+                .i_clk            (i_clk),
+                .i_rst_n          (i_rst_n),
+                .i_act_wr_valid   (row_act_wr_valid),
+                .o_act_wr_ready   (up_row_act_wr_ready),
+                .i_act_wr_addr    (
+                    activation_element_index[ROW_ACT_ADDR_WIDTH-1 : 0]
+                ),
+                .i_act_wr_data    (
+                    $signed(i_mem_rd_rsp_data[ACT_WIDTH-1 : 0])
+                ),
+                .i_weight_wr_valid(up_row_weight_wr_valid),
+                .o_weight_wr_ready(up_row_weight_wr_ready),
+                .i_weight_wr_addr (
+                    read_word_index[ROW_WEIGHT_ADDR_WIDTH-1 : 0]
+                ),
+                .i_weight_wr_data (i_mem_rd_rsp_data),
+                .i_scale_wr_valid (up_row_scale_wr_valid),
+                .o_scale_wr_ready (up_row_scale_wr_ready),
+                .i_scale_wr_addr  (
+                    read_word_index[ROW_SCALE_ADDR_WIDTH-1 : 0]
+                ),
+                .i_scale_wr_data  (i_mem_rd_rsp_data),
+                .i_start          (row_start),
+                .o_busy           (),
+                .o_done           (up_row_done),
+                .o_error          (up_row_error),
+                .o_row_sum_q26    (up_row_sum_q26)
+            );
+        end
+        else begin : gen_flat_row_engines
+            assign gate_row_act_wr_ready = 1'b1;
+            assign up_row_act_wr_ready = 1'b1;
+            assign gate_row_weight_wr_ready = 1'b1;
+            assign gate_row_scale_wr_ready = 1'b1;
+            assign up_row_weight_wr_ready = 1'b1;
+            assign up_row_scale_wr_ready = 1'b1;
+            assign gate_row_error = 1'b0;
+            assign up_row_error = 1'b0;
+
+            q4_gemv_row_1024 #(
+                .INPUT_SIZE    (INPUT_SIZE),
+                .GROUP_SIZE    (GROUP_SIZE),
+                .GROUP_COUNT   (GROUP_COUNT),
+                .GROUP_PARALLEL(GROUP_PARALLEL),
+                .ACT_WIDTH     (ACT_WIDTH),
+                .ACT_FRAC      (ACT_FRAC),
+                .WEIGHT_WIDTH  (WEIGHT_WIDTH),
+                .SCALE_WIDTH   (SCALE_WIDTH),
+                .SCALE_FRAC    (SCALE_FRAC),
+                .PARTIAL_WIDTH (PARTIAL_WIDTH),
+                .SCALED_WIDTH  (SCALED_WIDTH),
+                .ROW_ACC_WIDTH (ROW_ACC_WIDTH)
+            ) gate_row_gemv_flat (
+                .i_clk             (i_clk),
+                .i_rst_n           (i_rst_n),
+                .i_start           (row_start),
+                .i_activation_flat (activation_flat),
+                .i_weight_packed   (gate_weight_packed),
+                .i_scale_flat      (gate_scale_flat),
+                .o_busy            (),
+                .o_done            (gate_row_done),
+                .o_row_sum_q26     (gate_row_sum_q26)
+            );
+
+            q4_gemv_row_1024 #(
+                .INPUT_SIZE    (INPUT_SIZE),
+                .GROUP_SIZE    (GROUP_SIZE),
+                .GROUP_COUNT   (GROUP_COUNT),
+                .GROUP_PARALLEL(GROUP_PARALLEL),
+                .ACT_WIDTH     (ACT_WIDTH),
+                .ACT_FRAC      (ACT_FRAC),
+                .WEIGHT_WIDTH  (WEIGHT_WIDTH),
+                .SCALE_WIDTH   (SCALE_WIDTH),
+                .SCALE_FRAC    (SCALE_FRAC),
+                .PARTIAL_WIDTH (PARTIAL_WIDTH),
+                .SCALED_WIDTH  (SCALED_WIDTH),
+                .ROW_ACC_WIDTH (ROW_ACC_WIDTH)
+            ) up_row_gemv_flat (
+                .i_clk             (i_clk),
+                .i_rst_n           (i_rst_n),
+                .i_start           (row_start),
+                .i_activation_flat (activation_flat),
+                .i_weight_packed   (up_weight_packed),
+                .i_scale_flat      (up_scale_flat),
+                .o_busy            (),
+                .o_done            (up_row_done),
+                .o_row_sum_q26     (up_row_sum_q26)
+            );
+        end
+    endgenerate
 
     assign reader_start = (state == S_READER_START);
-    assign row_start = (state == S_COMPUTE_START);
+    assign row_start =
+        (state == S_COMPUTE_START) &&
+        !(gate_row_error || up_row_error);
+    assign row_act_wr_valid =
+        (state == S_ACT_READ) &&
+        i_mem_rd_rsp_valid &&
+        o_mem_rd_rsp_ready &&
+        !payload_protocol_error;
+    assign gate_row_weight_wr_valid =
+        (state == S_GATE_WEIGHT_READ) &&
+        i_mem_rd_rsp_valid &&
+        o_mem_rd_rsp_ready &&
+        !payload_protocol_error;
+    assign gate_row_scale_wr_valid =
+        (state == S_GATE_SCALE_READ) &&
+        i_mem_rd_rsp_valid &&
+        o_mem_rd_rsp_ready &&
+        !payload_protocol_error;
+    assign up_row_weight_wr_valid =
+        (state == S_UP_WEIGHT_READ) &&
+        i_mem_rd_rsp_valid &&
+        o_mem_rd_rsp_ready &&
+        !payload_protocol_error;
+    assign up_row_scale_wr_valid =
+        (state == S_UP_SCALE_READ) &&
+        i_mem_rd_rsp_valid &&
+        o_mem_rd_rsp_ready &&
+        !payload_protocol_error;
+    assign row_payload_fill_ready =
+        (state == S_ACT_READ) ?
+            (gate_row_act_wr_ready && up_row_act_wr_ready) :
+        (state == S_GATE_WEIGHT_READ) ? gate_row_weight_wr_ready :
+        (state == S_GATE_SCALE_READ)  ? gate_row_scale_wr_ready :
+        (state == S_UP_WEIGHT_READ)   ? up_row_weight_wr_ready :
+        (state == S_UP_SCALE_READ)    ? up_row_scale_wr_ready :
+        1'b1;
     assign o_busy = (state != S_IDLE) && (state != S_DONE);
     assign o_state_debug = {3'd0, state};
     assign o_row_index_debug = row_index;
@@ -379,7 +550,7 @@ module qmap_mlp_gate_up_compute_path #(
          (state == S_GATE_WEIGHT_READ) ||
          (state == S_GATE_SCALE_READ) ||
          (state == S_UP_WEIGHT_READ) ||
-         (state == S_UP_SCALE_READ)) ? 1'b1 :
+         (state == S_UP_SCALE_READ)) ? row_payload_fill_ready :
         1'b0;
 
     assign o_mem_wr_req_valid =
@@ -393,11 +564,18 @@ module qmap_mlp_gate_up_compute_path #(
     assign o_mem_wr_data_valid =
         (state == S_GATE_WRITE_DATA) || (state == S_UP_WRITE_DATA);
     assign o_mem_wr_data =
-        (state == S_GATE_WRITE_DATA) ? gate_output_words[write_word_index] :
-        up_output_words[write_word_index];
+        (state == S_GATE_WRITE_DATA) ? gate_output_read_data :
+        up_output_read_data;
     assign o_mem_wr_data_last =
         ((state == S_GATE_WRITE_DATA) || (state == S_UP_WRITE_DATA)) &&
         (write_word_index == (OUT_FEATURES - 1));
+    assign output_read_addr =
+        (((state == S_GATE_WRITE_DATA) ||
+          (state == S_UP_WRITE_DATA)) &&
+         i_mem_wr_data_ready &&
+         (write_word_index < (OUT_FEATURES - 1))) ?
+        OUTPUT_ADDR_WIDTH'(write_word_index + 1'b1) :
+        OUTPUT_ADDR_WIDTH'(write_word_index);
 
     assign activation_element_index =
         (activation_chunk_index * ACTIVATION_CHUNK_WORDS) + read_word_index;
@@ -645,6 +823,17 @@ module qmap_mlp_gate_up_compute_path #(
         end
     end
 
+    // Keep the large output buffers on a reset-free write process so Vivado can
+    // infer RAM. Their contents are only consumed after every row is rewritten.
+    always_ff @(posedge i_clk) begin
+        if (i_rst_n && (state == S_STORE_ROW)) begin
+            gate_output_words[row_index] <= converted_gate_output_q12_12;
+            up_output_words[row_index] <= converted_up_output_q12_12;
+        end
+        gate_output_read_data <= gate_output_words[output_read_addr];
+        up_output_read_data <= up_output_words[output_read_addr];
+    end
+
     always_ff @(posedge i_clk or negedge i_rst_n) begin
         if (i_rst_n == 1'b0) begin
             state <= S_IDLE;
@@ -653,11 +842,13 @@ module qmap_mlp_gate_up_compute_path #(
             activation_chunk_index <= 32'd0;
             read_word_index <= 32'd0;
             write_word_index <= 32'd0;
-            activation_flat <= '0;
-            gate_weight_packed <= '0;
-            gate_scale_flat <= '0;
-            up_weight_packed <= '0;
-            up_scale_flat <= '0;
+            if (!USE_BRAM_ROW_ENGINE) begin
+                activation_flat <= '0;
+                gate_weight_packed <= '0;
+                gate_scale_flat <= '0;
+                up_weight_packed <= '0;
+                up_scale_flat <= '0;
+            end
             o_done <= 1'b0;
             o_error <= 1'b0;
             o_saturation <= 1'b0;
@@ -703,11 +894,13 @@ module qmap_mlp_gate_up_compute_path #(
                         activation_chunk_index <= 32'd0;
                         read_word_index <= 32'd0;
                         write_word_index <= 32'd0;
-                        activation_flat <= '0;
-                        gate_weight_packed <= '0;
-                        gate_scale_flat <= '0;
-                        up_weight_packed <= '0;
-                        up_scale_flat <= '0;
+                        if (!USE_BRAM_ROW_ENGINE) begin
+                            activation_flat <= '0;
+                            gate_weight_packed <= '0;
+                            gate_scale_flat <= '0;
+                            up_weight_packed <= '0;
+                            up_scale_flat <= '0;
+                        end
                         o_error <= 1'b0;
                         o_saturation <= 1'b0;
                         o_rows_done <= 32'd0;
@@ -761,14 +954,17 @@ module qmap_mlp_gate_up_compute_path #(
                 end
 
                 S_ACT_READ: begin
-                    if (i_mem_rd_rsp_valid) begin
+                    if (i_mem_rd_rsp_valid && o_mem_rd_rsp_ready) begin
                         if (payload_protocol_error) begin
                             o_error <= 1'b1;
                             state <= S_DONE;
                         end
                         else begin
-                            activation_flat[activation_element_index*ACT_WIDTH +: ACT_WIDTH] <=
-                                i_mem_rd_rsp_data[ACT_WIDTH-1 : 0];
+                            if (!USE_BRAM_ROW_ENGINE) begin
+                                activation_flat[
+                                    activation_element_index*ACT_WIDTH +: ACT_WIDTH
+                                ] <= i_mem_rd_rsp_data[ACT_WIDTH-1 : 0];
+                            end
                             if (expected_payload_last) begin
                                 read_word_index <= 32'd0;
                                 if (activation_chunk_index == (ACTIVATION_CHUNK_COUNT - 1)) begin
@@ -789,10 +985,12 @@ module qmap_mlp_gate_up_compute_path #(
 
                 S_ROW_SETUP: begin
                     read_word_index <= 32'd0;
-                    gate_weight_packed <= '0;
-                    gate_scale_flat <= '0;
-                    up_weight_packed <= '0;
-                    up_scale_flat <= '0;
+                    if (!USE_BRAM_ROW_ENGINE) begin
+                        gate_weight_packed <= '0;
+                        gate_scale_flat <= '0;
+                        up_weight_packed <= '0;
+                        up_scale_flat <= '0;
+                    end
                     state <= S_GATE_WEIGHT_REQ;
                 end
 
@@ -804,14 +1002,17 @@ module qmap_mlp_gate_up_compute_path #(
                 end
 
                 S_GATE_WEIGHT_READ: begin
-                    if (i_mem_rd_rsp_valid) begin
+                    if (i_mem_rd_rsp_valid && o_mem_rd_rsp_ready) begin
                         if (payload_protocol_error) begin
                             o_error <= 1'b1;
                             state <= S_DONE;
                         end
                         else begin
-                            gate_weight_packed[read_word_index*MEM_DATA_WIDTH +: MEM_DATA_WIDTH] <=
-                                i_mem_rd_rsp_data;
+                            if (!USE_BRAM_ROW_ENGINE) begin
+                                gate_weight_packed[
+                                    read_word_index*MEM_DATA_WIDTH +: MEM_DATA_WIDTH
+                                ] <= i_mem_rd_rsp_data;
+                            end
                             if (expected_payload_last) begin
                                 read_word_index <= 32'd0;
                                 state <= S_GATE_SCALE_REQ;
@@ -831,14 +1032,17 @@ module qmap_mlp_gate_up_compute_path #(
                 end
 
                 S_GATE_SCALE_READ: begin
-                    if (i_mem_rd_rsp_valid) begin
+                    if (i_mem_rd_rsp_valid && o_mem_rd_rsp_ready) begin
                         if (payload_protocol_error) begin
                             o_error <= 1'b1;
                             state <= S_DONE;
                         end
                         else begin
-                            gate_scale_flat[read_word_index*MEM_DATA_WIDTH +: MEM_DATA_WIDTH] <=
-                                i_mem_rd_rsp_data;
+                            if (!USE_BRAM_ROW_ENGINE) begin
+                                gate_scale_flat[
+                                    read_word_index*MEM_DATA_WIDTH +: MEM_DATA_WIDTH
+                                ] <= i_mem_rd_rsp_data;
+                            end
                             if (expected_payload_last) begin
                                 read_word_index <= 32'd0;
                                 state <= S_UP_WEIGHT_REQ;
@@ -858,14 +1062,17 @@ module qmap_mlp_gate_up_compute_path #(
                 end
 
                 S_UP_WEIGHT_READ: begin
-                    if (i_mem_rd_rsp_valid) begin
+                    if (i_mem_rd_rsp_valid && o_mem_rd_rsp_ready) begin
                         if (payload_protocol_error) begin
                             o_error <= 1'b1;
                             state <= S_DONE;
                         end
                         else begin
-                            up_weight_packed[read_word_index*MEM_DATA_WIDTH +: MEM_DATA_WIDTH] <=
-                                i_mem_rd_rsp_data;
+                            if (!USE_BRAM_ROW_ENGINE) begin
+                                up_weight_packed[
+                                    read_word_index*MEM_DATA_WIDTH +: MEM_DATA_WIDTH
+                                ] <= i_mem_rd_rsp_data;
+                            end
                             if (expected_payload_last) begin
                                 read_word_index <= 32'd0;
                                 state <= S_UP_SCALE_REQ;
@@ -885,14 +1092,17 @@ module qmap_mlp_gate_up_compute_path #(
                 end
 
                 S_UP_SCALE_READ: begin
-                    if (i_mem_rd_rsp_valid) begin
+                    if (i_mem_rd_rsp_valid && o_mem_rd_rsp_ready) begin
                         if (payload_protocol_error) begin
                             o_error <= 1'b1;
                             state <= S_DONE;
                         end
                         else begin
-                            up_scale_flat[read_word_index*MEM_DATA_WIDTH +: MEM_DATA_WIDTH] <=
-                                i_mem_rd_rsp_data;
+                            if (!USE_BRAM_ROW_ENGINE) begin
+                                up_scale_flat[
+                                    read_word_index*MEM_DATA_WIDTH +: MEM_DATA_WIDTH
+                                ] <= i_mem_rd_rsp_data;
+                            end
                             if (expected_payload_last) begin
                                 read_word_index <= 32'd0;
                                 state <= S_COMPUTE_START;
@@ -905,18 +1115,26 @@ module qmap_mlp_gate_up_compute_path #(
                 end
 
                 S_COMPUTE_START: begin
-                    state <= S_COMPUTE_WAIT;
+                    if (gate_row_error || up_row_error) begin
+                        o_error <= 1'b1;
+                        state <= S_DONE;
+                    end
+                    else begin
+                        state <= S_COMPUTE_WAIT;
+                    end
                 end
 
                 S_COMPUTE_WAIT: begin
-                    if (gate_row_done && up_row_done) begin
+                    if (gate_row_error || up_row_error) begin
+                        o_error <= 1'b1;
+                        state <= S_DONE;
+                    end
+                    else if (gate_row_done && up_row_done) begin
                         state <= S_STORE_ROW;
                     end
                 end
 
                 S_STORE_ROW: begin
-                    gate_output_words[row_index] <= converted_gate_output_q12_12;
-                    up_output_words[row_index] <= converted_up_output_q12_12;
                     o_last_gate_row_sum_q26 <= gate_row_sum_q26;
                     o_last_up_row_sum_q26 <= up_row_sum_q26;
                     o_last_gate_output_q12_12 <= converted_gate_output_q12_12;

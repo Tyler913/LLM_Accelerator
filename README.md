@@ -2,22 +2,39 @@
 
 FPGA-based LLM accelerator project inspired by Hummingbird+.
 
-Latest hardware checkpoint: the QMAP row1024 PL AXI-master smoke path passed
-on board on 2026-06-23. Start with
-[Source/CURRENT_STATE.md](Source/CURRENT_STATE.md) for the current handoff and
-next step.
+Latest hardware PASS: the QMAP row1024 PL AXI-master smoke path passed on board
+on 2026-06-23. No full 28-layer hardware PASS is claimed yet.
 
-Latest end-to-end local checkpoint (2026-07-13): one software-like AXI-Lite
-launch now runs token id `374` through tied-Q4 embedding, all 28 complete
-transformer layers, final RMSNorm, and the full `151936`-row tied LM head in one
-continuous XSim memory-model path. Every write matches the propagated Python
-golden lineage, the layer mask is `0x0fffffff`, all `9496` tail tiles complete,
-and the exact result is token `537`, score `1155032971`. The independent timing
-audit is at
-`Temp/embedding_full28_axil_tail_regression/20260713_164001/xsim/timing_audit.json`.
-The next implementation step is persistent multi-token decode with retained KV
-cache, token-position advance, and selected-token feedback; do not repeat smaller
-board, DDR, or row tests without a specific integration failure.
+Current board candidate (2026-08-02): the complete Qwen3-0.6B
+`token -> tied-Q4 embedding -> 28 transformer layers -> final RMSNorm ->
+151936-row tied LM head` path is now integrated into the Vivado block design.
+The final Vivado export is under `Temp/final_vivado_export_20260802`. The routed
+implementation uses `43,726 / 47,232` CLB LUTs (`92.58%`),
+`72,621 / 94,464` registers (`76.88%`), `8,799 / 8,820` CLBs (`99.76%`),
+`94.5 / 150` BRAM tiles, and `68 / 240` DSPs. WNS is `+0.208 ns`, WHS is
+`+0.010 ns`, all `119,383` routable nets are fully routed, and there is no
+routing/DRC/methodology Error or Critical Warning.
+
+The complete 394,547,200-byte PL-DDR runtime is packed into 61 verified
+segments. Its 281 QMAP packets, model-manifest provenance, non-overlap/aperture
+rules, and 397 zero-initialized accelerator-writable regions are release-gated.
+The short-path Vitis workspace `F:\vws` builds the AXI-Lite control smoke and
+the full28 persistent two-token model smoke from the current XSA. The single
+requested final full28 no-reset two-token XSim, including its independent
+exact-write, producer-before-consumer, address, timing, and retained-KV audit,
+passed in `Temp/final_qwen3_full28_20260802/20260802_162706`. Its exact outputs
+are token/score `28458/1227344433` at position 0 and `64/1015661901` at
+position 1.
+The self-contained release `Temp/boardready_qwen3_full28_20260801` independently
+verifies 92 files and records state
+`BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`. The next action is physical
+control smoke followed by model smoke; no full28 hardware PASS is claimed yet.
+Start with
+[Source/CURRENT_STATE.md](Source/CURRENT_STATE.md) for the live handoff.
+
+The long section below is retained as implementation history. It records how
+the current full-depth datapath was assembled and validated; it is not the
+current next-step list.
 
 Detailed local RTL history: Layer 0 has passed through attention,
 post-attention residual/RMSNorm, MLP gate/up projection, MLP SiLU/multiply,

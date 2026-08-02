@@ -265,8 +265,8 @@ def audit_trace(trace_path: Path, scenario_name: str) -> dict[str, Any]:
         "hidden": 4,
         "gamma": 4,
         "norm": 4,
-        "weight": 75968,
-        "scale": 9496,
+        "weight": 151936,
+        "scale": 151936,
     }
     for category, expected_count in expected_tail_reads.items():
         require(

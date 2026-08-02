@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +46,32 @@ LAYER_PERSISTENT_FILES = {
     "down_scale": "mlp_down_scale",
 }
 
+TIED_HIDDEN_SIZE = 1024
+TIED_Q4_GROUP_SIZE = 64
+TIED_WEIGHT_ROW_BYTES = TIED_HIDDEN_SIZE // 2
+TIED_SCALE_ROW_BYTES = (TIED_HIDDEN_SIZE // TIED_Q4_GROUP_SIZE) * 2
+QMAP_MAGIC = 0x50414D51
+QMAP_VERSION = 1
+QMAP_HEADER_BYTES = 256
+QMAP_DESCRIPTOR_BYTES = 128
+QMAP_DESCRIPTOR_TABLE_WORD_OFFSET = QMAP_HEADER_BYTES // 4
+QMAP_DESCRIPTOR_WORDS = QMAP_DESCRIPTOR_BYTES // 4
+QMAP_DESC_BASE_LO_WORD = 8
+QMAP_DESC_BASE_HI_WORD = 9
+FINAL_TAIL_WEIGHT_DESCRIPTOR_SLOT = 2
+FINAL_TAIL_SCALE_DESCRIPTOR_SLOT = 3
+FINAL_TAIL_DESCRIPTOR_PREFIX_WORDS = (
+    QMAP_DESCRIPTOR_TABLE_WORD_OFFSET
+    + (FINAL_TAIL_SCALE_DESCRIPTOR_SLOT + 1) * QMAP_DESCRIPTOR_WORDS
+)
+
+
+@dataclass(frozen=True)
+class Words32HexInspection:
+    nbytes: int
+    sha256: str
+    captured_words: tuple[int, ...] = ()
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -77,9 +106,26 @@ def resolve_asset(manifest_dir: Path, value: str) -> Path:
     return resolved.resolve()
 
 
-def inspect_words32_hex(path: Path) -> tuple[int, str]:
+def inspect_words32_hex(
+    path: Path,
+    *,
+    capture_start_word: int | None = None,
+    capture_word_count: int = 0,
+) -> Words32HexInspection:
+    if capture_start_word is None:
+        if capture_word_count != 0:
+            raise ValueError("capture_word_count requires capture_start_word")
+    elif capture_start_word < 0 or capture_word_count < 1:
+        raise ValueError("captured words32 range must be nonempty and nonnegative")
+
     digest = hashlib.sha256()
     words = 0
+    captured_words: list[int] = []
+    capture_end_word = (
+        capture_start_word + capture_word_count
+        if capture_start_word is not None
+        else None
+    )
     with path.open("rb") as file:
         for raw_line in file:
             digest.update(raw_line)
@@ -89,20 +135,195 @@ def inspect_words32_hex(path: Path) -> tuple[int, str]:
             if len(text) != 8:
                 raise ValueError(f"{path}: expected one 8-digit word per line")
             try:
-                int(text, 16)
+                value = int(text, 16)
             except ValueError as exc:
                 raise ValueError(f"{path}: invalid hexadecimal word {text!r}") from exc
+            if (
+                capture_start_word is not None
+                and capture_start_word <= words < capture_end_word
+            ):
+                captured_words.append(value)
             words += 1
     if words == 0:
         raise ValueError(f"{path}: empty words32 hex file")
-    return words * 4, digest.hexdigest()
+    if (
+        capture_start_word is not None
+        and len(captured_words) != capture_word_count
+    ):
+        raise ValueError(
+            f"{path}: requested words32 slice "
+            f"[{capture_start_word}, {capture_end_word}) exceeds {words} words"
+        )
+    return Words32HexInspection(
+        nbytes=words * 4,
+        sha256=digest.hexdigest(),
+        captured_words=tuple(captured_words),
+    )
 
 
-def relative_to_manifest(path: Path, manifest_dir: Path) -> str:
+def inspect_tied_matrix_row(
+    *,
+    canonical_path: Path,
+    row_path: Path,
+    token_id: int,
+    vocab_size: int,
+    row_bytes: int,
+    label: str,
+) -> tuple[Words32HexInspection, Words32HexInspection]:
+    if vocab_size < 1:
+        raise ValueError("final-tail vocab_size must be positive")
+    if token_id < 0 or token_id >= vocab_size:
+        raise ValueError(
+            f"manifest token_id {token_id} is outside tied matrix rows 0..{vocab_size - 1}"
+        )
+    if row_bytes < 1 or (row_bytes & 3) != 0:
+        raise ValueError(f"{label}: tied row size must be positive and word aligned")
+
+    row_words = row_bytes // 4
+    row_inspection = inspect_words32_hex(
+        row_path,
+        capture_start_word=0,
+        capture_word_count=row_words,
+    )
+    if row_inspection.nbytes != row_bytes:
+        raise ValueError(
+            f"{row_path}: expected one {label} row ({row_bytes} bytes), "
+            f"got {row_inspection.nbytes} bytes"
+        )
+
+    canonical_inspection = inspect_words32_hex(
+        canonical_path,
+        capture_start_word=token_id * row_words,
+        capture_word_count=row_words,
+    )
+    expected_matrix_bytes = vocab_size * row_bytes
+    if canonical_inspection.nbytes != expected_matrix_bytes:
+        raise ValueError(
+            f"{canonical_path}: expected complete {label} matrix "
+            f"({vocab_size} rows, {expected_matrix_bytes} bytes), "
+            f"got {canonical_inspection.nbytes} bytes"
+        )
+    if canonical_inspection.captured_words != row_inspection.captured_words:
+        raise ValueError(
+            f"{row_path}: does not match token {token_id} in canonical {label} matrix"
+        )
+    return canonical_inspection, row_inspection
+
+
+def parse_final_tail_qmap_descriptor_bases(
+    *,
+    path: Path,
+    inspection: Words32HexInspection,
+    expected_qmap_base: int,
+    expected_weight_base: int,
+    expected_scale_base: int,
+) -> tuple[int, int]:
+    words = inspection.captured_words
+    if len(words) != FINAL_TAIL_DESCRIPTOR_PREFIX_WORDS:
+        raise ValueError(
+            f"{path}: final-tail QMAP prefix must contain exactly "
+            f"{FINAL_TAIL_DESCRIPTOR_PREFIX_WORDS} captured words"
+        )
+
+    def word64(index: int) -> int:
+        return words[index] | (words[index + 1] << 32)
+
+    if words[0] != QMAP_MAGIC or words[1] != QMAP_VERSION:
+        raise ValueError(f"{path}: invalid QMAP magic/version")
+    if words[2] != QMAP_HEADER_BYTES or words[3] != QMAP_DESCRIPTOR_BYTES:
+        raise ValueError(f"{path}: unsupported QMAP header/descriptor size")
+
+    descriptor_count = words[4]
+    descriptor_capacity = words[5]
+    if (
+        descriptor_count <= FINAL_TAIL_SCALE_DESCRIPTOR_SLOT
+        or descriptor_capacity < descriptor_count
+    ):
+        raise ValueError(f"{path}: final-tail QMAP descriptor table is incomplete")
+
+    descriptor_table_addr = word64(6)
+    qmap_base = word64(10)
+    image_bytes = word64(12)
+    if qmap_base != expected_qmap_base:
+        raise ValueError(
+            f"{path}: QMAP header base 0x{qmap_base:016X} does not match "
+            f"manifest base 0x{expected_qmap_base:016X}"
+        )
+    if descriptor_table_addr != expected_qmap_base + QMAP_HEADER_BYTES:
+        raise ValueError(f"{path}: QMAP descriptor-table address is inconsistent")
+    if image_bytes != inspection.nbytes:
+        raise ValueError(
+            f"{path}: QMAP header image size {image_bytes} does not match "
+            f"decoded words32 size {inspection.nbytes}"
+        )
+    if (
+        QMAP_HEADER_BYTES + descriptor_count * QMAP_DESCRIPTOR_BYTES
+        > inspection.nbytes
+    ):
+        raise ValueError(f"{path}: QMAP descriptor table escapes the image")
+
+    def descriptor_base(slot: int) -> int:
+        start = QMAP_DESCRIPTOR_TABLE_WORD_OFFSET + slot * QMAP_DESCRIPTOR_WORDS
+        return word64(start + QMAP_DESC_BASE_LO_WORD)
+
+    weight_base = descriptor_base(FINAL_TAIL_WEIGHT_DESCRIPTOR_SLOT)
+    scale_base = descriptor_base(FINAL_TAIL_SCALE_DESCRIPTOR_SLOT)
+    if weight_base != expected_weight_base:
+        raise ValueError(
+            f"{path}: QMAP weight descriptor base 0x{weight_base:016X} does not "
+            f"match tied base 0x{expected_weight_base:016X}"
+        )
+    if scale_base != expected_scale_base:
+        raise ValueError(
+            f"{path}: QMAP scale descriptor base 0x{scale_base:016X} does not "
+            f"match tied base 0x{expected_scale_base:016X}"
+        )
+    return weight_base, scale_base
+
+
+def read_hex_scalar(path: Path, *, label: str) -> int:
+    values = [
+        line.strip()
+        for line in path.read_text(encoding="ascii").splitlines()
+        if line.strip()
+    ]
+    if len(values) != 1:
+        raise ValueError(f"{path}: expected exactly one {label} hexadecimal value")
     try:
-        return path.relative_to(manifest_dir.resolve()).as_posix()
+        value = int(values[0], 16)
+    except ValueError as exc:
+        raise ValueError(f"{path}: invalid {label} hexadecimal value") from exc
+    if value < 0 or value > 0xFFFFFFFFFFFFFFFF:
+        raise ValueError(f"{path}: {label} does not fit in 64 bits")
+    return value
+
+
+def relative_to_output(path: Path, output_dir: Path) -> str:
+    try:
+        return Path(os.path.relpath(path.resolve(), output_dir.resolve())).as_posix()
     except ValueError:
-        return path.as_posix()
+        return path.resolve().as_posix()
+
+
+def write_text_atomic(path: Path, text: str, *, encoding: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding=encoding,
+            newline="\n",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as file:
+            file.write(text)
+            temporary_path = Path(file.name)
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
 
 
 def u64(value: int) -> str:
@@ -232,18 +453,32 @@ def make_header(manifest: dict[str, Any], manifest_sha256: str) -> str:
 
 
 def build_load_plan(
-    manifest: dict[str, Any], manifest_path: Path, manifest_sha256: str
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    manifest_sha256: str,
+    load_plan_path: Path,
 ) -> dict[str, Any]:
     manifest_dir = manifest_path.parent.resolve()
+    load_plan_dir = load_plan_path.parent.resolve()
     runtime = manifest["runtime_context"]
     entries: list[dict[str, Any]] = []
     occupied: dict[int, dict[str, Any]] = {}
 
-    def add_file(name: str, address: int, relative_path: str, encoding: str) -> None:
+    def add_file(
+        name: str,
+        address: int,
+        relative_path: str,
+        encoding: str,
+        inspection: Words32HexInspection | None = None,
+    ) -> dict[str, Any]:
         path = resolve_asset(manifest_dir, relative_path)
         if encoding == "words32_hex_le":
-            nbytes, sha256 = inspect_words32_hex(path)
+            file_inspection = inspection or inspect_words32_hex(path)
+            nbytes = file_inspection.nbytes
+            sha256 = file_inspection.sha256
         elif encoding == "binary":
+            if inspection is not None:
+                raise ValueError("preinspection is only supported for words32 hex files")
             nbytes = path.stat().st_size
             if nbytes == 0:
                 raise ValueError(f"{path}: empty binary file")
@@ -257,19 +492,48 @@ def build_load_plan(
                     f"load alias size mismatch at 0x{address:016X}: "
                     f"{prior['name']} vs {name}"
                 )
+            if prior["encoding"] != encoding or prior["sha256"] != sha256:
+                raise ValueError(
+                    f"load alias content mismatch at 0x{address:016X}: "
+                    f"{prior['name']} vs {name}"
+                )
             prior.setdefault("aliases", []).append(name)
-            return
+            return prior
         entry = {
             "operation": "file",
             "name": name,
             "address": address,
             "nbytes": nbytes,
             "encoding": encoding,
-            "path": relative_to_manifest(path, manifest_dir),
+            "path": relative_to_output(path, load_plan_dir),
             "sha256": sha256,
         }
         occupied[address] = entry
         entries.append(entry)
+        return entry
+
+    def add_verified_slice(
+        entry: dict[str, Any],
+        *,
+        name: str,
+        source_path: Path,
+        source_inspection: Words32HexInspection,
+        token_id: int,
+        row_bytes: int,
+    ) -> None:
+        entry.setdefault("verified_slices", []).append(
+            {
+                "name": name,
+                "relationship": "verified_exact_slice",
+                "token_id": token_id,
+                "source_path": relative_to_output(source_path, load_plan_dir),
+                "source_nbytes": source_inspection.nbytes,
+                "source_sha256": source_inspection.sha256,
+                "canonical_byte_offset": token_id * row_bytes,
+                "canonical_nbytes": row_bytes,
+                "validation": "exact_words32_match",
+            }
+        )
 
     def add_zero(name: str, address: int, nbytes: int) -> None:
         entries.append(
@@ -282,8 +546,112 @@ def build_load_plan(
         )
 
     embedding = manifest["embedding"]
-    add_file("tied_embedding_weight", int(embedding["weight_base"]), embedding["files"]["weight"], "words32_hex_le")
-    add_file("tied_embedding_scale", int(embedding["scale_base"]), embedding["files"]["scale"], "words32_hex_le")
+    final_tail = manifest["final_tail"]
+    token_id = int(manifest["token_id"])
+    vocab_size = int(final_tail["vocab_size"])
+
+    embedding_weight_path = resolve_asset(manifest_dir, embedding["files"]["weight"])
+    embedding_scale_path = resolve_asset(manifest_dir, embedding["files"]["scale"])
+    lm_head_weight_path = resolve_asset(
+        manifest_dir, final_tail["files"]["lm_head_weight"]
+    )
+    lm_head_scale_path = resolve_asset(
+        manifest_dir, final_tail["files"]["lm_head_scale"]
+    )
+    lm_head_weight_base_path = resolve_asset(
+        manifest_dir, final_tail["files"]["weight_base_addr"]
+    )
+    lm_head_scale_base_path = resolve_asset(
+        manifest_dir, final_tail["files"]["scale_base_addr"]
+    )
+    final_tail_qmap_path = resolve_asset(
+        manifest_dir, final_tail["files"]["qmap_image"]
+    )
+    final_tail_qmap_inspection = inspect_words32_hex(
+        final_tail_qmap_path,
+        capture_start_word=0,
+        capture_word_count=FINAL_TAIL_DESCRIPTOR_PREFIX_WORDS,
+    )
+    tied_weight_base = int(embedding["weight_base"])
+    tied_scale_base = int(embedding["scale_base"])
+    qmap_weight_base, qmap_scale_base = parse_final_tail_qmap_descriptor_bases(
+        path=final_tail_qmap_path,
+        inspection=final_tail_qmap_inspection,
+        expected_qmap_base=int(final_tail["qmap_base"]),
+        expected_weight_base=tied_weight_base,
+        expected_scale_base=tied_scale_base,
+    )
+    sidecar_weight_base = read_hex_scalar(
+        lm_head_weight_base_path, label="LM-head weight base"
+    )
+    sidecar_scale_base = read_hex_scalar(
+        lm_head_scale_base_path, label="LM-head scale base"
+    )
+    if sidecar_weight_base != tied_weight_base:
+        raise ValueError(
+            "final-tail LM-head weight descriptor does not match tied embedding base"
+        )
+    if sidecar_scale_base != tied_scale_base:
+        raise ValueError(
+            "final-tail LM-head scale descriptor does not match tied embedding base"
+        )
+    if qmap_weight_base != tied_weight_base or qmap_weight_base != sidecar_weight_base:
+        raise ValueError(
+            "final-tail QMAP weight descriptor does not match tied embedding/sidecar base"
+        )
+    if qmap_scale_base != tied_scale_base or qmap_scale_base != sidecar_scale_base:
+        raise ValueError(
+            "final-tail QMAP scale descriptor does not match tied embedding/sidecar base"
+        )
+    lm_head_weight_inspection, embedding_weight_inspection = inspect_tied_matrix_row(
+        canonical_path=lm_head_weight_path,
+        row_path=embedding_weight_path,
+        token_id=token_id,
+        vocab_size=vocab_size,
+        row_bytes=TIED_WEIGHT_ROW_BYTES,
+        label="tied-Q4 weight",
+    )
+    lm_head_scale_inspection, embedding_scale_inspection = inspect_tied_matrix_row(
+        canonical_path=lm_head_scale_path,
+        row_path=embedding_scale_path,
+        token_id=token_id,
+        vocab_size=vocab_size,
+        row_bytes=TIED_SCALE_ROW_BYTES,
+        label="tied-Q4 scale",
+    )
+
+    tied_weight_entry = add_file(
+        "tied_embedding_weight",
+        int(embedding["weight_base"]),
+        final_tail["files"]["lm_head_weight"],
+        "words32_hex_le",
+        lm_head_weight_inspection,
+    )
+    tied_weight_entry.setdefault("aliases", []).append("tied_lm_head_weight_alias")
+    add_verified_slice(
+        tied_weight_entry,
+        name="tied_embedding_weight_row",
+        source_path=embedding_weight_path,
+        source_inspection=embedding_weight_inspection,
+        token_id=token_id,
+        row_bytes=TIED_WEIGHT_ROW_BYTES,
+    )
+    tied_scale_entry = add_file(
+        "tied_embedding_scale",
+        int(embedding["scale_base"]),
+        final_tail["files"]["lm_head_scale"],
+        "words32_hex_le",
+        lm_head_scale_inspection,
+    )
+    tied_scale_entry.setdefault("aliases", []).append("tied_lm_head_scale_alias")
+    add_verified_slice(
+        tied_scale_entry,
+        name="tied_embedding_scale_row",
+        source_path=embedding_scale_path,
+        source_inspection=embedding_scale_inspection,
+        token_id=token_id,
+        row_bytes=TIED_SCALE_ROW_BYTES,
+    )
 
     for layer in manifest["layers"]:
         layer_id = int(layer["layer_id"])
@@ -303,10 +671,13 @@ def build_load_plan(
                 "words32_hex_le",
             )
 
-    final_tail = manifest["final_tail"]
-    add_file("final_tail_qmap", int(final_tail["qmap_base"]), final_tail["files"]["qmap_image"], "words32_hex_le")
-    add_file("tied_lm_head_weight_alias", int(embedding["weight_base"]), final_tail["files"]["lm_head_weight"], "words32_hex_le")
-    add_file("tied_lm_head_scale_alias", int(embedding["scale_base"]), final_tail["files"]["lm_head_scale"], "words32_hex_le")
+    add_file(
+        "final_tail_qmap",
+        int(final_tail["qmap_base"]),
+        final_tail["files"]["qmap_image"],
+        "words32_hex_le",
+        final_tail_qmap_inspection,
+    )
 
     rope_files = runtime.get("files")
     if not rope_files or not rope_files.get("binary"):
@@ -337,7 +708,8 @@ def build_load_plan(
     return {
         "format_version": 1,
         "name": "qwen3_0p6b_pl_ddr_runtime_load_plan",
-        "source_manifest": manifest_path.name,
+        "path_base": "load_plan_directory",
+        "source_manifest": relative_to_output(manifest_path, load_plan_dir),
         "source_manifest_sha256": manifest_sha256,
         "layer_count": layer_count,
         "runtime_context_required": True,
@@ -359,17 +731,23 @@ def main() -> None:
     manifest_sha256 = sha256_file(manifest_path)
     validate_runtime_contract(manifest)
 
+    output_header_path = args.output_header.resolve()
+    load_plan_path = (
+        args.load_plan.resolve()
+        if args.load_plan is not None
+        else manifest_path.with_name("pl_ddr_runtime_load_plan.json")
+    )
     header_text = make_header(manifest, manifest_sha256)
-    args.output_header.parent.mkdir(parents=True, exist_ok=True)
-    args.output_header.write_text(header_text, encoding="ascii")
+    load_plan = build_load_plan(
+        manifest, manifest_path, manifest_sha256, load_plan_path
+    )
+    load_plan_text = json.dumps(load_plan, indent=2) + "\n"
 
-    load_plan_path = args.load_plan or manifest_path.with_name("pl_ddr_runtime_load_plan.json")
-    load_plan = build_load_plan(manifest, manifest_path, manifest_sha256)
-    load_plan_path.parent.mkdir(parents=True, exist_ok=True)
-    load_plan_path.write_text(json.dumps(load_plan, indent=2) + "\n", encoding="ascii")
+    write_text_atomic(output_header_path, header_text, encoding="ascii")
+    write_text_atomic(load_plan_path, load_plan_text, encoding="ascii")
 
     print("PASS: exported QMAP runtime C configuration and PL-DDR load plan")
-    print(f"header={args.output_header}")
+    print(f"header={output_header_path}")
     print(f"load_plan={load_plan_path}")
     print(f"entries={load_plan['entry_count']}")
     print(f"file_bytes={load_plan['total_file_bytes']}")

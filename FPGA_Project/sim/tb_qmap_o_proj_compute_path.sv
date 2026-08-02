@@ -3,6 +3,14 @@
 
 `include "qmap_defs.svh"
 
+`ifndef TB_GROUP_PARALLEL
+`define TB_GROUP_PARALLEL 8
+`endif
+
+`ifndef TB_TIMEOUT_CYCLES
+`define TB_TIMEOUT_CYCLES 2500000
+`endif
+
 module tb_qmap_o_proj_compute_path;
 
     localparam int ADDR_WIDTH       = 64;
@@ -12,7 +20,7 @@ module tb_qmap_o_proj_compute_path;
     localparam int OUT_FEATURES     = 1024;
     localparam int GROUP_SIZE       = 64;
     localparam int GROUP_COUNT      = INPUT_SIZE / GROUP_SIZE;
-    localparam int GROUP_PARALLEL   = 8;
+    localparam int GROUP_PARALLEL   = `TB_GROUP_PARALLEL;
     localparam int ACT_WIDTH        = 24;
     localparam int WEIGHT_WIDTH     = 4;
     localparam int SCALE_WIDTH      = 16;
@@ -485,7 +493,8 @@ module tb_qmap_o_proj_compute_path;
             @(negedge clk);
             start = 1'b0;
 
-            while ((done != 1'b1) && (cycle_count < 2500000)) begin
+            while ((done != 1'b1) &&
+                   (cycle_count < `TB_TIMEOUT_CYCLES)) begin
                 @(negedge clk);
             end
             if (done != 1'b1) begin

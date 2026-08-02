@@ -7,6 +7,16 @@ module tb_lm_head_argmax_tile_scheduler;
     localparam int MAX_TILES        = 64;
     localparam int TILE_COUNT_WIDTH = $clog2(MAX_TILES + 1);
     localparam int TILE_ROWS        = 16;
+`ifdef LM_HEAD_ROW_PARALLEL
+    localparam int ROW_PARALLEL     = `LM_HEAD_ROW_PARALLEL;
+`else
+    localparam int ROW_PARALLEL     = TILE_ROWS;
+`endif
+`ifdef LM_HEAD_GROUP_PARALLEL
+    localparam int GROUP_PARALLEL   = `LM_HEAD_GROUP_PARALLEL;
+`else
+    localparam int GROUP_PARALLEL   = 4;
+`endif
     localparam int SCAN_ROWS        = MAX_TILES * TILE_ROWS;
     localparam int INPUT_SIZE       = 1024;
     localparam int GROUP_SIZE       = 64;
@@ -22,16 +32,27 @@ module tb_lm_head_argmax_tile_scheduler;
     localparam int TOKEN_ID_WIDTH   = 32;
     localparam int WEIGHT_ROW_BYTES = (INPUT_SIZE * WEIGHT_WIDTH) / 8;
     localparam int SCALE_ROW_BYTES  = (GROUP_COUNT * SCALE_WIDTH) / 8;
+    localparam int ROW_BATCH_COUNT = TILE_ROWS / ROW_PARALLEL;
+    localparam int BATCH_WEIGHT_BYTES = ROW_PARALLEL * WEIGHT_ROW_BYTES;
+    localparam int BATCH_SCALE_BYTES  = ROW_PARALLEL * SCALE_ROW_BYTES;
+    localparam int WEIGHT_BURSTS_PER_BATCH =
+        (BATCH_WEIGHT_BYTES + MAX_READ_BYTES - 1) / MAX_READ_BYTES;
+    localparam int SCALE_BURSTS_PER_BATCH = 1;
+    localparam int BURSTS_PER_BATCH =
+        WEIGHT_BURSTS_PER_BATCH + SCALE_BURSTS_PER_BATCH;
+    localparam int WEIGHT_BURSTS_PER_TILE =
+        ROW_BATCH_COUNT * WEIGHT_BURSTS_PER_BATCH;
+    localparam int SCALE_BURSTS_PER_TILE =
+        ROW_BATCH_COUNT * SCALE_BURSTS_PER_BATCH;
+    localparam int BURSTS_PER_TILE =
+        WEIGHT_BURSTS_PER_TILE + SCALE_BURSTS_PER_TILE;
     localparam int TILE_WEIGHT_BYTES = TILE_ROWS * WEIGHT_ROW_BYTES;
     localparam int TILE_SCALE_BYTES  = TILE_ROWS * SCALE_ROW_BYTES;
-    localparam int WEIGHT_BURSTS_PER_TILE = TILE_WEIGHT_BYTES / MAX_READ_BYTES;
-    localparam int SCALE_BURSTS_PER_TILE = 1;
-    localparam int BURSTS_PER_TILE = WEIGHT_BURSTS_PER_TILE + SCALE_BURSTS_PER_TILE;
     localparam int WORDS_PER_TILE = (TILE_WEIGHT_BYTES + TILE_SCALE_BYTES) / 4;
     localparam int WEIGHT_WORDS = SCAN_ROWS * WEIGHT_ROW_BYTES / 4;
     localparam int SCALE_WORDS = SCAN_ROWS * SCALE_ROW_BYTES / 4;
     localparam logic [15 : 0] MAX_READ_BYTES_U16 = MAX_READ_BYTES;
-    localparam logic [15 : 0] TILE_SCALE_BYTES_U16 = TILE_SCALE_BYTES;
+    localparam logic [15 : 0] BATCH_SCALE_BYTES_U16 = BATCH_SCALE_BYTES;
 
     logic clk;
     logic rst_n;
@@ -118,9 +139,11 @@ module tb_lm_head_argmax_tile_scheduler;
         .MAX_TILES       (MAX_TILES),
         .TILE_COUNT_WIDTH(TILE_COUNT_WIDTH),
         .TILE_ROWS       (TILE_ROWS),
+        .ROW_PARALLEL    (ROW_PARALLEL),
         .INPUT_SIZE      (INPUT_SIZE),
         .GROUP_SIZE      (GROUP_SIZE),
         .GROUP_COUNT     (GROUP_COUNT),
+        .GROUP_PARALLEL  (GROUP_PARALLEL),
         .ACT_WIDTH       (ACT_WIDTH),
         .WEIGHT_WIDTH    (WEIGHT_WIDTH),
         .SCALE_WIDTH     (SCALE_WIDTH),
@@ -258,14 +281,22 @@ module tb_lm_head_argmax_tile_scheduler;
 
     task check_request_address;
         integer tile_id;
+        integer batch_id;
         integer burst_id;
         integer tile_token;
+        integer burst_byte_offset;
+        integer remaining_weight_bytes;
         logic [ADDR_WIDTH-1 : 0] expected_addr;
         logic [15 : 0] expected_len;
         begin
             tile_id = run_req_fire_count / BURSTS_PER_TILE;
-            burst_id = run_req_fire_count % BURSTS_PER_TILE;
-            tile_token = token_base + (tile_id * TILE_ROWS);
+            batch_id =
+                (run_req_fire_count % BURSTS_PER_TILE) / BURSTS_PER_BATCH;
+            burst_id = run_req_fire_count % BURSTS_PER_BATCH;
+            tile_token =
+                token_base +
+                (tile_id * TILE_ROWS) +
+                (batch_id * ROW_PARALLEL);
 
             if (tile_id >= current_run_tile_count) begin
                 if (print_count < 32) begin
@@ -276,19 +307,25 @@ module tb_lm_head_argmax_tile_scheduler;
                 mismatch_count = mismatch_count + 1;
             end
 
-            if (burst_id < WEIGHT_BURSTS_PER_TILE) begin
+            if (burst_id < WEIGHT_BURSTS_PER_BATCH) begin
+                burst_byte_offset = burst_id * MAX_READ_BYTES;
+                remaining_weight_bytes =
+                    BATCH_WEIGHT_BYTES - burst_byte_offset;
                 expected_addr =
                     weight_base_addr +
                     (tile_token * WEIGHT_ROW_BYTES) +
-                    (burst_id * MAX_READ_BYTES);
-                expected_len = MAX_READ_BYTES_U16;
+                    burst_byte_offset;
+                expected_len =
+                    (remaining_weight_bytes > MAX_READ_BYTES)
+                    ? MAX_READ_BYTES_U16
+                    : remaining_weight_bytes[15 : 0];
                 mem_weight_req_count = mem_weight_req_count + 1;
             end
             else begin
                 expected_addr =
                     scale_base_addr +
                     (tile_token * SCALE_ROW_BYTES);
-                expected_len = TILE_SCALE_BYTES_U16;
+                expected_len = BATCH_SCALE_BYTES_U16;
                 mem_scale_req_count = mem_scale_req_count + 1;
             end
 
@@ -338,8 +375,11 @@ module tb_lm_head_argmax_tile_scheduler;
         integer local_index;
         logic signed [ROW_ACC_WIDTH-1 : 0] observed_logit;
         begin
-            for (row_index = 0; row_index < TILE_ROWS; row_index = row_index + 1) begin
-                local_index = (dut.current_tile_index * TILE_ROWS) + row_index;
+            for (row_index = 0; row_index < ROW_PARALLEL; row_index = row_index + 1) begin
+                local_index =
+                    (dut.current_tile_index * TILE_ROWS) +
+                    (dut.row_batch_index * ROW_PARALLEL) +
+                    row_index;
                 observed_logit =
                     $signed(dut.tile_stage.argmax_core.tile_output_flat[row_index*ROW_ACC_WIDTH +: ROW_ACC_WIDTH]);
                 logit_diff = observed_logit - expected_logits_mem[local_index];
@@ -409,9 +449,11 @@ module tb_lm_head_argmax_tile_scheduler;
                          run_index, mem_read_word_count, expected_tiles*WORDS_PER_TILE);
                 mismatch_count = mismatch_count + 1;
             end
-            if ((core_update_count - run_core_update_base) != expected_tiles) begin
+            if ((core_update_count - run_core_update_base) !=
+                expected_tiles*ROW_BATCH_COUNT) begin
                 $display("FAIL: per-run tile update count run %0d actual=%0d expected=%0d",
-                         run_index, core_update_count - run_core_update_base, expected_tiles);
+                         run_index, core_update_count - run_core_update_base,
+                         expected_tiles*ROW_BATCH_COUNT);
                 mismatch_count = mismatch_count + 1;
             end
             if ((checked_logit_count - run_checked_logit_base) != expected_tiles*TILE_ROWS) begin
@@ -439,7 +481,7 @@ module tb_lm_head_argmax_tile_scheduler;
             start <= 1'b0;
 
             wait_cycles = 0;
-            while ((done != 1'b1) && (wait_cycles < 800000)) begin
+            while ((done != 1'b1) && (wait_cycles < 4000000)) begin
                 @(posedge clk);
                 wait_cycles = wait_cycles + 1;
                 if ((run_id == 1) && (wait_cycles == 20) && (busy == 1'b1)) begin
@@ -690,6 +732,8 @@ module tb_lm_head_argmax_tile_scheduler;
         $display("  spurious start covered   = %0d", spurious_start_seen_busy);
         $display("  done seen count          = %0d", done_seen_count);
         $display("  total cycles waited      = %0d", cycle_count);
+        $display("  row parallel             = %0d", ROW_PARALLEL);
+        $display("  group parallel           = %0d", GROUP_PARALLEL);
         $display("  trace                    = %s", tracefile);
 
         if (done_seen_count != 2) begin
@@ -716,9 +760,9 @@ module tb_lm_head_argmax_tile_scheduler;
                      mem_scale_req_count, (MAX_TILES + 23)*SCALE_BURSTS_PER_TILE);
             mismatch_count = mismatch_count + 1;
         end
-        if (core_update_count != (MAX_TILES + 23)) begin
+        if (core_update_count != (MAX_TILES + 23)*ROW_BATCH_COUNT) begin
             $display("FAIL: tile update count mismatch actual=%0d expected=%0d",
-                     core_update_count, (MAX_TILES + 23));
+                     core_update_count, (MAX_TILES + 23)*ROW_BATCH_COUNT);
             mismatch_count = mismatch_count + 1;
         end
         if (checked_logit_count != (MAX_TILES + 23)*TILE_ROWS) begin

@@ -16,7 +16,7 @@ module qmap_qkv_projection_compute_path #(
     parameter int INPUT_SIZE     = 1024,
     parameter int GROUP_SIZE     = 64,
     parameter int GROUP_COUNT    = INPUT_SIZE / GROUP_SIZE,
-    parameter int GROUP_PARALLEL = 4,
+    parameter int GROUP_PARALLEL = 1,
     parameter int ACT_WIDTH      = 24,
     parameter int ACT_FRAC       = 12,
     parameter int WEIGHT_WIDTH   = 4,
@@ -86,6 +86,12 @@ module qmap_qkv_projection_compute_path #(
     localparam int WEIGHT_ROW_WORDS        = WEIGHT_ROW_BYTES / DATA_BYTES;
     localparam int SCALE_ROW_BYTES         = GROUP_COUNT * (SCALE_WIDTH / 8);
     localparam int SCALE_ROW_WORDS         = SCALE_ROW_BYTES / DATA_BYTES;
+    localparam int ACT_ADDR_WIDTH          =
+        (INPUT_SIZE <= 1) ? 1 : $clog2(INPUT_SIZE);
+    localparam int WEIGHT_ADDR_WIDTH       =
+        (WEIGHT_ROW_WORDS <= 1) ? 1 : $clog2(WEIGHT_ROW_WORDS);
+    localparam int SCALE_ADDR_WIDTH        =
+        (SCALE_ROW_WORDS <= 1) ? 1 : $clog2(SCALE_ROW_WORDS);
     localparam logic [15 : 0] ACTIVATION_CHUNK_LEN_BYTES = ACTIVATION_CHUNK_BYTES;
     localparam logic [15 : 0] WEIGHT_ROW_LEN_BYTES       = WEIGHT_ROW_BYTES;
     localparam logic [15 : 0] SCALE_ROW_LEN_BYTES        = SCALE_ROW_BYTES;
@@ -268,32 +274,106 @@ module qmap_qkv_projection_compute_path #(
     logic row_start;
     logic row_busy;
     logic row_done;
+    logic row_error;
     logic signed [ROW_ACC_WIDTH-1 : 0] row_sum_q26;
 
-    q4_gemv_row_1024 #(
-        .INPUT_SIZE(INPUT_SIZE),
-        .GROUP_SIZE(GROUP_SIZE),
-        .GROUP_COUNT(GROUP_COUNT),
-        .GROUP_PARALLEL(GROUP_PARALLEL),
-        .ACT_WIDTH(ACT_WIDTH),
-        .ACT_FRAC(ACT_FRAC),
-        .WEIGHT_WIDTH(WEIGHT_WIDTH),
-        .SCALE_WIDTH(SCALE_WIDTH),
-        .SCALE_FRAC(SCALE_FRAC),
-        .PARTIAL_WIDTH(PARTIAL_WIDTH),
-        .SCALED_WIDTH(SCALED_WIDTH),
-        .ROW_ACC_WIDTH(ROW_ACC_WIDTH)
-    ) row_gemv (
-        .i_clk(i_clk),
-        .i_rst_n(i_rst_n),
-        .i_start(row_start),
-        .i_activation_flat(activation_flat),
-        .i_weight_packed(weight_packed),
-        .i_scale_flat(scale_flat),
-        .o_busy(row_busy),
-        .o_done(row_done),
-        .o_row_sum_q26(row_sum_q26)
-    );
+    // The board configuration uses GROUP_PARALLEL=1. In that configuration,
+    // feed the AXI read response words directly into native BRAM write ports
+    // instead of materialising INPUT_SIZE-wide resettable packed vectors and
+    // the resulting variable-select mux tree. Keep the original parallel
+    // datapath for simulation/performance configurations above one lane.
+    generate
+        if (GROUP_PARALLEL == 1) begin : gen_bram_row_gemv
+            logic act_wr_ready;
+            logic weight_wr_ready;
+            logic scale_wr_ready;
+
+            q4_gemv_row_bram #(
+                .INPUT_SIZE(INPUT_SIZE),
+                .GROUP_SIZE(GROUP_SIZE),
+                .GROUP_COUNT(GROUP_COUNT),
+                .ACT_WIDTH(ACT_WIDTH),
+                .ACT_FRAC(ACT_FRAC),
+                .WEIGHT_WIDTH(WEIGHT_WIDTH),
+                .SCALE_WIDTH(SCALE_WIDTH),
+                .SCALE_FRAC(SCALE_FRAC),
+                .PARTIAL_WIDTH(PARTIAL_WIDTH),
+                .SCALED_WIDTH(SCALED_WIDTH),
+                .ROW_ACC_WIDTH(ROW_ACC_WIDTH),
+                .ACT_ADDR_WIDTH(ACT_ADDR_WIDTH),
+                .WEIGHT_WORDS(WEIGHT_ROW_WORDS),
+                .WEIGHT_ADDR_WIDTH(WEIGHT_ADDR_WIDTH),
+                .SCALE_WORDS(SCALE_ROW_WORDS),
+                .SCALE_ADDR_WIDTH(SCALE_ADDR_WIDTH)
+            ) row_gemv (
+                .i_clk(i_clk),
+                .i_rst_n(i_rst_n),
+                .i_act_wr_valid(
+                    (state == S_ACT_READ) &&
+                    i_mem_rd_rsp_valid &&
+                    !protocol_error
+                ),
+                .o_act_wr_ready(act_wr_ready),
+                .i_act_wr_addr(
+                    activation_element_index[ACT_ADDR_WIDTH-1 : 0]
+                ),
+                .i_act_wr_data(i_mem_rd_rsp_data[ACT_WIDTH-1 : 0]),
+                .i_weight_wr_valid(
+                    (state == S_WEIGHT_READ) &&
+                    i_mem_rd_rsp_valid &&
+                    !protocol_error
+                ),
+                .o_weight_wr_ready(weight_wr_ready),
+                .i_weight_wr_addr(
+                    read_word_index[WEIGHT_ADDR_WIDTH-1 : 0]
+                ),
+                .i_weight_wr_data(i_mem_rd_rsp_data),
+                .i_scale_wr_valid(
+                    (state == S_SCALE_READ) &&
+                    i_mem_rd_rsp_valid &&
+                    !protocol_error
+                ),
+                .o_scale_wr_ready(scale_wr_ready),
+                .i_scale_wr_addr(
+                    read_word_index[SCALE_ADDR_WIDTH-1 : 0]
+                ),
+                .i_scale_wr_data(i_mem_rd_rsp_data),
+                .i_start(row_start),
+                .o_busy(row_busy),
+                .o_done(row_done),
+                .o_error(row_error),
+                .o_row_sum_q26(row_sum_q26)
+            );
+        end
+        else begin : gen_parallel_row_gemv
+            q4_gemv_row_1024 #(
+                .INPUT_SIZE(INPUT_SIZE),
+                .GROUP_SIZE(GROUP_SIZE),
+                .GROUP_COUNT(GROUP_COUNT),
+                .GROUP_PARALLEL(GROUP_PARALLEL),
+                .ACT_WIDTH(ACT_WIDTH),
+                .ACT_FRAC(ACT_FRAC),
+                .WEIGHT_WIDTH(WEIGHT_WIDTH),
+                .SCALE_WIDTH(SCALE_WIDTH),
+                .SCALE_FRAC(SCALE_FRAC),
+                .PARTIAL_WIDTH(PARTIAL_WIDTH),
+                .SCALED_WIDTH(SCALED_WIDTH),
+                .ROW_ACC_WIDTH(ROW_ACC_WIDTH)
+            ) row_gemv (
+                .i_clk(i_clk),
+                .i_rst_n(i_rst_n),
+                .i_start(row_start),
+                .i_activation_flat(activation_flat),
+                .i_weight_packed(weight_packed),
+                .i_scale_flat(scale_flat),
+                .o_busy(row_busy),
+                .o_done(row_done),
+                .o_row_sum_q26(row_sum_q26)
+            );
+
+            assign row_error = 1'b0;
+        end
+    endgenerate
 
     function automatic logic signed [31 : 0] q26_to_q12_12(
         input logic signed [ROW_ACC_WIDTH-1 : 0] value
@@ -637,9 +717,15 @@ module qmap_qkv_projection_compute_path #(
 
                 S_COMPUTE_WAIT: begin
                     if (row_done) begin
-                        o_last_row_sum_q26   <= row_sum_q26;
-                        o_last_output_q12_12 <= converted_output_q12_12;
-                        state                <= S_WRITE_REQ;
+                        if (row_error) begin
+                            o_error <= 1'b1;
+                            state   <= S_DONE;
+                        end
+                        else begin
+                            o_last_row_sum_q26   <= row_sum_q26;
+                            o_last_output_q12_12 <= converted_output_q12_12;
+                            state                <= S_WRITE_REQ;
+                        end
                     end
                 end
 

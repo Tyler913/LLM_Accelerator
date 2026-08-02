@@ -28,6 +28,11 @@ module tb_q4_gemv_row_1024;
     localparam int INPUT_SIZE    = 1024;
     localparam int GROUP_SIZE    = 64;
     localparam int GROUP_COUNT   = INPUT_SIZE / GROUP_SIZE;
+`ifdef Q4_GEMV_GROUP_PARALLEL
+    localparam int GROUP_PARALLEL = `Q4_GEMV_GROUP_PARALLEL;
+`else
+    localparam int GROUP_PARALLEL = 4;
+`endif
     localparam int ACT_WIDTH     = 16;
     localparam int ACT_FRAC      = 12;
     localparam int WEIGHT_WIDTH  = 4;
@@ -146,6 +151,7 @@ module tb_q4_gemv_row_1024;
         .INPUT_SIZE   (INPUT_SIZE),
         .GROUP_SIZE   (GROUP_SIZE),
         .GROUP_COUNT  (GROUP_COUNT),
+        .GROUP_PARALLEL(GROUP_PARALLEL),
         .ACT_WIDTH    (ACT_WIDTH),
         .ACT_FRAC     (ACT_FRAC),
         .WEIGHT_WIDTH (WEIGHT_WIDTH),
@@ -198,7 +204,10 @@ module tb_q4_gemv_row_1024;
         @(negedge clk);
         start = 1'b0;
 
-        while ((done != 1'b1) && (cycle_count < 600)) begin
+        while (
+            (done != 1'b1) &&
+            (cycle_count < (600 * ((4 + GROUP_PARALLEL - 1) / GROUP_PARALLEL)))
+        ) begin
             @(posedge clk);
             cycle_count++;
         end
@@ -218,7 +227,10 @@ module tb_q4_gemv_row_1024;
             $finish(1);
         end
 
-        $display("PASS: q4_gemv_row_1024 q_proj row 0 vector matched.");
+        $display(
+            "PASS: q4_gemv_row_1024 q_proj row 0 vector matched (GROUP_PARALLEL=%0d).",
+            GROUP_PARALLEL
+        );
         $display("Waveform: %s", wavefile);
 
         repeat (4) @(posedge clk);

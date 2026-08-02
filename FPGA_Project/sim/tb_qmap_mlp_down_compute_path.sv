@@ -3,7 +3,11 @@
 
 `include "qmap_defs.svh"
 
-module tb_qmap_mlp_down_compute_path;
+module tb_qmap_mlp_down_compute_path #(
+    parameter int GROUP_PARALLEL          = 8,
+    parameter int NORMAL_TIMEOUT_CYCLES   = 4000000,
+    parameter int INVALID_TIMEOUT_CYCLES  = 100000
+);
 
     localparam int ADDR_WIDTH       = 64;
     localparam int DESCRIPTOR_SLOTS = 6;
@@ -11,7 +15,6 @@ module tb_qmap_mlp_down_compute_path;
     localparam int OUT_FEATURES     = 1024;
     localparam int GROUP_SIZE       = 64;
     localparam int GROUP_COUNT      = INPUT_SIZE / GROUP_SIZE;
-    localparam int GROUP_PARALLEL   = 8;
     localparam int ACT_WIDTH        = 24;
     localparam int WEIGHT_WIDTH     = 4;
     localparam int SCALE_WIDTH      = 16;
@@ -570,7 +573,7 @@ module tb_qmap_mlp_down_compute_path;
                 start = 1'b0;
             end
 
-            wait_for_next_done(prior_done_count, 4000000);
+            wait_for_next_done(prior_done_count, NORMAL_TIMEOUT_CYCLES);
             normal_done_cycle = last_done_cycle;
             normal_rows_done = rows_done;
             normal_output_write_count = output_write_word_count;
@@ -598,7 +601,7 @@ module tb_qmap_mlp_down_compute_path;
             qmap_mem[dtype_word_index] = `QMAP_DTYPE_U16_Q8_8;
 
             pulse_start();
-            wait_for_next_done(prior_done_count, 100000);
+            wait_for_next_done(prior_done_count, INVALID_TIMEOUT_CYCLES);
             invalid_done_cycle = last_done_cycle;
             invalid_error = error;
 

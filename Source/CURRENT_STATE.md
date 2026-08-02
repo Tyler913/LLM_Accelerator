@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-07-13
+Last updated: 2026-08-02
 
 This file is the concise working-state handoff. For durable project context,
 read `Source/PROJECT_CONTEXT.md` first. For detailed address planning, read
@@ -23,6 +23,67 @@ Current first-version target:
 - Initial context target: 128 or 256 tokens
 - Required PL DDR4 weight path: custom Q4 weight-only format
 - PL compute blocks use hand-written Verilog/SystemVerilog by default
+
+## Current Board-Readiness Candidate
+
+The current Vivado block design now contains the complete, resource-reduced
+Qwen3 one-token accelerator. The latest physical-board PASS is still the
+2026-06-23 row1024 QMAP smoke; the facts below describe a full28 candidate that
+is ready to start its first hardware test but is not yet hardware validated.
+
+Closed board-facing gates:
+
+- Current routed build:
+  `Temp/boardready_board_build_20260726/full_board_impl_v8_current/`.
+- Final board-preparation export:
+  `Temp/final_vivado_export_20260802/`, containing the copied routed bitstream,
+  a fixed XSA with that bitstream embedded, and fresh utilization, timing,
+  check-timing, route-status, DRC, and methodology reports.
+- Bitstream and fixed XSA were generated from the same implementation, and the
+  XSA's embedded bitstream SHA256 equals the release bitstream SHA256:
+  `B4A4C6133DE7AF03F586E41BFC191B3A9379DAB3953E518D2660F0E2CFF7CC34`.
+- Post-route resources: `43,726 / 47,232` CLB LUTs (`92.58%`),
+  `72,621 / 94,464` CLB registers (`76.88%`), `94.5 / 150` BRAM tiles
+  (`63.00%`), `68 / 240` DSPs (`28.33%`), and `8,799 / 8,820` CLBs
+  (`99.76%`). The design fits, but the remaining 21-CLB margin is intentionally
+  treated as extremely tight.
+- Timing is closed: WNS `+0.208 ns`, WHS `+0.010 ns`, and WPWS `+0.039 ns`;
+  TNS, THS, and TPWS are zero.
+- Verbose `check_timing` reports zero register/latch pins without clocks and
+  zero unconstrained internal endpoints. Its one output-delay exception is the
+  asynchronous MIG reset port `C0_DDR4_0_reset_n`.
+- Routing is complete: `119,383 / 119,383` routable nets are fully routed with
+  zero routing errors.
+- Post-route DRC and methodology contain zero Error and zero Critical Warning.
+- Current PS-visible addresses are DDR4 status at `0xA001_0000`, one-token
+  control at `0xA004_0000`, and 512 MiB PL DDR4 at
+  `0x4_0000_0000..0x4_1FFF_FFFF`. The old BRAM and row1024 GPIO apertures are
+  historical and are no longer in the current BD.
+- The board runtime contains 61 SHA256-verified, non-overlapping PL-DDR
+  segments totaling `394,547,200` bytes from first address `0x4_0010_0000`
+  through last end-exclusive address `0x4_1A14_0000`.
+- The runtime release audit checks all manifest provenance, requires all 281
+  QMAP headers to be present, and proves all 397 accelerator-writable
+  stage/cache/hidden/tail regions are zero-initialized before launch.
+- `F:\vws` contains a platform built from the current XSA, an AXI-Lite
+  no-memory control app, a full28 persistent two-token model app, and an FSBL.
+  Both launches use `runPsuInit=false`; the model launch stops at entry for
+  PL-DDR loading.
+- Durable board automation under
+  `FPGA_Project/software/qmap_one_token_runtime/` programs the bitstream, runs
+  FSBL, waits for DDR status `0x5`, loads all 61 segments, checks all 281 QMAP
+  headers, downloads the selected ELF, and starts it.
+
+The final local release gate is closed. The single requested final
+resource-reduced, full28, no-reset two-token XSim in
+`Temp/final_qwen3_full28_20260802/20260802_162706` passed with token/score
+`28458/1227344433` at position 0 and `64/1015661901` at position 1. Its
+independent event audit proves exact writes, producer-before-consumer ordering,
+one reset release, all 281 QMAP packets per step, and retained position-0 K/V
+reads in every one of the 28 layers. No second final simulation was run. The
+self-contained package `Temp/boardready_qwen3_full28_20260801` then passed its
+92-file inventory/size/SHA256 and board-readme semantic verifier. Its release
+state is `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`.
 
 ## Software Baseline
 
@@ -809,15 +870,18 @@ Latest local RTL/software validation state:
   `default_nettype none` enabled while satisfying Vivado 2025.1 synthesis,
   which rejects plain `input logic` as an implicit net in this flow.
 
-## Hardware Bring-Up Status
+## Historical Hardware Bring-Up Status (row1024 checkpoint)
 
-PS-to-PL DDR4 access is complete as a hardware checkpoint. The first
-PL-initiated QMAP dot64 read/compute smoke design passed on hardware, and the
-row1024 QMAP read/compute smoke design has now also been integrated into the
-Vivado block design, synthesized, implemented, bitstream-generated, exported
-for Vitis, and passed on hardware.
+This section preserves the board evidence that led to the current full28
+candidate. It describes the row1024-era BD and Vitis workspace as they existed
+at the 2026-06-23 hardware PASS; it is not the address map or artifact list for
+the current accelerator BD. The current candidate is summarized near the top of
+this file and in `FPGA_Project/Vivado_Project/ONE_TOKEN_AXI_TOP_BD_PLAN.md`.
 
-Current Vivado/Vitis artifacts:
+PS-to-PL DDR4 access, the first PL-initiated QMAP dot64 read/compute smoke, and
+the row1024 QMAP read/compute smoke all passed on hardware.
+
+Row1024-era Vivado/Vitis artifacts:
 
 - Vivado project: `FPGA_Project/Vivado_Project/LLM_FPGA.xpr`
 - Current exported hardware handoff:
@@ -862,7 +926,7 @@ Current Vivado/Vitis artifacts:
 - Current QMAP row1024 Vitis workspace app copy:
   `F:\vws\a_r1024\src\main.c`
 
-Current PS-to-PL memory fabric:
+Row1024-era PS-to-PL memory fabric:
 
 ```text
 M_AXI_HPM0_FPD
@@ -877,7 +941,7 @@ qmap_row1024_axi_smoke_0/M_AXI
       -> AXI Clock Converter -> ddr4_0/C0_DDR4_S_AXI
 ```
 
-Current address map:
+Row1024-era address map:
 
 | Space / IP | Base | High | Size | Status |
 | --- | ---: | ---: | ---: | --- |
@@ -909,7 +973,7 @@ Current reset wiring:
   including `ddr4_0/c0_ddr4_aresetn` and the AXI Clock Converter M_AXI-side
   reset.
 
-Current board-run result:
+Row1024 board-run result:
 
 - Boot mode: JTAG boot (`0000`)
 - Serial path: CH340 USB-UART on COM110, 115200 baud
@@ -979,10 +1043,29 @@ Previous useful checkpoint:
 
 - The earlier BRAM-only hardware checkpoint used `M_AXI_HPM0_LPD` and
   `0x8000_0000` through `0x8000_1FFF`.
-- The current integrated PL DDR4 design uses `M_AXI_HPM0_FPD`; the BRAM smoke
+- The row1024 integrated PL DDR4 design used `M_AXI_HPM0_FPD`; the BRAM smoke
   aperture moved to `0xA000_0000`.
 
-## Open Gaps
+## Current Open Gaps
+
+- All local release gates and the self-contained package verifier are closed.
+  The first remaining gate is physical validation, in strict order: AXI-Lite
+  no-memory control smoke first, then the full28 two-token model smoke. Do not
+  claim a full28 hardware PASS until the required UART lines are observed and
+  preserved.
+- LUT utilization is `92.58%`. Treat the current routed implementation as a
+  correctness-first board candidate; defer extra parallelism and performance
+  tuning until after the first full28 hardware result.
+- After hardware acceptance, the next model capability is general prompt
+  prefill plus bounded multi-token generation/stop conditions. The runtime
+  helper already expresses a token-id prompt/decode loop, but tokenizer,
+  detokenizer, and arbitrary-prompt board validation remain future work.
+
+### Historical Gap-Closure Log (through 2026-07-13)
+
+The bullets below preserve the incremental path that closed the single-token
+datapath. Present-tense statements in this historical log must not override the
+current board-candidate summary or `Immediate Next Step`.
 
 - PL DDR4 is accessible from PS. The PL QMAP descriptor reader, payload
   fetcher, Q4 dot64 compute chain, row1024 compute chain, and read-only AXI4
@@ -1438,9 +1521,9 @@ Previous useful checkpoint:
   masks, 64-bit base-address writes, per-layer QMAP table commits, full-run
   configure/start/poll/result helpers, optional embedding enable and tied
   weight/scale base configuration, and a board bring-up no-memory validation
-  smoke matching `tb_qmap_one_token_axil_top.sv`. It is syntax-checked with host
-  GCC, but not yet built in Vitis because the Vivado BD has not assigned a
-  one-token AXI-Lite base address.
+  smoke matching `tb_qmap_one_token_axil_top.sv`. At that historical checkpoint
+  it was syntax-checked with host GCC but had not yet been built in Vitis because
+  the Vivado BD had not assigned a one-token AXI-Lite base address.
 - A first BD-facing one-token shell now exists at
   `FPGA_Project/rtl/top/one_token/qmap_one_token_axi_top.sv`. It wraps
   `qmap_one_token_axil_top.sv` with the existing `axi4_read_master.sv` and
@@ -1474,38 +1557,33 @@ Previous useful checkpoint:
 
 ## Immediate Next Step
 
-The timing-audited continuous
-`token -> tied-Q4 embedding -> all 28 transformer layers -> final RMSNorm ->
-full-vocabulary LM head` AXI-Lite path is complete locally. Do not repeat the
-three-layer/full28 single-token runs, small DDR/PS/PL tests, or row-level smoke
-tests unless a later shared-RTL change or a specific failure requires them. The
-next real capability is persistent multi-token decode: reuse the completed
-one-token datapath without reset, retain all 28 layers' K/V cache contents,
-advance token position, and feed the selected token back into embedding.
+Persistent decode, board integration, the PL-DDR loader, both Vitis
+applications, deterministic XSDB launch automation, the full28 persistent
+XSim/audit, and the self-contained package verifier are complete. Work from
+`Temp/boardready_qwen3_full28_20260801`; its state is
+`BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`.
 
-Recommended next slice:
+The exact next action is physical validation:
 
-1. Define a two-step decode manifest from the model reference. Step 0 must use
-   the current token/position and produce exact per-layer K/V appends plus the
-   selected token; Step 1 must consume that selected token at the next position,
-   preserve Step 0 cache entries, and emit its own exact layer/tail golden data.
-   Keep all generated vectors and Python workspaces under one `Temp/` session.
-2. Add a persistent decode-loop controller around `qmap_one_token_top.sv` (or the
-   smallest equivalent extension to that top): reuse the programmed 28-layer
-   QMAP tables and tied weights, update `input_token` from the prior argmax,
-   increment `token_position`, and launch the next one-token pass without clearing
-   PL memory or K/V cache. Expose current step, token, position, done, and error
-   through the existing AXI-Lite control boundary.
-3. Extend the manifest-driven shared-memory testbench for two consecutive full
-   28-layer tokens in one simulation. Require exact cache addresses/data for both
-   positions, prove Step 1 reads the retained Step 0 cache only after its writes
-   respond, compare every layer/tail write, and require both selected tokens and
-   scores to match Python. This is the necessary persistence proof, not another
-   reduced row or DDR smoke test.
-4. Once the two-token decode contract passes, parameterize the loop for a bounded
-   generation count and stop conditions, then add prompt prefill. Board
-   integration remains deferred until these local RTL paths are stable or a
-   board-specific issue must be diagnosed.
+1. From that package directory, run `run_board_smoke.ps1 -Mode control` and
+   require `PASS qot_run_no_memory_validation_smoke` on UART.
+2. Then run `run_board_smoke.ps1 -Mode model`.
+3. Preserve the UART log and require these model lines:
+
+   ```text
+   PASS token position=0 output=28458 score=1227344433
+   PASS token position=1 output=64 score=1015661901
+   PASS Qwen3-0.6B full28 persistent two-token board smoke
+   ```
+
+No additional planned RTL modification remains before the board. A physical
+failure must be diagnosed at its specific interface/address/stage rather than
+hidden by returning to smaller row/DDR tests.
+
+After a real full28 board PASS, the next feature slice is arbitrary token-id
+prompt prefill, bounded generation/stop conditions, and then tokenizer/
+detokenizer integration. Performance tuning comes after correctness because
+the current routed LUT utilization is already `92.58%`.
 
 ## Practical Notes
 

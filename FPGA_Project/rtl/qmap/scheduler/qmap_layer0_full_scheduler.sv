@@ -18,7 +18,8 @@ module qmap_layer0_full_scheduler #(
     parameter int NUM_LAYERS     = 28,
     parameter int MAX_CONTEXT    = 256,
     parameter int LAYER_INDEX_WIDTH = (NUM_LAYERS <= 1) ? 1 : $clog2(NUM_LAYERS),
-    parameter int POSITION_WIDTH = (MAX_CONTEXT <= 1) ? 1 : $clog2(MAX_CONTEXT)
+    parameter int POSITION_WIDTH = (MAX_CONTEXT <= 1) ? 1 : $clog2(MAX_CONTEXT),
+    parameter int GROUP_PARALLEL = 1
 )
 (
     input  wire logic                         i_clk,
@@ -380,7 +381,9 @@ module qmap_layer0_full_scheduler #(
         .i_mem_wr_error(score_value_active ? i_mem_wr_error : 1'b0)
     );
 
-    qmap_o_proj_compute_path o_proj (
+    qmap_o_proj_compute_path #(
+        .GROUP_PARALLEL(GROUP_PARALLEL)
+    ) o_proj (
         .i_clk(i_clk),
         .i_rst_n(i_rst_n),
         .i_start(o_proj_start),
@@ -419,7 +422,9 @@ module qmap_layer0_full_scheduler #(
         .i_mem_wr_error(o_proj_active ? i_mem_wr_error : 1'b0)
     );
 
-    qmap_layer0_body_scheduler body_scheduler (
+    qmap_layer0_body_scheduler #(
+        .GROUP_PARALLEL(GROUP_PARALLEL)
+    ) body_scheduler (
         .i_clk(i_clk),
         .i_rst_n(i_rst_n),
         .i_start(body_start),

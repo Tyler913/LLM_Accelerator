@@ -25,6 +25,7 @@ module qmap_attention_frontend_compute_path #(
     parameter int OUT_WIDTH        = 24,
     parameter int MEM_DATA_WIDTH   = 32,
     parameter int MAX_READ_BYTES   = 1024,
+    parameter int USE_BRAM_STREAMING = 1,
     parameter int LAYER_INDEX_W    = (NUM_LAYERS <= 1) ? 1 : $clog2(NUM_LAYERS),
     parameter int POSITION_INDEX_W = (MAX_CONTEXT <= 1) ? 1 : $clog2(MAX_CONTEXT),
     parameter int HEAD_INDEX_W     = (NUM_KV_HEADS <= 1) ? 1 : $clog2(NUM_KV_HEADS),
@@ -94,6 +95,12 @@ module qmap_attention_frontend_compute_path #(
     localparam int CHUNK_WORDS    = MAX_READ_BYTES / MEM_DATA_BYTES;
     localparam int Q_COUNT        = NUM_Q_HEADS * HEAD_DIM;
     localparam int KV_COUNT       = NUM_KV_HEADS * HEAD_DIM;
+    localparam int Q_ADDR_WIDTH   =
+        (Q_COUNT <= 1) ? 1 : $clog2(Q_COUNT);
+    localparam int KV_ADDR_WIDTH  =
+        (KV_COUNT <= 1) ? 1 : $clog2(KV_COUNT);
+    localparam int PARAM_ADDR_WIDTH =
+        (HEAD_DIM <= 1) ? 1 : $clog2(HEAD_DIM);
     localparam int Q_BYTES        = Q_COUNT * MEM_DATA_BYTES;
     localparam int KV_BYTES       = KV_COUNT * MEM_DATA_BYTES;
     localparam int PARAM_BYTES    = HEAD_DIM * MEM_DATA_BYTES;
@@ -236,6 +243,8 @@ module qmap_attention_frontend_compute_path #(
     logic qrope_write_req_seen;
     logic [31 : 0] qrope_write_word_index;
     logic [31 : 0] qrope_write_data_word;
+    logic [Q_ADDR_WIDTH-1 : 0] stage_qrope_read_addr;
+    logic signed [OUT_WIDTH-1 : 0] stage_qrope_read_data;
     logic [LAYER_INDEX_W-1 : 0] metadata_layer_id;
     logic [POSITION_INDEX_W-1 : 0] metadata_position;
     logic active_runtime_context_valid;
@@ -323,50 +332,202 @@ module qmap_attention_frontend_compute_path #(
         .o_desc_aux3_flat(reader_desc_aux3_flat)
     );
 
-    qk_norm_rope_kv_cache_stage #(
-        .ADDR_WIDTH(ADDR_WIDTH),
-        .DATA_WIDTH(MEM_DATA_WIDTH),
-        .NUM_LAYERS(NUM_LAYERS),
-        .NUM_Q_HEADS(NUM_Q_HEADS),
-        .NUM_KV_HEADS(NUM_KV_HEADS),
-        .HEAD_DIM(HEAD_DIM),
-        .MAX_CONTEXT(MAX_CONTEXT),
-        .IN_WIDTH(IN_WIDTH),
-        .GAMMA_WIDTH(GAMMA_WIDTH),
-        .TRIG_WIDTH(TRIG_WIDTH),
-        .OUT_WIDTH(OUT_WIDTH)
-    ) frontend_stage (
-        .i_clk(i_clk),
-        .i_rst_n(i_rst_n),
-        .i_start(stage_start),
-        .i_cache_base_addr(effective_kv_cache_base_addr),
-        .i_layer_id(effective_layer_id),
-        .i_position(effective_position),
-        .i_q_flat(q_flat),
-        .i_k_flat(k_flat),
-        .i_v_flat(v_flat),
-        .i_q_gamma_flat(q_gamma_flat),
-        .i_k_gamma_flat(k_gamma_flat),
-        .i_cos_flat(cos_flat),
-        .i_sin_flat(sin_flat),
-        .o_busy(stage_busy),
-        .o_done(stage_done),
-        .o_error(stage_error),
-        .o_saturation(stage_saturation),
-        .o_norm_saturation(stage_norm_saturation),
-        .o_rope_saturation(stage_rope_saturation),
-        .o_q_rope_flat(q_rope_flat),
-        .o_k_rope_flat(k_rope_flat),
-        .o_cache_wr_valid(cache_wr_valid),
-        .i_cache_wr_ready(cache_wr_ready),
-        .o_cache_wr_addr(cache_wr_addr),
-        .o_cache_wr_data(cache_wr_data),
-        .o_cache_wr_last(cache_wr_last),
-        .o_cache_wr_kind(cache_wr_kind),
-        .o_cache_wr_head(cache_wr_head),
-        .o_cache_wr_dim(cache_wr_dim),
-        .o_cache_write_count(stage_cache_write_count)
-    );
+    generate
+        if (USE_BRAM_STREAMING != 0) begin : gen_bram_frontend_stage
+            attention_frontend_bram_stage #(
+                .ADDR_WIDTH(ADDR_WIDTH),
+                .DATA_WIDTH(MEM_DATA_WIDTH),
+                .NUM_LAYERS(NUM_LAYERS),
+                .NUM_Q_HEADS(NUM_Q_HEADS),
+                .NUM_KV_HEADS(NUM_KV_HEADS),
+                .HEAD_DIM(HEAD_DIM),
+                .MAX_CONTEXT(MAX_CONTEXT),
+                .IN_WIDTH(IN_WIDTH),
+                .GAMMA_WIDTH(GAMMA_WIDTH),
+                .TRIG_WIDTH(TRIG_WIDTH),
+                .OUT_WIDTH(OUT_WIDTH),
+                .Q_COUNT(Q_COUNT),
+                .KV_COUNT(KV_COUNT),
+                .Q_ADDR_WIDTH(Q_ADDR_WIDTH),
+                .KV_ADDR_WIDTH(KV_ADDR_WIDTH),
+                .PARAM_ADDR_WIDTH(PARAM_ADDR_WIDTH),
+                .LAYER_INDEX_W(LAYER_INDEX_W),
+                .POSITION_INDEX_W(POSITION_INDEX_W),
+                .HEAD_INDEX_W(HEAD_INDEX_W),
+                .DIM_INDEX_W(DIM_INDEX_W)
+            ) frontend_stage (
+                .i_clk(i_clk),
+                .i_rst_n(i_rst_n),
+                .i_q_wr_valid(
+                    (state == S_READ_DATA) &&
+                    i_mem_rd_rsp_valid &&
+                    !read_protocol_error &&
+                    (active_read_slot == R_Q_FLAT)
+                ),
+                .i_q_wr_addr(
+                    read_element_index[Q_ADDR_WIDTH-1 : 0]
+                ),
+                .i_q_wr_data(i_mem_rd_rsp_data[IN_WIDTH-1 : 0]),
+                .i_k_wr_valid(
+                    (state == S_READ_DATA) &&
+                    i_mem_rd_rsp_valid &&
+                    !read_protocol_error &&
+                    (active_read_slot == R_K_FLAT)
+                ),
+                .i_k_wr_addr(
+                    read_element_index[KV_ADDR_WIDTH-1 : 0]
+                ),
+                .i_k_wr_data(i_mem_rd_rsp_data[IN_WIDTH-1 : 0]),
+                .i_v_wr_valid(
+                    (state == S_READ_DATA) &&
+                    i_mem_rd_rsp_valid &&
+                    !read_protocol_error &&
+                    (active_read_slot == R_V_FLAT)
+                ),
+                .i_v_wr_addr(
+                    read_element_index[KV_ADDR_WIDTH-1 : 0]
+                ),
+                .i_v_wr_data(i_mem_rd_rsp_data[IN_WIDTH-1 : 0]),
+                .i_q_gamma_wr_valid(
+                    (state == S_READ_DATA) &&
+                    i_mem_rd_rsp_valid &&
+                    !read_protocol_error &&
+                    (active_read_slot == R_Q_GAMMA)
+                ),
+                .i_q_gamma_wr_addr(
+                    read_element_index[PARAM_ADDR_WIDTH-1 : 0]
+                ),
+                .i_q_gamma_wr_data(
+                    i_mem_rd_rsp_data[GAMMA_WIDTH-1 : 0]
+                ),
+                .i_k_gamma_wr_valid(
+                    (state == S_READ_DATA) &&
+                    i_mem_rd_rsp_valid &&
+                    !read_protocol_error &&
+                    (active_read_slot == R_K_GAMMA)
+                ),
+                .i_k_gamma_wr_addr(
+                    read_element_index[PARAM_ADDR_WIDTH-1 : 0]
+                ),
+                .i_k_gamma_wr_data(
+                    i_mem_rd_rsp_data[GAMMA_WIDTH-1 : 0]
+                ),
+                .i_cos_wr_valid(
+                    (state == S_READ_DATA) &&
+                    i_mem_rd_rsp_valid &&
+                    !read_protocol_error &&
+                    (active_read_slot == R_COS)
+                ),
+                .i_cos_wr_addr(
+                    read_element_index[PARAM_ADDR_WIDTH-1 : 0]
+                ),
+                .i_cos_wr_data(
+                    i_mem_rd_rsp_data[TRIG_WIDTH-1 : 0]
+                ),
+                .i_sin_wr_valid(
+                    (state == S_READ_DATA) &&
+                    i_mem_rd_rsp_valid &&
+                    !read_protocol_error &&
+                    (active_read_slot == R_SIN)
+                ),
+                .i_sin_wr_addr(
+                    read_element_index[PARAM_ADDR_WIDTH-1 : 0]
+                ),
+                .i_sin_wr_data(
+                    i_mem_rd_rsp_data[TRIG_WIDTH-1 : 0]
+                ),
+                .i_start(stage_start),
+                .i_cache_base_addr(effective_kv_cache_base_addr),
+                .i_layer_id(effective_layer_id),
+                .i_position(effective_position),
+                .o_busy(stage_busy),
+                .o_done(stage_done),
+                .o_error(stage_error),
+                .o_saturation(stage_saturation),
+                .o_norm_saturation(stage_norm_saturation),
+                .o_rope_saturation(stage_rope_saturation),
+                .o_cache_wr_valid(cache_wr_valid),
+                .i_cache_wr_ready(cache_wr_ready),
+                .o_cache_wr_addr(cache_wr_addr),
+                .o_cache_wr_data(cache_wr_data),
+                .o_cache_wr_last(cache_wr_last),
+                .o_cache_wr_kind(cache_wr_kind),
+                .o_cache_wr_head(cache_wr_head),
+                .o_cache_wr_dim(cache_wr_dim),
+                .o_cache_write_count(stage_cache_write_count),
+                .i_qrope_rd_addr(stage_qrope_read_addr),
+                .o_qrope_rd_data(stage_qrope_read_data)
+            );
+
+            assign q_rope_flat = '0;
+            assign k_rope_flat = '0;
+            assign qrope_write_data_word = {
+                {(MEM_DATA_WIDTH-OUT_WIDTH){
+                    stage_qrope_read_data[OUT_WIDTH-1]
+                }},
+                stage_qrope_read_data
+            };
+        end
+        else begin : gen_flat_frontend_stage
+            qk_norm_rope_kv_cache_stage #(
+                .ADDR_WIDTH(ADDR_WIDTH),
+                .DATA_WIDTH(MEM_DATA_WIDTH),
+                .NUM_LAYERS(NUM_LAYERS),
+                .NUM_Q_HEADS(NUM_Q_HEADS),
+                .NUM_KV_HEADS(NUM_KV_HEADS),
+                .HEAD_DIM(HEAD_DIM),
+                .MAX_CONTEXT(MAX_CONTEXT),
+                .IN_WIDTH(IN_WIDTH),
+                .GAMMA_WIDTH(GAMMA_WIDTH),
+                .TRIG_WIDTH(TRIG_WIDTH),
+                .OUT_WIDTH(OUT_WIDTH)
+            ) frontend_stage (
+                .i_clk(i_clk),
+                .i_rst_n(i_rst_n),
+                .i_start(stage_start),
+                .i_cache_base_addr(effective_kv_cache_base_addr),
+                .i_layer_id(effective_layer_id),
+                .i_position(effective_position),
+                .i_q_flat(q_flat),
+                .i_k_flat(k_flat),
+                .i_v_flat(v_flat),
+                .i_q_gamma_flat(q_gamma_flat),
+                .i_k_gamma_flat(k_gamma_flat),
+                .i_cos_flat(cos_flat),
+                .i_sin_flat(sin_flat),
+                .o_busy(stage_busy),
+                .o_done(stage_done),
+                .o_error(stage_error),
+                .o_saturation(stage_saturation),
+                .o_norm_saturation(stage_norm_saturation),
+                .o_rope_saturation(stage_rope_saturation),
+                .o_q_rope_flat(q_rope_flat),
+                .o_k_rope_flat(k_rope_flat),
+                .o_cache_wr_valid(cache_wr_valid),
+                .i_cache_wr_ready(cache_wr_ready),
+                .o_cache_wr_addr(cache_wr_addr),
+                .o_cache_wr_data(cache_wr_data),
+                .o_cache_wr_last(cache_wr_last),
+                .o_cache_wr_kind(cache_wr_kind),
+                .o_cache_wr_head(cache_wr_head),
+                .o_cache_wr_dim(cache_wr_dim),
+                .o_cache_write_count(stage_cache_write_count)
+            );
+
+            assign stage_qrope_read_data = '0;
+            assign qrope_write_data_word = {
+                {(MEM_DATA_WIDTH-OUT_WIDTH){
+                    q_rope_flat[
+                        (qrope_write_word_index*OUT_WIDTH) +
+                        (OUT_WIDTH-1)
+                    ]
+                }},
+                q_rope_flat[
+                    qrope_write_word_index*OUT_WIDTH +: OUT_WIDTH
+                ]
+            };
+        end
+    endgenerate
 
     assign reader_start = (state == S_READER_START);
     assign stage_start = (state == S_STAGE_START);
@@ -381,6 +542,12 @@ module qmap_attention_frontend_compute_path #(
         active_runtime_context_valid ? active_runtime_kv_cache_base_addr : desc_base_addr[SLOT_KV_CACHE];
     assign runtime_rope_row_offset_bytes =
         active_runtime_context_valid ? (active_runtime_position * PARAM_BYTES) : 64'd0;
+    assign stage_qrope_read_addr =
+        ((state == S_QROPE_WR_DATA) &&
+         i_mem_wr_data_ready &&
+         (qrope_write_word_index < (Q_COUNT - 1))) ?
+        Q_ADDR_WIDTH'(qrope_write_word_index + 1'b1) :
+        Q_ADDR_WIDTH'(qrope_write_word_index);
     assign o_cache_write_count = stage_cache_write_count;
     assign o_saturation = stage_saturation;
     assign o_norm_saturation = stage_norm_saturation;
@@ -461,11 +628,6 @@ module qmap_attention_frontend_compute_path #(
         1'b0;
 
     assign cache_wr_ready = (state == S_CACHE_WR_REQ) && i_mem_wr_req_ready;
-    assign qrope_write_data_word = {
-        {8{q_rope_flat[(qrope_write_word_index*OUT_WIDTH) + (OUT_WIDTH-1)]}},
-        q_rope_flat[qrope_write_word_index*OUT_WIDTH +: OUT_WIDTH]
-    };
-
     assign o_mem_wr_req_valid =
         (state == S_CACHE_WR_REQ) ? cache_wr_valid :
         (state == S_QROPE_WR_REQ) ? 1'b1 :

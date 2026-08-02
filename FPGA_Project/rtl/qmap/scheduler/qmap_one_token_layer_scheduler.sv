@@ -26,7 +26,8 @@ module qmap_one_token_layer_scheduler #(
     parameter int INPUT_SIZE        = 1024,
     parameter int GROUP_SIZE        = 64,
     parameter int GROUP_COUNT       = INPUT_SIZE / GROUP_SIZE,
-    parameter int GROUP_PARALLEL    = 4,
+    parameter int GROUP_PARALLEL    = 1,
+    parameter int BODY_GROUP_PARALLEL = 1,
     parameter int ACT_WIDTH         = 24,
     parameter int ACT_FRAC          = 12,
     parameter int WEIGHT_WIDTH      = 4,
@@ -34,7 +35,8 @@ module qmap_one_token_layer_scheduler #(
     parameter int SCALE_FRAC        = 14,
     parameter int PARTIAL_WIDTH     = ACT_WIDTH + WEIGHT_WIDTH + $clog2(GROUP_SIZE),
     parameter int SCALED_WIDTH      = PARTIAL_WIDTH + SCALE_WIDTH,
-    parameter int ROW_ACC_WIDTH     = SCALED_WIDTH + $clog2(GROUP_COUNT) + 2
+    parameter int ROW_ACC_WIDTH     = SCALED_WIDTH + $clog2(GROUP_COUNT) + 2,
+    parameter bit USE_RUNTIME_BASE_ADDR_PORTS = 1'b0
 )
 (
     input  wire logic                         i_clk,
@@ -59,6 +61,19 @@ module qmap_one_token_layer_scheduler #(
     input  wire logic [MAX_LAYERS*ADDR_WIDTH-1 : 0] i_mlp_silu_mul_qmap_base_addr_table,
     input  wire logic [MAX_LAYERS*ADDR_WIDTH-1 : 0] i_mlp_down_qmap_base_addr_table,
     input  wire logic [MAX_LAYERS*ADDR_WIDTH-1 : 0] i_mlp_residual_add_qmap_base_addr_table,
+
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_qkv_qmap_base_addr,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_input_norm_qmap_base_addr,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_attn_frontend_qmap_base_addr,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_attn_score_value_qmap_base_addr,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_o_proj_qmap_base_addr,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_post_attn_norm_qmap_base_addr,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_mlp_gate_up_qmap_base_addr,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_mlp_silu_mul_qmap_base_addr,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_mlp_down_qmap_base_addr,
+    input  wire logic [ADDR_WIDTH-1 : 0]      i_mlp_residual_add_qmap_base_addr,
+    input  wire logic                         i_runtime_base_addr_valid,
+    input  wire logic [LAYER_INDEX_WIDTH-1:0] i_runtime_base_addr_layer,
 
     output logic                              o_busy,
     output logic                              o_done,
@@ -112,6 +127,7 @@ module qmap_one_token_layer_scheduler #(
 
     typedef enum logic [2 : 0] {
         S_IDLE,
+        S_TABLE_WAIT,
         S_VALIDATE,
         S_LAYER_START,
         S_LAYER_WAIT,
@@ -222,26 +238,42 @@ module qmap_one_token_layer_scheduler #(
     assign layer0_start = (state == S_LAYER_START);
     assign layer0_active = (state == S_LAYER_START) || (state == S_LAYER_WAIT);
 
-    assign selected_qkv_qmap_base_addr =
-        select_layer_base_addr(i_qkv_qmap_base_addr_table, active_layer_index_reg);
-    assign selected_input_norm_qmap_base_addr =
-        select_layer_base_addr(i_input_norm_qmap_base_addr_table, active_layer_index_reg);
-    assign selected_attn_frontend_qmap_base_addr =
-        select_layer_base_addr(i_attn_frontend_qmap_base_addr_table, active_layer_index_reg);
-    assign selected_attn_score_value_qmap_base_addr =
-        select_layer_base_addr(i_attn_score_value_qmap_base_addr_table, active_layer_index_reg);
-    assign selected_o_proj_qmap_base_addr =
-        select_layer_base_addr(i_o_proj_qmap_base_addr_table, active_layer_index_reg);
-    assign selected_post_attn_norm_qmap_base_addr =
-        select_layer_base_addr(i_post_attn_norm_qmap_base_addr_table, active_layer_index_reg);
-    assign selected_mlp_gate_up_qmap_base_addr =
-        select_layer_base_addr(i_mlp_gate_up_qmap_base_addr_table, active_layer_index_reg);
-    assign selected_mlp_silu_mul_qmap_base_addr =
-        select_layer_base_addr(i_mlp_silu_mul_qmap_base_addr_table, active_layer_index_reg);
-    assign selected_mlp_down_qmap_base_addr =
-        select_layer_base_addr(i_mlp_down_qmap_base_addr_table, active_layer_index_reg);
-    assign selected_mlp_residual_add_qmap_base_addr =
-        select_layer_base_addr(i_mlp_residual_add_qmap_base_addr_table, active_layer_index_reg);
+    generate
+        if (USE_RUNTIME_BASE_ADDR_PORTS) begin : g_runtime_base_addr_ports
+            assign selected_qkv_qmap_base_addr = i_qkv_qmap_base_addr;
+            assign selected_input_norm_qmap_base_addr = i_input_norm_qmap_base_addr;
+            assign selected_attn_frontend_qmap_base_addr = i_attn_frontend_qmap_base_addr;
+            assign selected_attn_score_value_qmap_base_addr = i_attn_score_value_qmap_base_addr;
+            assign selected_o_proj_qmap_base_addr = i_o_proj_qmap_base_addr;
+            assign selected_post_attn_norm_qmap_base_addr = i_post_attn_norm_qmap_base_addr;
+            assign selected_mlp_gate_up_qmap_base_addr = i_mlp_gate_up_qmap_base_addr;
+            assign selected_mlp_silu_mul_qmap_base_addr = i_mlp_silu_mul_qmap_base_addr;
+            assign selected_mlp_down_qmap_base_addr = i_mlp_down_qmap_base_addr;
+            assign selected_mlp_residual_add_qmap_base_addr = i_mlp_residual_add_qmap_base_addr;
+        end
+        else begin : g_flat_base_addr_tables
+            assign selected_qkv_qmap_base_addr =
+                select_layer_base_addr(i_qkv_qmap_base_addr_table, active_layer_index_reg);
+            assign selected_input_norm_qmap_base_addr =
+                select_layer_base_addr(i_input_norm_qmap_base_addr_table, active_layer_index_reg);
+            assign selected_attn_frontend_qmap_base_addr =
+                select_layer_base_addr(i_attn_frontend_qmap_base_addr_table, active_layer_index_reg);
+            assign selected_attn_score_value_qmap_base_addr =
+                select_layer_base_addr(i_attn_score_value_qmap_base_addr_table, active_layer_index_reg);
+            assign selected_o_proj_qmap_base_addr =
+                select_layer_base_addr(i_o_proj_qmap_base_addr_table, active_layer_index_reg);
+            assign selected_post_attn_norm_qmap_base_addr =
+                select_layer_base_addr(i_post_attn_norm_qmap_base_addr_table, active_layer_index_reg);
+            assign selected_mlp_gate_up_qmap_base_addr =
+                select_layer_base_addr(i_mlp_gate_up_qmap_base_addr_table, active_layer_index_reg);
+            assign selected_mlp_silu_mul_qmap_base_addr =
+                select_layer_base_addr(i_mlp_silu_mul_qmap_base_addr_table, active_layer_index_reg);
+            assign selected_mlp_down_qmap_base_addr =
+                select_layer_base_addr(i_mlp_down_qmap_base_addr_table, active_layer_index_reg);
+            assign selected_mlp_residual_add_qmap_base_addr =
+                select_layer_base_addr(i_mlp_residual_add_qmap_base_addr_table, active_layer_index_reg);
+        end
+    endgenerate
     assign selected_layer_output_base_addr =
         selected_mlp_residual_add_qmap_base_addr + MLP_RESIDUAL_OUTPUT_OFFSET;
 
@@ -281,18 +313,25 @@ module qmap_one_token_layer_scheduler #(
             (validation_stop_int > MAX_LAYERS);
         validation_base_error = 1'b0;
         validation_found_base_error = 1'b0;
-        validation_error_layer_index =
-            (validation_start_int >= MAX_LAYERS) ? MAX_LAYER_INDEX : i_layer_start_index;
+        if (USE_RUNTIME_BASE_ADDR_PORTS) begin
+            validation_error_layer_index =
+                (validation_start_int >= MAX_LAYERS) ?
+                MAX_LAYER_INDEX : active_layer_index_reg;
+        end
+        else begin
+            validation_error_layer_index =
+                (validation_start_int >= MAX_LAYERS) ? MAX_LAYER_INDEX : i_layer_start_index;
 
-        for (validation_idx = 0 ; validation_idx < MAX_LAYERS ; validation_idx = validation_idx + 1) begin
-            if (!validation_range_error &&
-                (validation_idx >= validation_start_int) &&
-                (validation_idx < validation_stop_int) &&
-                layer_base_has_zero(validation_idx[LAYER_INDEX_WIDTH-1:0])) begin
-                validation_base_error = 1'b1;
-                if (!validation_found_base_error) begin
-                    validation_found_base_error = 1'b1;
-                    validation_error_layer_index = validation_idx[LAYER_INDEX_WIDTH-1:0];
+            for (validation_idx = 0 ; validation_idx < MAX_LAYERS ; validation_idx = validation_idx + 1) begin
+                if (!validation_range_error &&
+                    (validation_idx >= validation_start_int) &&
+                    (validation_idx < validation_stop_int) &&
+                    layer_base_has_zero(validation_idx[LAYER_INDEX_WIDTH-1:0])) begin
+                    validation_base_error = 1'b1;
+                    if (!validation_found_base_error) begin
+                        validation_found_base_error = 1'b1;
+                        validation_error_layer_index = validation_idx[LAYER_INDEX_WIDTH-1:0];
+                    end
                 end
             end
         end
@@ -338,6 +377,7 @@ module qmap_one_token_layer_scheduler #(
         .GROUP_SIZE(GROUP_SIZE),
         .GROUP_COUNT(GROUP_COUNT),
         .GROUP_PARALLEL(GROUP_PARALLEL),
+        .BODY_GROUP_PARALLEL(BODY_GROUP_PARALLEL),
         .ACT_WIDTH(ACT_WIDTH),
         .ACT_FRAC(ACT_FRAC),
         .WEIGHT_WIDTH(WEIGHT_WIDTH),
@@ -458,6 +498,15 @@ module qmap_one_token_layer_scheduler #(
                         o_mem_read_word_count <= 32'd0;
                         o_mem_write_req_count <= 32'd0;
                         o_mem_write_word_count <= 32'd0;
+                        state <=
+                            (USE_RUNTIME_BASE_ADDR_PORTS && !validation_range_error) ?
+                            S_TABLE_WAIT : S_VALIDATE;
+                    end
+                end
+
+                S_TABLE_WAIT: begin
+                    if (i_runtime_base_addr_valid &&
+                        (i_runtime_base_addr_layer == active_layer_index_reg)) begin
                         state <= S_VALIDATE;
                     end
                 end
@@ -471,7 +520,9 @@ module qmap_one_token_layer_scheduler #(
                         state <= S_DONE;
                     end
                     else begin
-                        active_layer_index_reg <= i_layer_start_index;
+                        if (!USE_RUNTIME_BASE_ADDR_PORTS) begin
+                            active_layer_index_reg <= i_layer_start_index;
+                        end
                         state <= S_LAYER_START;
                     end
                 end
@@ -500,7 +551,8 @@ module qmap_one_token_layer_scheduler #(
                             end
                             else begin
                                 active_layer_index_reg <= active_layer_index_reg + ONE_LAYER_INDEX;
-                                state <= S_LAYER_START;
+                                state <= USE_RUNTIME_BASE_ADDR_PORTS ?
+                                    S_TABLE_WAIT : S_LAYER_START;
                             end
                         end
                     end
