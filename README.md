@@ -2,10 +2,12 @@
 
 FPGA-based LLM accelerator project inspired by Hummingbird+.
 
-Latest hardware PASS: the QMAP row1024 PL AXI-master smoke path passed on board
-on 2026-06-23. No full 28-layer hardware PASS is claimed yet.
+Latest hardware PASS (2026-08-08): the complete Qwen3-0.6B tied-Q4 path passed
+on the XCZU2EG board for the fixed two-position validation sequence. Both
+positions completed all 28 layers with `done_mask=0x0fffffff`, `error_mask=0`,
+and exact token/score results `28458/1227344433` then `64/1015661901`.
 
-Current board candidate (2026-08-02): the complete Qwen3-0.6B
+Current board-validated milestone (2026-08-08): the complete Qwen3-0.6B
 `token -> tied-Q4 embedding -> 28 transformer layers -> final RMSNorm ->
 151936-row tied LM head` path is now integrated into the Vivado block design.
 The final Vivado export is under `Temp/final_vivado_export_20260802`. The routed
@@ -25,10 +27,15 @@ exact-write, producer-before-consumer, address, timing, and retained-KV audit,
 passed in `Temp/final_qwen3_full28_20260802/20260802_162706`. Its exact outputs
 are token/score `28458/1227344433` at position 0 and `64/1015661901` at
 position 1.
-The self-contained release `Temp/boardready_qwen3_full28_20260801` independently
-verifies 92 files and records state
-`BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`. The next action is physical
-control smoke followed by model smoke; no full28 hardware PASS is claimed yet.
+The historical self-contained release
+`Temp/boardready_qwen3_full28_20260801` had independently verified 92 files but
+was no longer present at the bench. Its retained final manifest was repacked
+without rerunning simulation into 61 verified PL-DDR segments. The AXI-Lite
+control smoke, complete runtime load, all 281 QMAP-header checks, and the full28
+persistent two-token model smoke then passed on physical hardware. See
+[Source/BOARD_VALIDATION_20260808.md](Source/BOARD_VALIDATION_20260808.md) for
+the artifact hashes, exact acceptance evidence, and remaining prompt-integration
+boundary.
 Start with
 [Source/CURRENT_STATE.md](Source/CURRENT_STATE.md) for the live handoff.
 

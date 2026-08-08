@@ -1,14 +1,20 @@
 # QMAP Format
 
-Current status (2026-08-01): QMAP v1 is the deployed descriptor contract in
-the current full28 board candidate. Its runtime has 281 packets, is packed into
+Current status (2026-08-08): QMAP v1 is the deployed descriptor contract in
+the board-validated full28 design. Its runtime has 281 packets, is packed into
 61 verified PL-DDR segments, and is checked for provenance, aperture safety,
 non-overlap, and zero initialization of all 397 accelerator-writable regions.
-The resource-reduced full28 no-reset two-token XSim and independent retained-KV
-event audit passed, and the self-contained release package independently
-verifies with state `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`. The full28
-physical run is still pending; the latest QMAP hardware PASS remains the
-row1024 smoke.
+On 2026-08-08 the physical board launcher loaded all `61/61` segments, checked
+all `281/281` QMAP headers, and the UART reported the exact fixed two-token
+full28 result `374 -> 28458 -> 64`, with expected Q26 scores, all 28 layers
+complete on both steps, and no reported layer error.
+
+The preserved 2026-08-01 self-contained package still records release state
+`BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`. That value is intentionally
+retained as the package's pre-board readiness state; it is not the current
+project hardware-validation status. The 2026-08-08 result is a board PASS for
+the packaged fixed token-ID smoke, not proof of arbitrary text prompt-to-text
+generation.
 
 Historical progression through 2026-07-13: the dot64 image and the full
 row1024 image both passed PS load/readback and PL AXI-master read/compute
@@ -1861,7 +1867,13 @@ The segment manifest carries SHA256 values for every binary plus SHA256
 provenance for the source load plan and complete full-chain manifest. The
 release audit reconstructs interval ownership, rejects overlaps or any byte
 outside PL DDR, and requires the XSDB loader to contain exactly one
-`dow -data` operation per segment. It also compares all 280 per-layer QMAP
+`dow -data -bypass-cache-sync` operation per segment. Bypassing cache
+synchronization is part of the loader contract because these physical writes
+target PL DDR while Cortex-A53 #0 is halted; XSDB must not attempt A53 cache
+maintenance after each data chunk. The packaged launcher uses
+`name =~ "PL"` as the default `QOT_DEVICE_FILTER` for selecting the FPGA to
+program, while still allowing an explicit filter override when multiple JTAG
+devices are present. The release audit also compares all 280 per-layer QMAP
 bases and eight global addresses compiled into the Vitis model application
 against that exact full-chain manifest.
 
@@ -1892,10 +1904,40 @@ weights/scales, gamma/LUT/RoPE inputs, and immutable metadata are loaded;
 produced activations, cache entries, and final outputs are not preloaded with
 golden values. This is a release-level anti-false-positive rule.
 
-The packaged board launcher waits for DDR status `0x5`, loads all 61 segments,
-and reads the magic at all 281 packet bases before starting the model ELF.
-Passing these checks proves that the intended runtime was loaded; only the
-subsequent exact UART token/score result proves hardware inference.
+The packaged board launcher waits for DDR status `0x5`, loads all 61 segments
+with cache synchronization bypassed, and reads the magic at all 281 packet
+bases before starting the model ELF. Passing these checks proves that the
+intended runtime was loaded; only the subsequent exact UART token/score result
+proves hardware inference.
+
+### 2026-08-08 Fixed Two-Token Board PASS
+
+The first physical full28 run closed the complete release acceptance sequence:
+
+- runtime load: `61/61` binary segments;
+- QMAP coverage: `281/281` packet headers;
+- PL DDR status: `0x5` (calibrated, UI reset released, AXI reset released);
+- position 0: input token `374`, output token `28458`, winning LM-head score
+  `1227344433` in signed Q26;
+- position 1: input token `28458`, output token `64`, winning LM-head score
+  `1015661901` in signed Q26;
+- both positions: `done=1`, `err=0`, `cmd_err=0`, `layers_started=28`,
+  `layers_completed=28`, `done_mask=0x0fffffff`, and `error_mask=0`;
+- final UART line:
+  `PASS Qwen3-0.6B full28 persistent two-token board smoke`.
+
+The second step issued `114688` more 32-bit memory reads than the first step,
+matching one additional K/V context position across 28 layers
+(`28 * 2 * 16 * 128`). Together with the shared KV-cache base and consecutive
+positions 0 and 1, this is board evidence that the tested second decode step
+consumed retained position-0 context. It is not a byte-for-byte readback of the
+entire KV cache.
+
+This acceptance test is deliberately narrow. The PS application launches two
+fixed token-ID steps; it does not accept an arbitrary text prompt, run a board
+tokenizer or detokenizer, implement EOS/stop or sampling policy, or prove an
+arbitrary generation length. Do not describe this milestone as general
+prompt-to-text generation.
 
 ## Open Decisions
 

@@ -1,16 +1,17 @@
 # FPGA Memory Map
 
 Status: current physical apertures and full28 runtime layout, updated
-2026-08-01. The latest hardware PASS remains the 2026-06-23 row1024 PL-master
-smoke. The checked-in BD has since been replaced by the complete
-resource-reduced Qwen accelerator and has generated a routed bitstream/fixed
-XSA, but it has not yet received a full28 hardware PASS.
+2026-08-08. The latest hardware PASS is the complete resource-reduced full28
+persistent two-token board smoke. The physical run loaded all `61/61` runtime
+segments, checked all `281/281` QMAP headers, and produced the exact expected
+token/score results through all 28 layers at both tested positions with
+`error_mask=0`.
 
 This document defines the FPGA-visible memory layout for Qwen3-0.6B bring-up.
-It distinguishes three kinds of evidence: physical apertures already proven by
-the row1024 board checkpoint, the address map in the current routed full28 BD,
-and current runtime subregions that are locally/package audited but still await
-their first physical full28 run.
+It distinguishes the historical row1024 aperture checkpoint, the address map
+in the current routed full28 BD, and the runtime subregions now exercised by the
+2026-08-08 fixed token-id full28 board PASS. That PASS does not establish an
+arbitrary text prompt, tokenizer/detokenizer, or general prompt-to-text flow.
 
 The descriptor-based tensor staging format for PL DDR4 is
 `Source/QMAP_FORMAT.md`. Q4 quantization and packing semantics remain in
@@ -73,16 +74,23 @@ Current PL DDR4 controller configuration:
 Hardware and release checkpoints:
 
 - Hardware-proven: PS access to DDR4 status/PL DDR4, QMAP dot64 PL reads and
-  compute, and the QMAP row1024 PL read/full-row GEMV result `-3482169`.
-- Current routed full28 candidate:
+  compute, the QMAP row1024 PL read/full-row GEMV result `-3482169`, and the
+  complete fixed-input full28 persistent two-token model smoke.
+- Board-validated routed full28 build:
   `Temp/boardready_board_build_20260726/full_board_impl_v8_current/`.
 - Current fixed XSA:
   `llm_system_qwen3_one_token_boardready.xsa` in that candidate directory.
 - Current short-path Vitis components: `F:\vws\p_qot`,
   `F:\vws\a_qctl`, and `F:\vws\a_qmdl`.
-- Current release state is `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`: the
-  persistent full28 XSim audit and self-contained package verification passed;
-  the first physical full28 run remains pending.
+- The 2026-08-01 package state `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`
+  remains the historical pre-board verifier state. Physical validation closed
+  on 2026-08-08: the board flow passed the AXI-Lite control smoke, loaded
+  `61/61` PL-DDR segments, checked `281/281` QMAP headers, and passed the exact
+  two-position model UART contract.
+- Preserved UART evidence:
+  `Temp/board_validation_full28_20260808/uart_full28_persistent_two_token_pass.txt`
+  (SHA256
+  `D194D88AC3D2E0038C8D19CDB486B592E9A53F13DCFD9225CB150B8D936B2A8E`).
 
 ## Current Address Map
 
@@ -94,8 +102,8 @@ mistaken for a physical-board PASS.
 | --- | --- | ---: | ---: | ---: | --- |
 | PS DDR low memory | PS DDR | `0x0000_0000` | `0x7FEF_FFFF` | about 2 GiB minus reserved top window | current standalone BSP |
 | DDR4 status AXI GPIO | PS `M_AXI_HPM0_FPD` -> SmartConnect -> AXI GPIO | `0xA001_0000` | `0xA001_FFFF` | 64 KiB | address current; status `0x5` hardware-proven |
-| Qwen one-token control | PS `M_AXI_HPM0_FPD` -> SmartConnect -> `qmap_one_token_axi_bd/S_AXI` | `0xA004_0000` | `0xA004_FFFF` | 64 KiB | routed and exported; first hardware run pending |
-| PL DDR4 | PS and accelerator masters -> SmartConnect -> AXI Clock Converter -> `ddr4_0/C0_DDR4_S_AXI` | `0x4_0000_0000` | `0x4_1FFF_FFFF` | 512 MiB | aperture hardware-proven; full28 contents/run pending |
+| Qwen one-token control | PS `M_AXI_HPM0_FPD` -> SmartConnect -> `qmap_one_token_axi_bd/S_AXI` | `0xA004_0000` | `0xA004_FFFF` | 64 KiB | full28 control and two-position model execution hardware-proven |
+| PL DDR4 | PS and accelerator masters -> SmartConnect -> AXI Clock Converter -> `ddr4_0/C0_DDR4_S_AXI` | `0x4_0000_0000` | `0x4_1FFF_FFFF` | 512 MiB | aperture plus complete 61-segment full28 load/run hardware-proven |
 
 Current fabric:
 
@@ -266,9 +274,10 @@ Purpose: accelerator-side storage for weights, KV cache, and working buffers.
 
 Current status: the 512 MiB physical aperture and PS/PL access have passed
 hardware smoke tests. The current full28 BD validates, routes, generates a
-bitstream/fixed XSA, and exports the same aperture to Vitis. Loading and
-executing the complete full28 runtime on physical hardware is the next board
-test, not an already-passed checkpoint.
+bitstream/fixed XSA, and exports the same aperture to Vitis. On 2026-08-08 the
+board flow loaded all `61/61` runtime segments, checked all `281/281` QMAP
+headers, and completed both exact full28 model positions with `28/28` layers,
+`done_mask=0x0fffffff`, and `error_mask=0x00000000`.
 
 Current physical base:
 
@@ -296,8 +305,8 @@ Current board-runtime facts:
 | zero-initialized mutable regions | `397` | release audit |
 
 The 397 zero regions cover 14 output families per layer, 28 K/V-cache slices,
-both hidden buffers, and final-tail norm/output scratch. The board candidate
-must compute these values; it cannot pass by reading a preloaded golden output.
+both hidden buffers, and final-tail norm/output scratch. The board runtime must
+compute these values; it cannot pass by reading a preloaded golden output.
 
 The table below is the earlier capacity-budget partition. Use the manifest facts
 above for the current board image; keep this older partition only as a planning
@@ -974,20 +983,23 @@ Software source-of-truth notes:
 
 ## Data Movement Sequence
 
-TODO: Confirm the actual boot/runtime flow.
+Current board-proven Windows/XSDB flow:
 
-Candidate first-version flow:
+1. XSDB connects to the hardware server, resets the system, selects the PL
+   device with default filter `name =~ "PL"`, and programs the fixed bitstream.
+2. It loads the XSA memory map, enables forced memory access, downloads the
+   FSBL to Cortex-A53 #0, and waits for `XFsbl_Exit`.
+3. It waits for DDR status `0x5`, then loads all 61 PL-DDR binary segments. Each
+   transfer must use `dow -data -bypass-cache-sync`.
+4. It validates the QMAP magic at all 281 packet bases, downloads the model ELF,
+   and continues Cortex-A53 #0.
+5. The fixed smoke runs input token `374` at position 0 and fixed token `28458`
+   at position 1 without clearing the 28-layer KV cache. The board returns exact
+   token/score pairs `28458/1227344433` and `64/1015661901`.
 
-1. PS boots and initializes runtime.
-2. PS loads model/artifact metadata from storage into PS DDR.
-3. PS copies required FPGA artifacts into PL DDR4.
-4. PS writes memory-map/control registers.
-5. PS sends prompt tokens one at a time.
-6. PL reads the tied Q4 embedding row for `input_token`, writes Q14.10
-   `input_hidden[1024]`, and runs `run_one_token(input_token, position)`.
-7. PL appends K/V cache and writes greedy next token.
-8. PS reads the generated token and repeats decode.
-9. Optional debug mode copies intermediate buffers back to PS DDR.
+A later product flow may replace XSDB preload with storage, DMA, or an
+in-application loader and add arbitrary prompt tokens. Those paths are not part
+of the current hardware PASS.
 
 Current state and open questions:
 
@@ -1011,24 +1023,37 @@ Current state and open questions:
 - Decide later whether DMA is needed for faster bulk copies.
 - Future cache coherency remains open only for a later in-application loader,
   DMA, or cached PS-buffer path. The current board release uses XSDB preload.
-- The current Windows board flow has a fixed 61-segment loader and verified Q4
-  full-model runtime. A portable Linux/in-application bulk loader is future
-  work.
+- The successful Windows/XSDB board flow requires each binary transfer to use
+  `dow -data -bypass-cache-sync`; the runtime packer emits one such command for
+  each of the 61 segments. The packaged launcher defaults
+  `QOT_DEVICE_FILTER` to `name =~ "PL"`; an environment override is only for a
+  hardware-server target tree whose PL device has a different name.
+- This fixed 61-segment loader and Q4 full-model runtime are hardware-proven. A
+  portable Linux/in-application bulk loader is future work.
 
-## Current Board Validation Plan
+## Current Board Validation Result
 
 Closed pre-board gates: the full28 persistent two-token XSim, independent
 timing/KV-retention audit, and 92-file package inventory/size/SHA256/readme
-verification all passed. The physical plan is now:
+verification all passed. Physical validation then closed on 2026-08-08:
 
-1. Run the packaged AXI-Lite no-memory control smoke and require
+1. The packaged AXI-Lite no-memory control smoke printed
    `PASS qot_run_no_memory_validation_smoke`.
-2. Run the packaged full28 model smoke and require the exact position-0 and
-   position-1 token/score UART lines recorded in
-   `FPGA_Project/Vivado_Project/ONE_TOKEN_AXI_TOP_BD_PLAN.md`.
-3. Preserve the UART log. If a gate fails, debug that exact interface/address/
-   stage. Do not replace this plan with another small row test unless the
-   failure specifically points there.
+2. XSDB observed DDR status `0x5`, loaded all `61/61` binary segments with
+   `dow -data -bypass-cache-sync`, and checked all `281/281` QMAP headers. The
+   PL-device target filter was the default `name =~ "PL"`.
+3. Position 0 returned token/score `28458/1227344433`; position 1 returned
+   `64/1015661901`. Both positions reported `layers started=28 completed=28`,
+   `done_mask=0x0fffffff`, and `error_mask=0x00000000`.
+4. UART ended with
+   `PASS Qwen3-0.6B full28 persistent two-token board smoke`. The preserved log
+   is
+   `Temp/board_validation_full28_20260808/uart_full28_persistent_two_token_pass.txt`.
+
+This result validates the fixed token-id two-position path and retained runtime
+state used by this smoke. It does not validate arbitrary text input,
+tokenization/detokenization, EOS/stop handling, or general prompt-to-text
+generation.
 
 ## Historical Validation Plan and Gap Closure
 
@@ -1415,3 +1440,4 @@ Pass/fail fields to record:
 | 2026-07-26 | Freeze the full28 PL-DDR board runtime | `57_pack_qmap_runtime_load_plan.py` emits 61 SHA256-verified binary segments totaling `394547200` bytes, preserves source plan/manifest provenance, and spans first address `0x4_0010_0000` through last end-exclusive `0x4_1A14_0000` |
 | 2026-07-27 | Add board release and false-positive gates | Vitis builds control/model apps from the current XSA; XSDB automation checks DDR status and all 281 QMAP headers; packaging requires 397 mutable regions to be zero before launch and records state `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED` only after the full28 persistent two-token audit passes |
 | 2026-08-01 | Close local full28 persistent release gates | The resource-reduced no-reset two-token XSim returns exact token/score `28458/1227344433` then `64/1015661901`; the independent event audit proves one reset release, exact reads/writes, all 281 QMAP packets per step, and retained position-0 K/V reads in every layer. `Temp/boardready_qwen3_full28_20260801` then passes its 92-file package verifier and becomes the board-test-ready, not-yet-hardware-validated release |
+| 2026-08-08 | Close the full28 fixed two-token hardware gate | The packaged control smoke passes; XSDB uses `dow -data -bypass-cache-sync` with default PL target filter `name =~ "PL"`, loads `61/61` segments, and checks `281/281` QMAP headers. The model returns exact token/score `28458/1227344433` then `64/1015661901`; both positions complete `28/28` layers with `done_mask=0x0fffffff` and `error_mask=0`, and UART ends with `PASS Qwen3-0.6B full28 persistent two-token board smoke`. This is fixed token-id hardware inference evidence, not arbitrary prompt-to-text generation |

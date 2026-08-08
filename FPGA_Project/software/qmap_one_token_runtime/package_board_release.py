@@ -16,6 +16,7 @@ EXPECTED_OUTPUT_TOKENS = [28458, 64]
 EXPECTED_OUTPUT_SCORES_Q26 = [1227344433, 1015661901]
 PL_DDR_BASE = 0x0000000400000000
 PL_DDR_END_EXCLUSIVE = 0x0000000420000000
+DEFAULT_PL_TARGET_ASSIGNMENT = 'set device_filter {name =~ "PL"}'
 
 REPORT_FILES = (
     "board_build_artifacts.txt",
@@ -55,6 +56,90 @@ def require_file(path: Path, label: str) -> Path:
     if path.stat().st_size == 0:
         raise RuntimeError(f"{label} is empty: {path}")
     return path
+
+
+def require_exact_sequence(
+    actual: list[str], expected: list[str], label: str
+) -> None:
+    if actual == expected:
+        return
+    mismatch = next(
+        (
+            index
+            for index in range(max(len(actual), len(expected)))
+            if index >= len(actual)
+            or index >= len(expected)
+            or actual[index] != expected[index]
+        ),
+        0,
+    )
+    actual_line = actual[mismatch] if mismatch < len(actual) else "<missing>"
+    expected_line = expected[mismatch] if mismatch < len(expected) else "<none>"
+    raise RuntimeError(
+        f"{label} mismatch at operation {mismatch}: "
+        f"expected {expected_line!r}, got {actual_line!r}"
+    )
+
+
+def validate_board_launcher(path: Path) -> dict[str, Any]:
+    path = require_file(path, "board launcher")
+    text = path.read_text(encoding="utf-8")
+    default_assignments = [
+        line.rstrip()
+        for line in text.splitlines()
+        if line.startswith("set device_filter ")
+    ]
+    require_exact_sequence(
+        default_assignments,
+        [DEFAULT_PL_TARGET_ASSIGNMENT],
+        "Board launcher default PL target selector",
+    )
+    selection = 'select_unique_target $device_filter "PL device"'
+    selection_count = sum(
+        line.rstrip() == selection for line in text.splitlines()
+    )
+    if selection_count != 1:
+        raise RuntimeError(
+            "Board launcher must select exactly one PL device through "
+            "device_filter"
+        )
+    return {
+        "sha256": sha256_file(path),
+        "default_device_filter": 'name =~ "PL"',
+        "unique_pl_selection": True,
+    }
+
+
+def validate_runtime_loader(
+    loader_path: Path, segments: list[dict[str, Any]]
+) -> dict[str, Any]:
+    loader_text = loader_path.read_text(encoding="utf-8")
+    actual_operations = [
+        line.rstrip()
+        for line in loader_text.splitlines()
+        if line.startswith("set segment_file ") or line.startswith("dow ")
+    ]
+    expected_operations: list[str] = []
+    for segment in segments:
+        expected_operations.extend(
+            (
+                'set segment_file [file join $script_dir '
+                f'"{segment["file"]}"]',
+                "dow -data -bypass-cache-sync $segment_file "
+                f'0x{int(segment["address"]):016X}',
+            )
+        )
+    require_exact_sequence(
+        actual_operations,
+        expected_operations,
+        "Runtime XSDB loader",
+    )
+    return {
+        "sha256": sha256_file(loader_path),
+        "segment_download_count": len(segments),
+        "download_command": "dow -data -bypass-cache-sync",
+        "file_address_order_matches_manifest": True,
+    }
 
 
 def validate_xsa_bitstream(xsa: Path, bitstream: Path) -> dict[str, Any]:
@@ -155,9 +240,7 @@ def validate_runtime_image(runtime_dir: Path) -> dict[str, Any]:
 
     if total_bytes != manifest.get("total_segment_bytes"):
         raise RuntimeError("Runtime manifest total_segment_bytes mismatch")
-    loader_text = loader_path.read_text(encoding="utf-8")
-    if loader_text.count("dow -data ") != len(segments):
-        raise RuntimeError("Runtime loader command count does not match segments")
+    loader_audit = validate_runtime_loader(loader_path, segments)
 
     mutable_sizes = {
         "input_norm": 1024 * 4,
@@ -271,6 +354,7 @@ def validate_runtime_image(runtime_dir: Path) -> dict[str, Any]:
             f"0x{int(segments[-1]['address']) + int(segments[-1]['nbytes']):016X}"
         ),
         "manifest_sha256": sha256_file(manifest_path),
+        "loader": loader_audit,
         "zero_initialized_mutable_region_count": len(mutable_regions),
     }
 
@@ -826,6 +910,8 @@ Model mode initializes the PS with FSBL, waits for PL DDR4 calibration, loads
 checks all 281 QMAP packet headers, and starts the full28 persistent two-token
 app.
 The JTAG data load is large and can take several minutes.
+Every segment preload deliberately uses `dow -data -bypass-cache-sync`; plain
+`dow -data` can fail while XSDB attempts to synchronize the reset A53 caches.
 
 The required UART result is:
 
@@ -835,9 +921,9 @@ PASS token position=1 output=64 score=1015661901
 PASS Qwen3-0.6B full28 persistent two-token board smoke
 ```
 
-If multiple JTAG devices are connected, set `QOT_DEVICE_FILTER` to an XSDB
-filter that selects exactly the intended FPGA. To use a remote hardware server,
-set `QOT_HW_SERVER_URL`.
+The launcher defaults `QOT_DEVICE_FILTER` to `name =~ "PL"`. If multiple PL
+targets are connected, override it with an XSDB filter that selects exactly the
+intended FPGA. To use a remote hardware server, set `QOT_HW_SERVER_URL`.
 
 `board_readiness_audit.json` records the release gates. `package_manifest.json`
 contains the size and SHA256 of every packaged file.
@@ -892,6 +978,8 @@ def main() -> int:
     vitis_log = args.vitis_log.resolve()
 
     runtime_audit = validate_runtime_image(runtime_dir)
+    launcher_path = script_dir / "launch_qwen3_board.tcl"
+    launcher_audit = validate_board_launcher(launcher_path)
     model_config_audit = validate_model_config_against_runtime(
         runtime_dir,
         script_dir / "qmap_model_config_generated.h",
@@ -923,7 +1011,7 @@ def main() -> int:
     copy_file(control_elf, output / "sw" / "a_qctl.elf")
     copy_file(model_elf, output / "sw" / "a_qmdl.elf")
     copy_file(
-        script_dir / "launch_qwen3_board.tcl",
+        launcher_path,
         output / "launch_qwen3_board.tcl",
     )
     copy_file(
@@ -970,6 +1058,7 @@ def main() -> int:
         "implementation": implementation_audit,
         "hardware_export": hardware_export_audit,
         "runtime_image": runtime_audit,
+        "board_launcher": launcher_audit,
         "model_config": model_config_audit,
         "persistent_full28_regression": regression_audit,
         "vitis": vitis_audit,

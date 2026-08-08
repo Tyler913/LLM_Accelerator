@@ -15,8 +15,10 @@ board smoke.
   generated from the current full-chain runtime manifest.
 - `main.c` builds in two modes:
   - default: `layer_count=0` no-memory validation of the control seam;
-  - `QOT_MODEL_BOARD_SMOKE=1`: token `374` at position 0, followed by feedback
-    token `28458` at position 1 without clearing QMAP tables or KV cache.
+  - `QOT_MODEL_BOARD_SMOKE=1`: fixed token `374` at position 0, followed by
+    fixed token `28458` at position 1 without clearing QMAP tables or KV cache.
+    The second input equals the verified first output, but this smoke does not
+    exercise an autonomous PL token-feedback loop.
 - `test_runtime_host.c` exercises the software contract without Vitis hardware.
 
 ## Reproducible Vitis build
@@ -37,7 +39,12 @@ image can be loaded first.
 - `launch_qwen3_board.tcl` performs the deterministic XSDB sequence: system
   reset, bitstream programming, XSA memory-map load, FSBL, PL DDR4 calibration
   polling, 61-segment runtime load, all 281 QMAP-header checks, ELF download,
-  and application start.
+  and application start. Its FPGA-device filter defaults to `name =~ "PL"` and
+  can be overridden with `QOT_DEVICE_FILTER` for a multi-device JTAG chain.
+- Every PL-DDR segment is loaded with
+  `dow -data -bypass-cache-sync <file> <physical-address>`. The bypass is a
+  required contract, not an optional speed setting: PL-DDR writes must not
+  trigger Cortex-A53 cache flush/invalidate operations.
 - `run_board_smoke.ps1` invokes that launcher in `control` or `model` mode.
 - `package_board_release.py` refuses to create a release unless post-route
   timing/routing/DRC, the complete runtime image, and the full28 persistent
@@ -52,23 +59,33 @@ image can be loaded first.
   inventory before the package is used at the bench. It also rejects malformed
   board-readme control characters or missing verify/control/model commands.
 
-## Current verified release
+## Current verified board milestone
 
-The 2026-08-01 release uses regression
+The preserved 2026-08-01 pre-board release uses regression
 `Temp/boardready_full28_persistent_regression_v6_20260801/20260801_181607` and
 package `Temp/boardready_qwen3_full28_20260801`. XSim and the independent
 persistent event audit both passed; the package verifier then checked 92 files,
 61 copied runtime segments, every size/SHA256, and the board commands. Its state
-is `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`.
+is `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`. Keep that state in the
+historical package: it records what was known before physical execution and is
+not intended to be rewritten after the fact.
 
-From the package directory, the next commands are:
+On 2026-08-08 the corresponding physical full28 flow passed. The launcher used
+the cache-bypass download contract, loaded `61/61` runtime segments, verified
+`281/281` QMAP headers, and then started the model application. The control
+smoke had already passed before the model run.
+
+From the package directory, the reproducible commands are:
 
 ```powershell
 .\run_board_smoke.ps1 -Mode control
 .\run_board_smoke.ps1 -Mode model
 ```
 
-Run them in that order and preserve the UART log.
+Run them in that order and preserve the UART log. With the default launcher no
+extra device variable is needed when the FPGA target is uniquely selected by
+`name =~ "PL"`; override `QOT_DEVICE_FILTER` only when required by the JTAG
+chain.
 
 The model UART contract is:
 
@@ -80,3 +97,15 @@ PASS Qwen3-0.6B full28 persistent two-token board smoke
 
 These lines are the hardware acceptance criterion; producing a bitstream or
 package alone is not a board PASS.
+
+The 2026-08-08 UART also reported the following completion contract for both
+positions:
+
+| Position | Input | Output | Signed Q26 score | Status | Layers | Done mask | Error mask |
+| ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |
+| `0` | `374` | `28458` | `1227344433` | `done=1, err=0` | `28/28` | `0x0fffffff` | `0` |
+| `1` | `28458` | `64` | `1015661901` | `done=1, err=0` | `28/28` | `0x0fffffff` | `0` |
+
+This is a fixed two-token token-ID board validation. It proves neither an
+arbitrary text prompt-to-text interface nor board-side tokenization,
+detokenization, EOS/stop handling, sampling, or arbitrary-length generation.

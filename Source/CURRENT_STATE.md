@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-08-02
+Last updated: 2026-08-08
 
 This file is the concise working-state handoff. For durable project context,
 read `Source/PROJECT_CONTEXT.md` first. For detailed address planning, read
@@ -24,12 +24,13 @@ Current first-version target:
 - Required PL DDR4 weight path: custom Q4 weight-only format
 - PL compute blocks use hand-written Verilog/SystemVerilog by default
 
-## Current Board-Readiness Candidate
+## Current Board-Validated Candidate
 
-The current Vivado block design now contains the complete, resource-reduced
-Qwen3 one-token accelerator. The latest physical-board PASS is still the
-2026-06-23 row1024 QMAP smoke; the facts below describe a full28 candidate that
-is ready to start its first hardware test but is not yet hardware validated.
+The current Vivado block design contains the complete, resource-reduced Qwen3
+one-token accelerator. On 2026-08-08, this full28 candidate passed both its
+AXI-Lite no-memory control smoke and its persistent two-token model smoke on the
+physical XCZU2EG board. The exact evidence and artifact hashes are recorded in
+`Source/BOARD_VALIDATION_20260808.md`.
 
 Closed board-facing gates:
 
@@ -73,6 +74,12 @@ Closed board-facing gates:
   `FPGA_Project/software/qmap_one_token_runtime/` programs the bitstream, runs
   FSBL, waits for DDR status `0x5`, loads all 61 segments, checks all 281 QMAP
   headers, downloads the selected ELF, and starts it.
+- Physical full28 acceptance passed on 2026-08-08. Both token positions report
+  `layers started=28 completed=28`, `done_mask=0x0fffffff`, and
+  `error_mask=0`. Position 0 maps input `374` to token/score
+  `28458/1227344433`; position 1 uses that verified output ID `28458` as its
+  input and returns `64/1015661901`. The final UART line is
+  `PASS Qwen3-0.6B full28 persistent two-token board smoke`.
 
 The final local release gate is closed. The single requested final
 resource-reduced, full28, no-reset two-token XSim in
@@ -82,8 +89,12 @@ independent event audit proves exact writes, producer-before-consumer ordering,
 one reset release, all 281 QMAP packets per step, and retained position-0 K/V
 reads in every one of the 28 layers. No second final simulation was run. The
 self-contained package `Temp/boardready_qwen3_full28_20260801` then passed its
-92-file inventory/size/SHA256 and board-readme semantic verifier. Its release
-state is `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`.
+92-file inventory/size/SHA256 and board-readme semantic verifier. That
+historical package recorded state `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`.
+The directory was absent at the 2026-08-08 bench, so the retained final
+manifest was repacked into a new working directory. The reconstructed runtime
+passed the range/SHA256/zero-region/model-address gates before the physical
+control and model smokes passed.
 
 ## Software Baseline
 
@@ -1048,16 +1059,19 @@ Previous useful checkpoint:
 
 ## Current Open Gaps
 
-- All local release gates and the self-contained package verifier are closed.
-  The first remaining gate is physical validation, in strict order: AXI-Lite
-  no-memory control smoke first, then the full28 two-token model smoke. Do not
-  claim a full28 hardware PASS until the required UART lines are observed and
-  preserved.
-- LUT utilization is `92.58%`. Treat the current routed implementation as a
-  correctness-first board candidate; defer extra parallelism and performance
-  tuning until after the first full28 hardware result.
-- After hardware acceptance, the next model capability is general prompt
-  prefill plus bounded multi-token generation/stop conditions. The runtime
+- All local release gates and the first physical full28 gate are closed. The
+  UART evidence is preserved under
+  `Temp/board_validation_full28_20260808/` and summarized durably in
+  `Source/BOARD_VALIDATION_20260808.md`.
+- Bench bring-up exposed two durable launcher requirements: select the ZynqMP
+  PL target with `name =~ "PL"`, and use `dow -data -bypass-cache-sync` for
+  all 61 PL-DDR segment downloads. The generator and package audit now enforce
+  the cache-bypass form.
+- LUT utilization is `92.58%`, while CLB usage is `99.76%`. Treat the routed
+  implementation as a correctness-first hardware baseline and defer extra
+  parallelism or performance tuning until after the next functional slice.
+- The next model capability is general prompt prefill plus bounded multi-token
+  generation/stop conditions. The runtime
   helper already expresses a token-id prompt/decode loop, but tokenizer,
   detokenizer, and arbitrary-prompt board validation remain future work.
 
@@ -1559,31 +1573,23 @@ current board-candidate summary or `Immediate Next Step`.
 
 Persistent decode, board integration, the PL-DDR loader, both Vitis
 applications, deterministic XSDB launch automation, the full28 persistent
-XSim/audit, and the self-contained package verifier are complete. Work from
-`Temp/boardready_qwen3_full28_20260801`; its state is
-`BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`.
+XSim/audit, the release verifier, and the first physical full28 acceptance are
+complete. The 2026-08-08 bench run passed the control smoke, all 61 PL-DDR
+downloads, all 281 QMAP-header checks, and the fixed two-position model smoke.
+The preserved evidence is summarized in `Source/BOARD_VALIDATION_20260808.md`.
 
-The exact next action is physical validation:
+The next correctness slice is:
 
-1. From that package directory, run `run_board_smoke.ps1 -Mode control` and
-   require `PASS qot_run_no_memory_validation_smoke` on UART.
-2. Then run `run_board_smoke.ps1 -Mode model`.
-3. Preserve the UART log and require these model lines:
+1. Accept an arbitrary bounded token-id prompt and prefill its K/V cache.
+2. Continue decode for a configurable number of positions while feeding each
+   observed argmax token into the next launch.
+3. Add EOS and maximum-length stop conditions, then expose tokenizer,
+   detokenizer, and a user-facing serial prompt/result protocol.
 
-   ```text
-   PASS token position=0 output=28458 score=1227344433
-   PASS token position=1 output=64 score=1015661901
-   PASS Qwen3-0.6B full28 persistent two-token board smoke
-   ```
-
-No additional planned RTL modification remains before the board. A physical
-failure must be diagnosed at its specific interface/address/stage rather than
-hidden by returning to smaller row/DDR tests.
-
-After a real full28 board PASS, the next feature slice is arbitrary token-id
-prompt prefill, bounded generation/stop conditions, and then tokenizer/
-detokenizer integration. Performance tuning comes after correctness because
-the current routed LUT utilization is already `92.58%`.
+Do not return to smaller row/DDR smokes unless a specific integration failure
+requires that diagnostic slice. Performance and extra parallelism remain after
+the product-facing correctness path because the routed design already uses
+`8,799 / 8,820` CLBs (`99.76%`).
 
 ## Practical Notes
 

@@ -360,7 +360,7 @@ def make_xsdb_loader(segment_records: list[dict[str, Any]]) -> str:
                     f'puts "  {record["file"]}: {record["nbytes"]} bytes '
                     f'at {record["address_hex"]}"'
                 ),
-                f'dow -data $segment_file {record["address_hex"]}',
+                f'dow -data -bypass-cache-sync $segment_file {record["address_hex"]}',
             ]
         )
     lines.extend(

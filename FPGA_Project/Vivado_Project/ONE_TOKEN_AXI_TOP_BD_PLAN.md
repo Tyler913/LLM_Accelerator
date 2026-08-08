@@ -1,15 +1,16 @@
 # Qwen3 one-token AXI-Lite / AXI4 board integration
 
-Last updated: 2026-08-01
+Last updated: 2026-08-08
 
 Status: the one-token accelerator is integrated into `llm_system.bd`, and the
-current board candidate has completed synthesis, implementation, routing,
+current board design has completed synthesis, implementation, routing,
 bitstream generation, fixed XSA export, Vitis application builds, the full28
-persistent two-token XSim/audit, and self-contained package verification. The
-previous row1024 design remains valuable hardware history, but it is no longer
-the current block-design contents.
+persistent two-token XSim/audit, self-contained package verification, and the
+physical full28 fixed two-token board smoke. The previous row1024 design
+remains valuable hardware history, but it is no longer the latest hardware
+milestone or the current block-design contents.
 
-The current board candidate is intentionally resource-reduced, not
+The current board design is intentionally resource-reduced, not
 function-reduced:
 
 - one reusable Q4 group lane for the projection datapaths;
@@ -119,9 +120,9 @@ debug-hub/MIG asynchronous-reset, inferred-BRAM write-enable, control-set, and
 unused AXI-converter-load advisory categories present in this implementation;
 any new warning rule blocks a future package until reviewed.
 
-The LUT margin is small. Do not make speculative parallelism or debug-logic
-increases before the first full28 hardware run; any RTL change must repeat the
-complete implementation gate.
+The LUT margin is small. The first full28 hardware run now passes, but do not
+make speculative parallelism or debug-logic increases; any RTL change must
+repeat the complete implementation and board-validation gates.
 
 ## Runtime image and software
 
@@ -132,6 +133,13 @@ The board runtime is generated as 61 non-overlapping binary segments:
 - last end-exclusive address: `0x4_1A14_0000`;
 - QMAP headers checked by the board launcher: `281`;
 - accelerator-writable regions required to be zero before launch: `397`.
+
+The generated XSDB loader must contain exactly one
+`dow -data -bypass-cache-sync` command for every segment. PL-DDR physical
+writes occur while Cortex-A53 #0 is halted, so the debugger must not perform
+A53 cache maintenance for those writes. The packaged launcher's default FPGA
+device filter is `name =~ "PL"`; `QOT_DEVICE_FILTER` remains available as an
+explicit override for a multi-device JTAG chain.
 
 The zero-region rule covers every stage output, both hidden buffers, all 28
 layers' KV-cache storage, and the final-tail scratch/output. It prevents a
@@ -164,7 +172,7 @@ The packaged `launch_qwen3_board.tcl` performs:
 2. XSA memory-map load;
 3. FSBL execution through `XFsbl_Exit`;
 4. PL DDR4 calibration polling for status `0x5`;
-5. all 61 runtime segment downloads;
+5. all 61 runtime segment downloads using `-bypass-cache-sync`;
 6. all 281 QMAP header checks;
 7. control or model ELF download and launch.
 
@@ -193,6 +201,25 @@ Only those UART results establish a hardware PASS. Successful routing,
 bitstream generation, packaging, or local simulation establishes readiness to
 test, not board validation.
 
+## 2026-08-08 Physical Board Closure
+
+The physical model run completed the full acceptance contract:
+
+- loader: `61/61` runtime segments downloaded successfully;
+- QMAP preflight: `281/281` packet headers returned the expected magic;
+- position 0: `374 -> 28458`, signed Q26 score `1227344433`;
+- position 1: `28458 -> 64`, signed Q26 score `1015661901`;
+- both steps: `done=1`, `err=0`, `28/28` layers started and completed,
+  `done_mask=0x0fffffff`, `error_mask=0`, and no reported top/tail/command
+  error;
+- final UART result:
+  `PASS Qwen3-0.6B full28 persistent two-token board smoke`.
+
+This closes the fixed two-token board smoke for the current routed design. It
+does not close an arbitrary user-text interface: the board application still
+uses fixed token IDs and does not include tokenizer, detokenizer, EOS/stop,
+sampling, or arbitrary-length prompt-to-text integration.
+
 ## Local release gates closed
 
 The resource-reduced full28 no-reset two-token XSim passed in
@@ -204,6 +231,8 @@ position-0 K/V only after position-0 writes complete.
 
 The self-contained release `Temp/boardready_qwen3_full28_20260801` then passed
 its 92-file inventory, size, SHA256, and board-readme semantic verifier. Its
-state is `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`. No additional planned
-RTL change remains before the first physical board run; execute control mode,
-then model mode, and preserve the UART log.
+recorded state remains `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED` because
+that is the historical pre-board readiness result. Physical validation was
+subsequently completed on 2026-08-08 using control mode followed by model mode;
+the preserved UART evidence, not a rewrite of the old readiness state, is the
+board-PASS record.

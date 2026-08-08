@@ -9,7 +9,7 @@
 # Environment:
 #   QOT_BOARD_MODE       model (default) or control
 #   QOT_HW_SERVER_URL    tcp:127.0.0.1:3121 by default
-#   QOT_DEVICE_FILTER    XSDB target filter; defaults to level==0
+#   QOT_DEVICE_FILTER    XSDB target filter; defaults to name =~ "PL"
 
 proc require_file {path label} {
     if {![file isfile $path]} {
@@ -18,10 +18,10 @@ proc require_file {path label} {
 }
 
 proc set_force_memory_access {enabled} {
-    # Vitis 2025.1 launch logs use the singular spelling, while XSDB help
-    # documents the plural spelling. Accept either installation behavior.
-    if {[catch {configparams force-mem-access $enabled}]} {
-        configparams force-mem-accesses $enabled
+    # XSDB documents the plural spelling. Keep the singular unique-prefix form
+    # as a compatibility fallback for launch environments that log that form.
+    if {[catch {configparams force-mem-accesses $enabled}]} {
+        configparams force-mem-access $enabled
     }
 }
 
@@ -162,7 +162,7 @@ if {[info exists ::env(QOT_HW_SERVER_URL)] &&
     set server_url [string trim $::env(QOT_HW_SERVER_URL)]
 }
 
-set device_filter {level==0}
+set device_filter {name =~ "PL"}
 if {[info exists ::env(QOT_DEVICE_FILTER)] &&
     [string trim $::env(QOT_DEVICE_FILTER)] ne ""} {
     set device_filter [string trim $::env(QOT_DEVICE_FILTER)]

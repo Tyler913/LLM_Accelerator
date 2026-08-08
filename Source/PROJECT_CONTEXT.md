@@ -402,19 +402,35 @@ token id
 ```
 
 That complete datapath is now present in the Vivado BD behind AXI4-Lite control
-at `0xA004_0000` and a PL-DDR AXI4 master. The current routed board candidate
-meets timing with WNS `+0.208 ns`, fully routes all `119,383` routable nets, and
-uses `92.58%` of CLB LUTs. The runtime/Vitis/XSDB path loads 61 verified PL-DDR
-segments, checks all 281 QMAP packets, and runs two feedback-closed token
-positions without clearing the 28-layer KV cache.
+at `0xA004_0000` and a PL-DDR AXI4 master. The current routed design meets timing
+with WNS `+0.208 ns`, fully routes all `119,383` routable nets, and uses `92.58%`
+of CLB LUTs. The runtime/Vitis/XSDB path loads 61 verified PL-DDR segments,
+checks all 281 QMAP packets, and runs two fixed token positions without clearing
+the 28-layer KV cache. The successful loader uses
+`dow -data -bypass-cache-sync` for every binary segment, and the packaged XSDB
+launcher defaults `QOT_DEVICE_FILTER` to `name =~ "PL"`.
 
-The latest actual hardware PASS remains the 2026-06-23 row1024 smoke. The
-resource-reduced full28 no-reset two-token XSim and its independent exact-write,
-producer-before-consumer, and retained-KV audit passed on 2026-08-01. The
-self-contained release package also passed its inventory, SHA256, and board-
-readme semantic verifier and records
-`BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`. No additional planned RTL feature
-remains before the first full28 board run.
+The latest actual hardware PASS is now the 2026-08-08 resource-reduced full28
+persistent two-token board smoke. The physical flow passed the no-memory
+AXI-Lite control smoke, loaded all `61/61` PL-DDR segments, checked all `281/281`
+QMAP headers, and then produced exact token/score pairs `28458/1227344433` at
+position 0 and `64/1015661901` at position 1. Both positions reported
+`layers started=28 completed=28`, `done_mask=0x0fffffff`, and
+`error_mask=0x00000000`; the final UART line was
+`PASS Qwen3-0.6B full28 persistent two-token board smoke`. The preserved UART
+transcript is
+`Temp/board_validation_full28_20260808/uart_full28_persistent_two_token_pass.txt`
+(SHA256
+`D194D88AC3D2E0038C8D19CDB486B592E9A53F13DCFD9225CB150B8D936B2A8E`).
+
+The 2026-08-01 resource-reduced full28 no-reset two-token XSim, its independent
+exact-write/producer-before-consumer/retained-KV audit, and the self-contained
+release-package verifier remain the pre-board evidence. Their recorded state
+`BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED` is retained as the historical
+pre-board package state; it is not the current physical-validation status. This
+fixed token-id two-position hardware smoke does not establish arbitrary text
+prompt handling, a board tokenizer/detokenizer, EOS/stop behavior, or general
+prompt-to-text generation.
 
 The remainder of this section records how the full datapath was assembled. The
 important early capability was PL write-back. The existing row1024 hardware
@@ -479,8 +495,9 @@ reads K/V cache through descriptor-derived addresses, streams scores into
 softmax/value, and writes exact `attn_out[2048]`. The QMAP `o_proj` wrapper
 now also passes locally: it consumes `attn_out[2048]`, reads persistent Q4
 `o_proj` weight/scale rows, and writes exact `o_proj_out[1024]` for the Layer 0
-and true Layer 1 packet instances. Hardware confirmation is still pending. The
-QMAP post-attention residual/RMSNorm
+and true Layer 1 packet instances. The 2026-08-08 end-to-end full28 board PASS
+now supplies hardware confirmation for this path; no separate isolated
+`o_proj` board micro-smoke was added. The QMAP post-attention residual/RMSNorm
 wrapper now also passes locally: it consumes descriptor-visible residual
 input, `o_proj_out[1024]`, and signed post-attention gamma, then writes exact
 post-attention hidden and post-norm buffers for the Layer 0 and true Layer 1
@@ -593,12 +610,13 @@ two-token application from the routed fixed XSA. The PL-DDR packer, XSDB
 launcher, and release verifier are also durable source in that runtime
 directory.
 
-The immediate boundary is now physical validation, not another local model
-feature. The final full28 two-token XSim/audit gate and release-package verifier
-are closed; run the packaged control smoke and then the full model smoke. Only
-after the expected UART results establish a real hardware PASS should the
-project move to arbitrary prompt prefill, stop conditions, tokenizer/
-detokenizer integration, or performance tuning.
+The fixed-input physical-validation boundary is now closed: the packaged
+control smoke and full28 persistent two-token model smoke both passed on
+2026-08-08 with the exact UART evidence above. The next feature boundary is
+arbitrary token-id prompt prefill plus bounded generation/stop conditions,
+followed by tokenizer/detokenizer integration. Performance tuning remains after
+that correctness work because this board PASS does not by itself demonstrate
+arbitrary prompt-to-text generation.
 
 Keep the exact next action in `Source/CURRENT_STATE.md`; keep detailed address
 planning in `Source/FPGA_MEMORY_MAP.md`.
