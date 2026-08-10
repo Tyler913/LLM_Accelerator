@@ -1,0 +1,8 @@
+#ifndef TEST_XPARAMETERS_H
+#define TEST_XPARAMETERS_H
+
+#include <stdint.h>
+
+#define XPAR_QMAP_ONE_TOKEN_AXI_BD_0_BASEADDR UINT64_C(0xA0040000)
+
+#endif /* TEST_XPARAMETERS_H */

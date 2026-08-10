@@ -3,11 +3,11 @@
 # Expected package layout:
 #   launch_qwen3_board.tcl
 #   hw/llm_system_qwen3_one_token_boardready.{bit,xsa}
-#   sw/{fsbl,a_qctl,a_qmdl}.elf
+#   sw/{fsbl,a_qctl,a_qmdl,a_qgen}.elf
 #   runtime/load_pl_ddr_runtime.tcl
 #
 # Environment:
-#   QOT_BOARD_MODE       model (default) or control
+#   QOT_BOARD_MODE       model (default), control, or generate
 #   QOT_HW_SERVER_URL    tcp:127.0.0.1:3121 by default
 #   QOT_DEVICE_FILTER    XSDB target filter; defaults to name =~ "PL"
 
@@ -145,6 +145,7 @@ set xsa_file [file join \
 set fsbl_file [file join $package_root sw fsbl.elf]
 set control_elf [file join $package_root sw a_qctl.elf]
 set model_elf [file join $package_root sw a_qmdl.elf]
+set generate_elf [file join $package_root sw a_qgen.elf]
 set runtime_loader [file join $package_root runtime load_pl_ddr_runtime.tcl]
 
 set mode "model"
@@ -152,8 +153,8 @@ if {[info exists ::env(QOT_BOARD_MODE)] &&
     [string trim $::env(QOT_BOARD_MODE)] ne ""} {
     set mode [string tolower [string trim $::env(QOT_BOARD_MODE)]]
 }
-if {$mode ni {"model" "control"}} {
-    error "QOT_BOARD_MODE must be model or control, got: $mode"
+if {$mode ni {"model" "control" "generate"}} {
+    error "QOT_BOARD_MODE must be model, control, or generate, got: $mode"
 }
 
 set server_url "tcp:127.0.0.1:3121"
@@ -171,8 +172,12 @@ if {[info exists ::env(QOT_DEVICE_FILTER)] &&
 require_file $bit_file "bitstream"
 require_file $xsa_file "hardware platform"
 require_file $fsbl_file "FSBL"
-if {$mode eq "model"} {
-    require_file $model_elf "model smoke ELF"
+if {$mode eq "model" || $mode eq "generate"} {
+    if {$mode eq "model"} {
+        require_file $model_elf "model smoke ELF"
+    } else {
+        require_file $generate_elf "interactive generation ELF"
+    }
     require_file $runtime_loader "PL-DDR runtime loader"
 } else {
     require_file $control_elf "control smoke ELF"
@@ -227,13 +232,19 @@ puts "PASS FSBL initialization"
 select_unique_target {name =~ "*A53*#0"} "Cortex-A53 #0"
 rst -processor
 
-if {$mode eq "model"} {
+if {$mode eq "model" || $mode eq "generate"} {
     wait_for_pl_ddr4 0x00000000A0010000 600 100
     source $runtime_loader
     require_all_qmap_headers
-    dow $model_elf
-    puts "Starting full28 persistent two-token model smoke..."
-    puts "Watch the board UART at 115200 8N1 for the final PASS/FAIL result."
+    if {$mode eq "model"} {
+        dow $model_elf
+        puts "Starting full28 persistent two-token model smoke..."
+        puts "Watch the board UART at 115200 8N1 for the final PASS/FAIL result."
+    } else {
+        dow $generate_elf
+        puts "Starting interactive bounded text/token generation..."
+        puts "Use the board UART at 115200 8N1; enter HELP for the command syntax."
+    }
 } else {
     dow $control_elf
     puts "Starting AXI-Lite no-memory control smoke..."

@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "packages": {
+    "regex-syntax": {
+      "archive_sha256": "7A2D987857B319362043E95F5353C0535C1F58EEC5336FDFCF626430AF7DEF58",
+      "files": {
+        "LICENSE-APACHE": "A60EEA817514531668D7E00765731449FE14D059D3249E0BC93B36DE45F759F2",
+        "LICENSE-MIT": "6485B8ED310D3F0340BF1AD1F47645069CE4069DCC6BB46C7D5C6FAF41DE1FDB",
+        "src/unicode_tables/LICENSE-UNICODE": "74DB5BAF44A41B1000312C673544B3374E4198AF5605C7F9080A402CEC42CFA3",
+        "src/unicode_tables/case_folding_simple.rs": "7622C7F7F03AC0DC2F2BCD51C81A217D64DE0CC912F62F1ADD5F676603A02456",
+        "src/unicode_tables/general_category.rs": "9488E3721F7C2AE20E1B77FCFF9A59B4ED8F22954B8645EA6D8592EAC1856423",
+        "src/unicode_tables/perl_space.rs": "EC9BB22ED7E99FEEF292249C7E6F4673EE0AF9635D4D158F93923494C14CD5ED"
+      },
+      "normalization_unicode_version": null,
+      "regex_unicode_version": "16.0.0",
+      "url": "https://crates.io/api/v1/crates/regex-syntax/0.8.8/download",
+      "version": "0.8.8"
+    },
+    "unicode-normalization-alignments": {
+      "archive_sha256": "43F613E4FA046E69818DD287FDC4BC78175FF20331479DAB6E1B0F98D57062DE",
+      "files": {
+        "COPYRIGHT": "23860C2A7B5D96B21569AFEDF033469BAB9FE14A1B24A35068B8641C578CE24D",
+        "LICENSE-APACHE": "A60EEA817514531668D7E00765731449FE14D059D3249E0BC93B36DE45F759F2",
+        "LICENSE-MIT": "7B63ECD5F1902AF1B63729947373683C32745C16A10E8E6292E2E2DCD7E90AE0",
+        "src/tables.rs": "83736E2488E7F5E513317E035DFD476611248227EFE0A456FDDB8A641FE9ADE6"
+      },
+      "normalization_unicode_version": "9.0.0",
+      "regex_unicode_version": null,
+      "url": "https://crates.io/api/v1/crates/unicode-normalization-alignments/0.1.12/download",
+      "version": "0.1.12"
+    }
+  },
+  "tokenizers_binding": {
+    "cargo_lock": "huggingface/tokenizers v0.22.2 bindings/python/Cargo.lock",
+    "tokenizers_version": "0.22.2"
+  }
+}

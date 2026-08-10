@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 This file is the concise working-state handoff. For durable project context,
 read `Source/PROJECT_CONTEXT.md` first. For detailed address planning, read
@@ -1070,10 +1070,74 @@ Previous useful checkpoint:
 - LUT utilization is `92.58%`, while CLB usage is `99.76%`. Treat the routed
   implementation as a correctness-first hardware baseline and defer extra
   parallelism or performance tuning until after the next functional slice.
-- The next model capability is general prompt prefill plus bounded multi-token
-  generation/stop conditions. The runtime
-  helper already expresses a token-id prompt/decode loop, but tokenizer,
-  detokenizer, and arbitrary-prompt board validation remain future work.
+- The general PS prompt/decode application now exists at
+  `FPGA_Project/software/qmap_prompt_demo/`. `qot_session_step()` performs
+  serial prompt prefill, feeds each observed argmax result into the next
+  position, and stops on EOS, IM_END, max-new, context exhaustion, or hardware
+  error. The UART protocol supports both `TOKENS` and single-line UTF-8
+  `PROMPT`; the local Web Serial GUI provides the same two modes without board
+  Ethernet.
+- The allocation-free PS tokenizer implements strict UTF-8, literal
+  leftmost-longest added/special-token isolation, Unicode-9 NFC, Qwen's fixed
+  Unicode-16 split, ByteLevel, and BPE. Its deterministic 15-section asset is
+  `3,629,566` bytes with SHA256
+  `C20242603EF4144E3F3F2EC4BA97C0E9C315AADD41F1BD2C5740E2A7FFA03A7D`.
+  Host acceptance passed all 151,669 decodable token slices, 79 exact
+  Hugging-Face text cases, seven invalid-UTF8 cases, and the complete
+  `The future of FPGA is -> [785,3853,315,89462,374] -> [264,26291] ->
+  " a fascinating"` PS chain with actual result feedback.
+- A clean Vitis 2025.1.1 workspace at `F:\vwi` built `a_qctl`, `a_qmdl`, and
+  the tokenizer-bearing `a_qgen`. The last ELF is `4,050,704` bytes with SHA256
+  `F37EB88D4E1B75FEC815D01306EE85678C1E8555D02E5B42D3EFCA22FD337BBE`;
+  its launch keeps `runPsuInit=false` and `stopAtEntry=true`. The verified
+  non-release bench package is
+  `F:\qot_boardtest_prompt_text_v9_20260809` (format v5, `88` files,
+  `412,238,960` bytes, 61 runtime segments, four Web UI files, and three strict
+  UART-acceptance files). Its verifier reports `trusted_provenance=True` after
+  pinning the exact ELF, launcher, wrapper, UI, and acceptance-tool hashes and
+  executing the packaged host tests and replay. The acceptance tool binds results to the
+  new application startup, requires each command echo, validates BUSY position
+  progress plus exact token/score/BYTES/order for eight single-flight cases,
+  repeats the text prompt, checks the out-of-range negative case, and writes
+  raw UART plus JSON evidence. Its launcher timeout path terminates the full
+  PowerShell/XSDB process tree before any parent-only fallback; all 21 host tests,
+  a live Windows parent/child cleanup check, and the packaged transcript replay
+  pass. This new interactive application has not yet run on hardware, so
+  arbitrary prompt-to-text is not yet a board PASS.
+- The PS-network prerequisite has been audited but not enabled. The current
+  `llm_system` XCI/HWH and the 2026-08-08 XSA still have GEM3, GEM3 MDIO, and
+  TTC0 disabled. `FPGA_Project/Vivado_Project/scripts/configure_ps_gem3_network.tcl`
+  now provides a strict default dry-run for GEM3 RGMII on MIO 64..75, MDIO on
+  MIO 76..77, a 125 MHz GEM3 reference-clock request, and TTC0; only explicit
+  `--apply` can save the BD. Its Tcl syntax-load check and a Vivado 2025.1.1
+  read-only live dry-run both pass against the current project. The script has
+  not been applied, no new XSA has been exported, and no Ethernet board test
+  has run. The staged acceptance path is documented in
+  `Source/PS_NETWORK_BRINGUP.md` as
+  `a_net_echo -> ping/TCP -> a_qweb`.
+- The transport-independent `a_qweb` core now exists under
+  `FPGA_Project/software/qmap_web_demo/`. Its allocation-free HTTP/1.1 parser
+  accepts fragmented fixed-length requests and rejects ambiguous framing; the
+  strict JSON API accepts exactly one of UTF-8 `prompt` or bounded token IDs;
+  the single-job layer reuses the exact Qwen tokenizer, performs prefill plus
+  actual-result feedback, and retains IDs, Q26 scores, stop/error state, and
+  raw detokenized bytes. The router provides `GET /api/health`,
+  `POST /api/generate`, `GET /api/generate/<id>`, and the binary-safe
+  `GET /api/generate/<id>/output`. Strict host checks pass for 19 HTTP/JSON
+  cases, the real-tokenizer job chain, and 11 route/status cases. A production
+  stack-frame gate limits every core function to 1 KiB; measured key frames are
+  288 bytes for JSON parse, 256 bytes for job submit, and 208 bytes for route
+  handling. A separate 11-test XSA audit now fails closed unless a future XSA
+  both enables GEM3/MDIO/TTC0 and preserves the QMAP control, DDR-status GPIO,
+  and PL-DDR apertures. The current XSA is correctly rejected only for its
+  disabled network resources while all datapath-address checks pass. A guarded
+  delayed-import workspace generator also stages an isolated `F:\vwn` /
+  `p_net` / `a_net_echo` build only after that audit passes; its path, embedded
+  bitstream, overlap, new-workspace, snapshot, build-status, and Vitis-call
+  contract bring the Python gate total to 20 passing tests. Execution uses a
+  content-addressed XSA snapshot and audits it before and after Vitis so a
+  mutable export path cannot silently change the recorded lineage. No lwIP
+  adapter, network-enabled XSA, or Ethernet board PASS exists yet.
 
 ### Historical Gap-Closure Log (through 2026-07-13)
 
@@ -1571,20 +1635,31 @@ current board-candidate summary or `Immediate Next Step`.
 
 ## Immediate Next Step
 
-Persistent decode, board integration, the PL-DDR loader, both Vitis
-applications, deterministic XSDB launch automation, the full28 persistent
-XSim/audit, the release verifier, and the first physical full28 acceptance are
-complete. The 2026-08-08 bench run passed the control smoke, all 61 PL-DDR
-downloads, all 281 QMAP-header checks, and the fixed two-position model smoke.
-The preserved evidence is summarized in `Source/BOARD_VALIDATION_20260808.md`.
+The full28 fixed two-position board baseline and the complete PS-side
+text/token application are now separate closed milestones. The remaining
+correctness gate is to join them on the physical board:
 
-The next correctness slice is:
+1. Reconnect JTAG and CH340 UART, start `hw_server`, close Vitis Serial Monitor
+   and the Web GUI so the COM port has one owner, then run the packaged strict
+   acceptance tool from `F:\qot_boardtest_prompt_text_v9_20260809`:
 
-1. Accept an arbitrary bounded token-id prompt and prefill its K/V cache.
-2. Continue decode for a configurable number of positions while feeding each
-   observed argmax token into the next launch.
-3. Add EOS and maximum-length stop conditions, then expose tokenizer,
-   detokenizer, and a user-facing serial prompt/result protocol.
+   ```powershell
+   conda run -n llm_fpga python `
+     .\host_tools\run_uart_board_acceptance.py `
+     --port <CH340_COM> `
+     --launch-workbench .
+   ```
+2. Require its eight single-flight cases to pass. These cover the out-of-range
+   negative gate before any model command, actual-result feedback, two-token
+   prefill, token-ID and text forms of `The future of FPGA is`, an immediate
+   bit-exact repeated text request, and the highest legal model-vocabulary ID.
+3. Preserve the tool's raw UART and JSON report, re-run the workbench verifier,
+   and only then
+   promote `a_qgen` from `WORKBENCH_NOT_RELEASE` to a hardware-validated
+   release.
+4. After serial prompt-to-text is physically accepted, apply the already
+   dry-run-validated GEM3/TTC0 BD change, re-export XSA, bring up `a_net_echo`,
+   and then attach the same session engine to bare-metal lwIP HTTP.
 
 Do not return to smaller row/DDR smokes unless a specific integration failure
 requires that diagnostic slice. Performance and extra parallelism remain after

@@ -1,0 +1,37 @@
+{
+  "assets": [
+    {
+      "body_length": 6350,
+      "etag": "\"4d4f262d2c9704895415a8526c1dc0fe5091b5e43bc9cded4db398cf9fd52247\"",
+      "mime_type": "text/html; charset=utf-8",
+      "routes": [
+        "/",
+        "/index.html"
+      ],
+      "sha256": "4d4f262d2c9704895415a8526c1dc0fe5091b5e43bc9cded4db398cf9fd52247",
+      "source": "web/index.html"
+    },
+    {
+      "body_length": 14459,
+      "etag": "\"090fce41fba5cb747349d41d470fb40df2a915eed0018ebdf034409673f4faec\"",
+      "mime_type": "text/css; charset=utf-8",
+      "routes": [
+        "/styles.css"
+      ],
+      "sha256": "090fce41fba5cb747349d41d470fb40df2a915eed0018ebdf034409673f4faec",
+      "source": "web/styles.css"
+    },
+    {
+      "body_length": 22950,
+      "etag": "\"45b3d59796665c1f19ff7a44fa64df7db14653afc44c1a3d64098f6c2e5e4f3f\"",
+      "mime_type": "text/javascript; charset=utf-8",
+      "routes": [
+        "/app.js"
+      ],
+      "sha256": "45b3d59796665c1f19ff7a44fa64df7db14653afc44c1a3d64098f6c2e5e4f3f",
+      "source": "web/app.js"
+    }
+  ],
+  "schema_version": 1,
+  "source_set_sha256": "bc4af2d87c54b0dffefa80a13a87a202b1d53ae12b5309a40fbee762c3d4f53d"
+}

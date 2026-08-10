@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,12 @@ EXPECTED_OUTPUT_SCORES_Q26 = [1227344433, 1015661901]
 PL_DDR_BASE = 0x0000000400000000
 PL_DDR_END_EXCLUSIVE = 0x0000000420000000
 DEFAULT_PL_TARGET_ASSIGNMENT = 'set device_filter {name =~ "PL"}'
+PACKAGE_FORMAT_VERSION = 2
+PACKAGE_NAME = "qwen3_0p6b_full28_fpga_board_test"
+EXPECTED_TOKENIZER_ASSET_BYTES = 3_629_566
+EXPECTED_TOKENIZER_ASSET_SHA256 = (
+    "c20242603ef4144e3f3f2ec4ba97c0e9c315aadd41f1bd2c5740e2a7ffa03a7d"
+)
 
 REPORT_FILES = (
     "board_build_artifacts.txt",
@@ -56,6 +63,92 @@ def require_file(path: Path, label: str) -> Path:
     if path.stat().st_size == 0:
         raise RuntimeError(f"{label} is empty: {path}")
     return path
+
+
+def path_is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def paths_overlap(left: Path, right: Path) -> bool:
+    left = left.resolve()
+    right = right.resolve()
+    return path_is_within(left, right) or path_is_within(right, left)
+
+
+def validate_output_location(
+    output: Path,
+    repo_root: Path,
+    protected_paths: list[Path],
+) -> None:
+    output = output.resolve()
+    repo_root = repo_root.resolve()
+    if output == repo_root or not path_is_within(output, repo_root):
+        raise RuntimeError(
+            f"Output must be a child directory inside the repository: {output}"
+        )
+
+    for protected in protected_paths:
+        protected = protected.resolve()
+        if paths_overlap(output, protected):
+            raise RuntimeError(
+                "Output must not overlap a release input or durable source: "
+                f"output={output}, protected={protected}"
+            )
+
+
+def require_replaceable_release(path: Path) -> None:
+    if not path.is_dir():
+        raise RuntimeError(f"Refusing to replace a non-directory output: {path}")
+    manifest_path = path / "package_manifest.json"
+    if not manifest_path.is_file():
+        raise RuntimeError(
+            "Refusing --force replacement because the target is not a "
+            f"recognized board release: {path}"
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Refusing --force replacement of an unreadable release: {path}"
+        ) from exc
+    if (
+        manifest.get("name") != PACKAGE_NAME
+        or manifest.get("format_version") not in (1, PACKAGE_FORMAT_VERSION)
+    ):
+        raise RuntimeError(
+            "Refusing --force replacement of an unrecognized release: "
+            f"{path}"
+        )
+
+
+def promote_staged_release(staging: Path, output: Path, *, replace: bool) -> None:
+    if not output.exists():
+        staging.rename(output)
+        return
+    if not replace:
+        raise FileExistsError(f"Output already exists: {output}")
+
+    backup = Path(
+        tempfile.mkdtemp(
+            prefix=f".{output.name}.backup-",
+            dir=output.parent,
+        )
+    )
+    backup.rmdir()
+    output.rename(backup)
+    try:
+        staging.rename(output)
+    except BaseException:
+        backup.rename(output)
+        raise
+    try:
+        shutil.rmtree(backup)
+    except OSError as exc:
+        print(f"WARNING: replaced release backup could not be removed: {exc}")
 
 
 def require_exact_sequence(
@@ -103,10 +196,22 @@ def validate_board_launcher(path: Path) -> dict[str, Any]:
             "Board launcher must select exactly one PL device through "
             "device_filter"
         )
+    required_generate_contract = (
+        "set generate_elf [file join $package_root sw a_qgen.elf]",
+        'if {$mode ni {"model" "control" "generate"}} {',
+        'require_file $generate_elf "interactive generation ELF"',
+        "dow $generate_elf",
+    )
+    for marker in required_generate_contract:
+        if marker not in text:
+            raise RuntimeError(
+                f"Board launcher lacks interactive generation contract: {marker}"
+            )
     return {
         "sha256": sha256_file(path),
         "default_device_filter": 'name =~ "PL"',
         "unique_pl_selection": True,
+        "generate_mode": True,
     }
 
 
@@ -718,6 +823,11 @@ def validate_vitis_workspace(
     workspace: Path,
     build_log_path: Path,
     release_xsa: Path,
+    *,
+    fsbl: Path,
+    control_elf: Path,
+    model_elf: Path,
+    generate_elf: Path,
 ) -> dict[str, Any]:
     durable_source_dir = Path(__file__).resolve().parent
     control_launch_path = require_file(
@@ -728,9 +838,17 @@ def validate_vitis_workspace(
         workspace / "a_qmdl" / "_ide" / "launch.json",
         "model Vitis launch",
     )
+    generate_launch_path = require_file(
+        workspace / "a_qgen" / "_ide" / "launch.json",
+        "generation Vitis launch",
+    )
     model_config_path = require_file(
         workspace / "a_qmdl" / "src" / "UserConfig.cmake",
         "model Vitis compile configuration",
+    )
+    generate_config_path = require_file(
+        workspace / "a_qgen" / "src" / "UserConfig.cmake",
+        "generation Vitis compile configuration",
     )
     xparameters_path = require_file(
         workspace
@@ -779,12 +897,19 @@ def validate_vitis_workspace(
         control_launch_path
     )
     model_run_psu_init, model_stop_at_entry = inspect_launch(model_launch_path)
-    if control_run_psu_init or model_run_psu_init:
+    generate_run_psu_init, generate_stop_at_entry = inspect_launch(
+        generate_launch_path
+    )
+    if control_run_psu_init or model_run_psu_init or generate_run_psu_init:
         raise RuntimeError("Vitis hardware launch must keep runPsuInit=false")
     if any(control_stop_at_entry):
         raise RuntimeError("Control smoke launch must run immediately")
     if not model_stop_at_entry or not all(model_stop_at_entry):
         raise RuntimeError("Model smoke launch must stop at entry before loading DDR")
+    if not generate_stop_at_entry or not all(generate_stop_at_entry):
+        raise RuntimeError(
+            "Generation launch must stop at entry before loading PL DDR"
+        )
 
     model_config = model_config_path.read_text(
         encoding="utf-8",
@@ -792,6 +917,43 @@ def validate_vitis_workspace(
     )
     if "QOT_MODEL_BOARD_SMOKE=1" not in model_config:
         raise RuntimeError("Model Vitis app lacks QOT_MODEL_BOARD_SMOKE=1")
+
+    generate_config = generate_config_path.read_text(
+        encoding="utf-8",
+        errors="replace",
+    )
+    source_blocks = re.findall(
+        r"^set\(USER_COMPILE_SOURCES[ \t]*\r?\n(.*?)^\)",
+        generate_config,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if len(source_blocks) != 1:
+        raise RuntimeError(
+            "Generation Vitis app must contain exactly one "
+            "USER_COMPILE_SOURCES block"
+        )
+    expected_generate_compile_sources = [
+        "main.c",
+        "qot_session.c",
+        "qot_protocol.c",
+        "qot_uart.c",
+        "qtk_tokenizer_runtime.c",
+        "qtk_text_tokenizer.c",
+        "tokenizer_asset.S",
+    ]
+    generate_compile_lines = [
+        line.strip() for line in source_blocks[0].splitlines() if line.strip()
+    ]
+    expected_generate_compile_lines = [
+        f'"{name}"' for name in expected_generate_compile_sources
+    ]
+    if generate_compile_lines != expected_generate_compile_lines:
+        raise RuntimeError(
+            "Generation Vitis compile sources mismatch: "
+            f"expected {expected_generate_compile_sources}, "
+            f"got {generate_compile_lines}"
+        )
+    generate_compile_sources = expected_generate_compile_sources
 
     xparameters = xparameters_path.read_text(
         encoding="utf-8",
@@ -818,6 +980,7 @@ def validate_vitis_workspace(
         "platform_build=0",
         "control_app_build=0",
         "model_app_build=0",
+        "generate_app_build=0",
         "-DQOT_MODEL_BOARD_SMOKE=1",
     ):
         if marker not in build_log:
@@ -846,14 +1009,157 @@ def validate_vitis_workspace(
                     f"{application} was not built from the current {name}"
                 )
 
+    generate_source_hashes = {}
+    common_generate_sources = (
+        "qmap_one_token_runtime.h",
+        "qmap_one_token_regs.h",
+        "qmap_model_config_generated.h",
+    )
+    for name in common_generate_sources:
+        durable = require_file(
+            durable_source_dir / name,
+            f"durable generation runtime source {name}",
+        )
+        copied = require_file(
+            workspace / "a_qgen" / "src" / name,
+            f"a_qgen source {name}",
+        )
+        durable_sha256 = sha256_file(durable)
+        if sha256_file(copied) != durable_sha256:
+            raise RuntimeError(f"a_qgen was not built from the current {name}")
+        generate_source_hashes[name] = durable_sha256
+
+    demo_source_dir = durable_source_dir.parent / "qmap_prompt_demo"
+    demo_source_map = {
+        "main_generate.c": "main.c",
+        "qot_session.c": "qot_session.c",
+        "qot_session.h": "qot_session.h",
+        "qot_protocol.c": "qot_protocol.c",
+        "qot_protocol.h": "qot_protocol.h",
+        "qot_uart.c": "qot_uart.c",
+        "qot_uart.h": "qot_uart.h",
+    }
+    for durable_name, copied_name in demo_source_map.items():
+        durable = require_file(
+            demo_source_dir / durable_name,
+            f"durable prompt-demo source {durable_name}",
+        )
+        copied = require_file(
+            workspace / "a_qgen" / "src" / copied_name,
+            f"a_qgen source {copied_name}",
+        )
+        durable_sha256 = sha256_file(durable)
+        if sha256_file(copied) != durable_sha256:
+            raise RuntimeError(
+                f"a_qgen was not built from the current {durable_name}"
+            )
+        generate_source_hashes[durable_name] = durable_sha256
+
+    tokenizer_runtime_dir = demo_source_dir / "tokenizer_runtime"
+    for name in (
+        "qtk_tokenizer_runtime.c",
+        "qtk_tokenizer_runtime.h",
+        "qtk_text_tokenizer.c",
+        "qtk_text_tokenizer.h",
+    ):
+        durable = require_file(
+            tokenizer_runtime_dir / name,
+            f"durable tokenizer runtime source {name}",
+        )
+        copied = require_file(
+            workspace / "a_qgen" / "src" / name,
+            f"a_qgen tokenizer source {name}",
+        )
+        durable_sha256 = sha256_file(durable)
+        if sha256_file(copied) != durable_sha256:
+            raise RuntimeError(f"a_qgen was not built from the current {name}")
+        generate_source_hashes[name] = durable_sha256
+
+    tokenizer_asset_path = require_file(
+        workspace / "a_qgen" / "src" / "qwen3_tokenizer.qtk",
+        "a_qgen tokenizer asset",
+    )
+    tokenizer_asset_sha256 = sha256_file(tokenizer_asset_path)
+    if (
+        tokenizer_asset_path.stat().st_size != EXPECTED_TOKENIZER_ASSET_BYTES
+        or tokenizer_asset_sha256 != EXPECTED_TOKENIZER_ASSET_SHA256
+    ):
+        raise RuntimeError(
+            "a_qgen tokenizer asset does not match the released Qwen3 asset"
+        )
+    generate_source_hashes["qwen3_tokenizer.qtk"] = tokenizer_asset_sha256
+
+    tokenizer_assembly_path = require_file(
+        workspace / "a_qgen" / "src" / "tokenizer_asset.S",
+        "a_qgen tokenizer assembly wrapper",
+    )
+    tokenizer_assembly = tokenizer_assembly_path.read_text(encoding="utf-8")
+    expected_incbin = f'.incbin "{tokenizer_asset_path.as_posix()}"'
+    required_assembly_markers = (
+        '.section .rodata.qot_tokenizer_asset,"a",%progbits',
+        ".global qot_tokenizer_asset_start",
+        expected_incbin,
+        ".global qot_tokenizer_asset_end",
+    )
+    for marker in required_assembly_markers:
+        if tokenizer_assembly.count(marker) != 1:
+            raise RuntimeError(
+                "a_qgen tokenizer assembly contract mismatch: "
+                f"expected one {marker!r}"
+            )
+    tokenizer_assembly_sha256 = sha256_file(tokenizer_assembly_path)
+    generate_source_hashes["tokenizer_asset.S"] = tokenizer_assembly_sha256
+
+    provided_artifacts = {
+        "fsbl": fsbl,
+        "control": control_elf,
+        "model": model_elf,
+        "generate": generate_elf,
+    }
+    workspace_artifact_paths = {
+        "fsbl": (
+            workspace
+            / "p_qot"
+            / "export"
+            / "p_qot"
+            / "sw"
+            / "boot"
+            / "fsbl.elf"
+        ),
+        "control": workspace / "a_qctl" / "build" / "a_qctl.elf",
+        "model": workspace / "a_qmdl" / "build" / "a_qmdl.elf",
+        "generate": workspace / "a_qgen" / "build" / "a_qgen.elf",
+    }
+    software_build_artifacts = {}
+    for name, provided_path in provided_artifacts.items():
+        workspace_path = require_file(
+            workspace_artifact_paths[name],
+            f"Vitis {name} build artifact",
+        )
+        workspace_sha256 = sha256_file(workspace_path)
+        provided_sha256 = sha256_file(provided_path)
+        if provided_sha256 != workspace_sha256:
+            raise RuntimeError(
+                f"Provided {name} ELF does not match the audited Vitis build: "
+                f"provided={provided_path}, workspace={workspace_path}"
+            )
+        software_build_artifacts[name] = {
+            "workspace_relative_path": workspace_path.relative_to(workspace).as_posix(),
+            "nbytes": workspace_path.stat().st_size,
+            "sha256": workspace_sha256,
+        }
+
     return {
         "platform": "p_qot",
         "control_app": "a_qctl",
         "model_app": "a_qmdl",
+        "generate_app": "a_qgen",
         "control_run_psu_init": False,
         "control_stop_at_entry": False,
         "model_run_psu_init": False,
         "model_stop_at_entry": True,
+        "generate_run_psu_init": False,
+        "generate_stop_at_entry": True,
         "model_compile_definition": "QOT_MODEL_BOARD_SMOKE=1",
         "control_base": "0xA0040000",
         "ddr_status_base": "0xA0010000",
@@ -862,6 +1168,21 @@ def validate_vitis_workspace(
         "build_log_sha256": sha256_file(build_log_path),
         "release_xsa_sha256": release_xsa_sha256,
         "runtime_source_sha256": source_hashes,
+        "generate_source_sha256": generate_source_hashes,
+        "generate_user_config_sha256": sha256_file(generate_config_path),
+        "generate_compile_sources": generate_compile_sources,
+        "tokenizer_asset": {
+            "workspace_relative_path": tokenizer_asset_path.relative_to(
+                workspace
+            ).as_posix(),
+            "nbytes": tokenizer_asset_path.stat().st_size,
+            "sha256": tokenizer_asset_sha256,
+            "assembly_workspace_relative_path": tokenizer_assembly_path.relative_to(
+                workspace
+            ).as_posix(),
+            "assembly_sha256": tokenizer_assembly_sha256,
+        },
+        "software_build_artifacts": software_build_artifacts,
     }
 
 
@@ -925,6 +1246,16 @@ The launcher defaults `QOT_DEVICE_FILTER` to `name =~ "PL"`. If multiple PL
 targets are connected, override it with an XSDB filter that selects exactly the
 intended FPGA. To use a remote hardware server, set `QOT_HW_SERVER_URL`.
 
+After the fixed model smoke passes, start the interactive token-ID application:
+
+```powershell
+.\run_board_smoke.ps1 -Mode generate
+```
+
+At the UART prompt, enter `HELP`. The first machine-facing request format is
+`TOKENS <max_new> <count> <token_id_0> ...`. Each request starts a fresh,
+bounded session and reports `TOKEN` records followed by a `DONE` reason.
+
 `board_readiness_audit.json` records the release gates. `package_manifest.json`
 contains the size and SHA256 of every packaged file.
 """
@@ -939,6 +1270,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fsbl", required=True, type=Path)
     parser.add_argument("--control-elf", required=True, type=Path)
     parser.add_argument("--model-elf", required=True, type=Path)
+    parser.add_argument("--generate-elf", required=True, type=Path)
     parser.add_argument("--runtime-dir", required=True, type=Path)
     parser.add_argument("--reports-dir", required=True, type=Path)
     parser.add_argument("--regression-dir", required=True, type=Path)
@@ -959,23 +1291,48 @@ def main() -> int:
     script_dir = Path(__file__).resolve().parent
     repo_root = script_dir.parents[2]
     output = args.output.resolve()
-    try:
-        output.relative_to(repo_root)
-    except ValueError as exc:
-        raise RuntimeError(
-            f"Output must remain inside the repository: {output}"
-        ) from exc
 
     bit = require_file(args.bit, "bitstream")
     xsa = require_file(args.xsa, "hardware platform")
     fsbl = require_file(args.fsbl, "FSBL")
     control_elf = require_file(args.control_elf, "control smoke ELF")
     model_elf = require_file(args.model_elf, "model smoke ELF")
+    generate_elf = require_file(args.generate_elf, "interactive generation ELF")
     runtime_dir = args.runtime_dir.resolve()
     reports_dir = args.reports_dir.resolve()
     regression_dir = args.regression_dir.resolve()
     vitis_workspace = args.vitis_workspace.resolve()
     vitis_log = args.vitis_log.resolve()
+
+    validate_output_location(
+        output,
+        repo_root,
+        [
+            script_dir,
+            repo_root / ".git",
+            repo_root / "Source",
+            repo_root / "FPGA_Project",
+            repo_root / "init",
+            repo_root / "Qwen3-0.6B-Base",
+            bit,
+            xsa,
+            fsbl,
+            control_elf,
+            model_elf,
+            generate_elf,
+            runtime_dir,
+            reports_dir,
+            regression_dir,
+            vitis_workspace,
+            vitis_log,
+        ],
+    )
+    if output.exists():
+        if not args.force:
+            raise FileExistsError(
+                f"Output exists; pass --force to replace it: {output}"
+            )
+        require_replaceable_release(output)
 
     runtime_audit = validate_runtime_image(runtime_dir)
     launcher_path = script_dir / "launch_qwen3_board.tcl"
@@ -986,124 +1343,161 @@ def main() -> int:
     )
     implementation_audit = validate_implementation(reports_dir)
     regression_audit = validate_regression(regression_dir)
-    vitis_audit = validate_vitis_workspace(vitis_workspace, vitis_log, xsa)
+    vitis_audit = validate_vitis_workspace(
+        vitis_workspace,
+        vitis_log,
+        xsa,
+        fsbl=fsbl,
+        control_elf=control_elf,
+        model_elf=model_elf,
+        generate_elf=generate_elf,
+    )
     hardware_export_audit = validate_xsa_bitstream(xsa, bit)
 
-    if output.exists():
-        if not args.force:
-            raise FileExistsError(
-                f"Output exists; pass --force to replace it: {output}"
-            )
-        if output == repo_root or output == output.anchor:
-            raise RuntimeError(f"Refusing unsafe output removal: {output}")
-        shutil.rmtree(output)
-    output.mkdir(parents=True)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(
+            prefix=f".{output.name}.staging-",
+            dir=output.parent,
+        )
+    )
+    promoted = False
+    try:
+        copy_file(
+            bit,
+            staging / "hw" / "llm_system_qwen3_one_token_boardready.bit",
+        )
+        copy_file(
+            xsa,
+            staging / "hw" / "llm_system_qwen3_one_token_boardready.xsa",
+        )
+        copy_file(fsbl, staging / "sw" / "fsbl.elf")
+        copy_file(control_elf, staging / "sw" / "a_qctl.elf")
+        copy_file(model_elf, staging / "sw" / "a_qmdl.elf")
+        copy_file(generate_elf, staging / "sw" / "a_qgen.elf")
+        copy_file(
+            launcher_path,
+            staging / "launch_qwen3_board.tcl",
+        )
+        copy_file(
+            script_dir / "run_board_smoke.ps1",
+            staging / "run_board_smoke.ps1",
+        )
+        copy_file(
+            script_dir / "verify_board_release.py",
+            staging / "verify_board_release.py",
+        )
 
-    copy_file(
-        bit,
-        output / "hw" / "llm_system_qwen3_one_token_boardready.bit",
-    )
-    copy_file(
-        xsa,
-        output / "hw" / "llm_system_qwen3_one_token_boardready.xsa",
-    )
-    copy_file(fsbl, output / "sw" / "fsbl.elf")
-    copy_file(control_elf, output / "sw" / "a_qctl.elf")
-    copy_file(model_elf, output / "sw" / "a_qmdl.elf")
-    copy_file(
-        launcher_path,
-        output / "launch_qwen3_board.tcl",
-    )
-    copy_file(
-        script_dir / "run_board_smoke.ps1",
-        output / "run_board_smoke.ps1",
-    )
-    copy_file(
-        script_dir / "verify_board_release.py",
-        output / "verify_board_release.py",
-    )
+        runtime_output = staging / "runtime"
+        for source in sorted(runtime_dir.iterdir()):
+            if source.is_file():
+                copy_file(
+                    source,
+                    runtime_output / source.name,
+                    hardlink=not args.copy_runtime,
+                )
 
-    runtime_output = output / "runtime"
-    for source in sorted(runtime_dir.iterdir()):
-        if source.is_file():
+        for name in REPORT_FILES:
             copy_file(
-                source,
-                runtime_output / source.name,
-                hardlink=not args.copy_runtime,
+                require_file(
+                    reports_dir / name,
+                    f"implementation report {name}",
+                ),
+                staging / "reports" / name,
+            )
+        copy_file(
+            vitis_log,
+            staging / "reports" / "vitis_build_stdout.log",
+        )
+
+        for relative_source, destination_name in REGRESSION_FILES:
+            copy_file(
+                require_file(
+                    regression_dir / relative_source,
+                    f"regression evidence {relative_source}",
+                ),
+                staging / "regression" / destination_name,
             )
 
-    for name in REPORT_FILES:
-        copy_file(
-            require_file(reports_dir / name, f"implementation report {name}"),
-            output / "reports" / name,
-        )
-    copy_file(
-        vitis_log,
-        output / "reports" / "vitis_build_stdout.log",
-    )
+        software_audit = {}
+        for name, source in {
+            "fsbl": fsbl,
+            "control": control_elf,
+            "model": model_elf,
+            "generate": generate_elf,
+        }.items():
+            software_audit[name] = {
+                "nbytes": source.stat().st_size,
+                "sha256": sha256_file(source),
+            }
 
-    for relative_source, destination_name in REGRESSION_FILES:
-        copy_file(
-            require_file(
-                regression_dir / relative_source,
-                f"regression evidence {relative_source}",
+        readiness_audit = {
+            "format_version": PACKAGE_FORMAT_VERSION,
+            "release_state": "BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED",
+            "generated_utc": datetime.now(timezone.utc).isoformat(),
+            "implementation": implementation_audit,
+            "hardware_export": hardware_export_audit,
+            "runtime_image": runtime_audit,
+            "board_launcher": launcher_audit,
+            "model_config": model_config_audit,
+            "persistent_full28_regression": regression_audit,
+            "vitis": vitis_audit,
+            "software": software_audit,
+            "runtime_copy_mode": "copy" if args.copy_runtime else "hardlink",
+            "next_gate": (
+                "Run control, model, then generate mode on physical hardware "
+                "and preserve the UART logs."
             ),
-            output / "regression" / destination_name,
+        }
+        (staging / "board_readiness_audit.json").write_text(
+            json.dumps(readiness_audit, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        (staging / "BOARD_TEST_README.md").write_text(
+            build_readme(runtime_audit),
+            encoding="utf-8",
         )
 
-    readiness_audit = {
-        "format_version": 1,
-        "release_state": "BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED",
-        "generated_utc": datetime.now(timezone.utc).isoformat(),
-        "implementation": implementation_audit,
-        "hardware_export": hardware_export_audit,
-        "runtime_image": runtime_audit,
-        "board_launcher": launcher_audit,
-        "model_config": model_config_audit,
-        "persistent_full28_regression": regression_audit,
-        "vitis": vitis_audit,
-        "software": {
-            "fsbl_bytes": fsbl.stat().st_size,
-            "control_elf_bytes": control_elf.stat().st_size,
-            "model_elf_bytes": model_elf.stat().st_size,
-        },
-        "next_gate": (
-            "Run control then model mode on physical hardware and preserve "
-            "the UART log."
-        ),
-    }
-    (output / "board_readiness_audit.json").write_text(
-        json.dumps(readiness_audit, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    (output / "BOARD_TEST_README.md").write_text(
-        build_readme(runtime_audit),
-        encoding="utf-8",
-    )
+        files = []
+        manifest_path = staging / "package_manifest.json"
+        for path in sorted(staging.rglob("*")):
+            if path.is_file() and path != manifest_path:
+                files.append(
+                    {
+                        "path": path.relative_to(staging).as_posix(),
+                        "nbytes": path.stat().st_size,
+                        "sha256": sha256_file(path),
+                    }
+                )
+        package_manifest = {
+            "format_version": PACKAGE_FORMAT_VERSION,
+            "name": PACKAGE_NAME,
+            "release_state": readiness_audit["release_state"],
+            "generated_utc": readiness_audit["generated_utc"],
+            "file_count": len(files),
+            "total_file_bytes": sum(item["nbytes"] for item in files),
+            "files": files,
+        }
+        manifest_path.write_text(
+            json.dumps(package_manifest, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
-    files = []
-    for path in sorted(output.rglob("*")):
-        if path.is_file() and path.name != "package_manifest.json":
-            files.append(
-                {
-                    "path": path.relative_to(output).as_posix(),
-                    "nbytes": path.stat().st_size,
-                    "sha256": sha256_file(path),
-                }
-            )
-    package_manifest = {
-        "format_version": 1,
-        "name": "qwen3_0p6b_full28_fpga_board_test",
-        "release_state": readiness_audit["release_state"],
-        "generated_utc": readiness_audit["generated_utc"],
-        "file_count": len(files),
-        "total_file_bytes": sum(item["nbytes"] for item in files),
-        "files": files,
-    }
-    (output / "package_manifest.json").write_text(
-        json.dumps(package_manifest, indent=2) + "\n",
-        encoding="utf-8",
-    )
+        for item in files:
+            copied = staging / item["path"]
+            if (
+                copied.stat().st_size != item["nbytes"]
+                or sha256_file(copied) != item["sha256"]
+            ):
+                raise RuntimeError(
+                    f"Staged package verification failed: {item['path']}"
+                )
+
+        promote_staged_release(staging, output, replace=args.force)
+        promoted = True
+    finally:
+        if not promoted and staging.exists():
+            shutil.rmtree(staging)
 
     print(f"board_release={output}")
     print(f"file_count={package_manifest['file_count']}")

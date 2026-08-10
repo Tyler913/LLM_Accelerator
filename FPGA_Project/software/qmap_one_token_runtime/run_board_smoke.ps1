@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("model", "control")]
+    [ValidateSet("model", "control", "generate")]
     [string]$Mode = "model",
     [string]$Xsdb = ""
 )

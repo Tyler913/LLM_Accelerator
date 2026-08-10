@@ -155,6 +155,11 @@ Current user-reported FPGA target:
 - Vivado version: 2025.1
 - Board/material: ALIENTEK/ATK MPSoC-P4 V1.4 reference material, schematic
   title `ATK_DFZU2EG_ZU4EV_1V4`
+- Board networking: use the dedicated `PS_ETH` RJ45 for the first user-facing
+  path. Its YT8521 PHY is connected to PS GEM3 through RGMII on MIO 64..75 and
+  MDIO on MIO 76..77; the separate `PL_ETH` RJ45 is not part of the initial
+  standalone lwIP bring-up. The detailed staged procedure is
+  `Source/PS_NETWORK_BRINGUP.md`.
 - PS DDR: 2 GB
 - PL DDR4: 0.5 GB / nominal 512 MiB, confirmed as real PL-side DDR4 wiring on
   FPGA Bank 64
@@ -432,6 +437,53 @@ fixed token-id two-position hardware smoke does not establish arbitrary text
 prompt handling, a board tokenizer/detokenizer, EOS/stop behavior, or general
 prompt-to-text generation.
 
+The next PS-side implementation milestone was completed locally on 2026-08-09
+without changing the full28 RTL or rerunning simulation. The durable
+`qmap_prompt_demo` application accepts either bounded token IDs or a single-line
+UTF-8 prompt, performs exact Qwen ByteLevel-BPE tokenization on A53, executes
+serial prefill plus actual-result greedy feedback through the existing PL
+one-token command, applies EOS/IM_END/max/context/error stops, and returns raw
+detokenized token bytes. Its tokenizer matches 79 tracked Hugging-Face cases,
+and the host integration chain exactly maps `The future of FPGA is` to token
+IDs `785,3853,315,89462,374`, dynamically feeds output `264`, and decodes the
+two generated IDs `264,26291` as ` a fascinating`. A clean Vitis 2025.1.1
+`a_qgen` build at `F:\vwi` embeds the verified 3,629,566-byte tokenizer asset;
+the ELF SHA256 is
+`F37EB88D4E1B75FEC815D01306EE85678C1E8555D02E5B42D3EFCA22FD337BBE`.
+This is source/host/Vitis-build evidence, not yet physical prompt-to-text board
+evidence.
+
+The current handoff for that physical gate is the format-v5 workbench
+`F:\qot_boardtest_prompt_text_v9_20260809`. It preserves the board-tested
+full28 hardware and 61-segment runtime, and adds four hash-audited PC Web Serial
+GUI files plus a strict pyserial acceptance tool. The latter binds to the exact
+new application startup, checks eight ordered single-flight transactions with
+command-echo and BUSY-position evidence, validates exact token/score/raw-byte
+records and immediate prompt repeatability, then saves raw UART and structured
+JSON. The format-v5 verifier pins the trusted ELF, launch, UI, and acceptance
+provenance and executes the packaged 21 host tests and transcript replay. Its
+bounded timeout cleanup also terminates the complete PowerShell/XSDB process
+tree, and a live Windows parent/child cleanup check passes; no physical
+`a_qgen` execution has occurred yet.
+
+The future board-hosted Web path now also has a host-validated,
+transport-independent core at `FPGA_Project/software/qmap_web_demo/`. It keeps
+the HTTP parser, decoded request, generation job, and response buffers in
+caller-owned static storage; parses fragmented fixed-length HTTP/1.1 and strict
+bounded JSON; runs the same exact tokenizer and actual-token-feedback session;
+and exposes health, submit, status, and binary-safe output routes. The Web job
+requires an injected runner rather than allowing the default tight poll loop,
+because the eventual board runner must pump lwIP input and TTC timers during a
+long PL token. Production functions are compiled with a 1 KiB stack-frame
+gate. The accompanying read-only XSA audit independently requires GEM3 RGMII
+MIO 64..75, MDIO MIO 76..77, TTC0, and a 125 MHz IOPLL source while guarding
+the existing one-token and PL-DDR address maps. This is host software and
+future-XSA gating evidence. A guarded generator is ready to create an isolated
+`F:\vwn` platform plus AMD lwIP echo application only from an audited XSA; it
+does not import Vitis during ordinary host checks or touch `F:\vwi`. The lwIP
+adapter and physical `a_net_echo`/`a_qweb` gates still follow the UART prompt
+gate, so none of this is an Ethernet hardware result.
+
 The remainder of this section records how the full datapath was assembled. The
 important early capability was PL write-back. The existing row1024 hardware
 checkpoint proves the PL AXI read path and Q4 row GEMV datapath. The local
@@ -610,13 +662,15 @@ two-token application from the routed fixed XSA. The PL-DDR packer, XSDB
 launcher, and release verifier are also durable source in that runtime
 directory.
 
-The fixed-input physical-validation boundary is now closed: the packaged
-control smoke and full28 persistent two-token model smoke both passed on
-2026-08-08 with the exact UART evidence above. The next feature boundary is
-arbitrary token-id prompt prefill plus bounded generation/stop conditions,
-followed by tokenizer/detokenizer integration. Performance tuning remains after
-that correctness work because this board PASS does not by itself demonstrate
-arbitrary prompt-to-text generation.
+The fixed-input physical-validation boundary is closed: the packaged control
+smoke and full28 persistent two-token model smoke both passed on 2026-08-08.
+The general token/text PS implementation boundary is also closed locally. The
+immediate feature boundary is now its physical-board UART acceptance from the
+verified `F:\qot_boardtest_prompt_text_v9_20260809` format-v5 workbench,
+followed by GEM3 and bare-metal lwIP Web integration. Performance tuning
+remains after that
+correctness work because the existing board PASS does not yet cover the new
+arbitrary prompt-to-text application.
 
 Keep the exact next action in `Source/CURRENT_STATE.md`; keep detailed address
 planning in `Source/FPGA_MEMORY_MAP.md`.

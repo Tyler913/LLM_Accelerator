@@ -1,0 +1,279 @@
+{
+  "base_vocab_size": 151643,
+  "cases": [
+    {
+      "add_special_tokens": false,
+      "category": "English words",
+      "decoded": "The future of FPGA is",
+      "decoded_skip_special_tokens": "The future of FPGA is",
+      "input_ids": [
+        785,
+        3853,
+        315,
+        89462,
+        374
+      ],
+      "name": "english",
+      "text": "The future of FPGA is",
+      "tokens": [
+        "The",
+        "Ġfuture",
+        "Ġof",
+        "ĠFPGA",
+        "Ġis"
+      ]
+    },
+    {
+      "add_special_tokens": false,
+      "category": "Chinese and ASCII",
+      "decoded": "你好，FPGA加速器。",
+      "decoded_skip_special_tokens": "你好，FPGA加速器。",
+      "input_ids": [
+        108386,
+        3837,
+        37,
+        58599,
+        104293,
+        31548,
+        1773
+      ],
+      "name": "chinese",
+      "text": "你好，FPGA加速器。",
+      "tokens": [
+        "ä½łå¥½",
+        "ï¼Į",
+        "F",
+        "PGA",
+        "åĬłéĢŁ",
+        "åĻ¨",
+        "ãĢĤ"
+      ]
+    },
+    {
+      "add_special_tokens": false,
+      "category": "spaces tabs LF and CRLF",
+      "decoded": "  FPGA\tAI\n\nnext\r\nline  ",
+      "decoded_skip_special_tokens": "  FPGA\tAI\n\nnext\r\nline  ",
+      "input_ids": [
+        220,
+        89462,
+        197,
+        15469,
+        271,
+        3600,
+        319,
+        1056,
+        256
+      ],
+      "name": "whitespace",
+      "text": "  FPGA\tAI\n\nnext\r\nline  ",
+      "tokens": [
+        "Ġ",
+        "ĠFPGA",
+        "ĉ",
+        "AI",
+        "ĊĊ",
+        "next",
+        "čĊ",
+        "line",
+        "ĠĠ"
+      ]
+    },
+    {
+      "add_special_tokens": false,
+      "category": "ASCII and Unicode punctuation",
+      "decoded": "Hello, FPGA! (Q4): 1+1=2; ready?—yes.",
+      "decoded_skip_special_tokens": "Hello, FPGA! (Q4): 1+1=2; ready?—yes.",
+      "input_ids": [
+        9707,
+        11,
+        89462,
+        0,
+        320,
+        48,
+        19,
+        1648,
+        220,
+        16,
+        10,
+        16,
+        28,
+        17,
+        26,
+        5527,
+        30,
+        2293,
+        9693,
+        13
+      ],
+      "name": "punctuation",
+      "text": "Hello, FPGA! (Q4): 1+1=2; ready?—yes.",
+      "tokens": [
+        "Hello",
+        ",",
+        "ĠFPGA",
+        "!",
+        "Ġ(",
+        "Q",
+        "4",
+        "):",
+        "Ġ",
+        "1",
+        "+",
+        "1",
+        "=",
+        "2",
+        ";",
+        "Ġready",
+        "?",
+        "âĢĶ",
+        "yes",
+        "."
+      ]
+    },
+    {
+      "add_special_tokens": false,
+      "category": "multi-byte emoji",
+      "decoded": "FPGA 🚀🙂 + AI 🤖",
+      "decoded_skip_special_tokens": "FPGA 🚀🙂 + AI 🤖",
+      "input_ids": [
+        37,
+        58599,
+        11162,
+        248,
+        222,
+        145080,
+        488,
+        15235,
+        11162,
+        97,
+        244
+      ],
+      "name": "emoji",
+      "text": "FPGA 🚀🙂 + AI 🤖",
+      "tokens": [
+        "F",
+        "PGA",
+        "ĠðŁ",
+        "ļ",
+        "Ģ",
+        "ðŁĻĤ",
+        "Ġ+",
+        "ĠAI",
+        "ĠðŁ",
+        "¤",
+        "ĸ"
+      ]
+    },
+    {
+      "add_special_tokens": false,
+      "category": "NFC normalization",
+      "decoded": "Café naïve",
+      "decoded_skip_special_tokens": "Café naïve",
+      "input_ids": [
+        34,
+        2577,
+        963,
+        94880,
+        586
+      ],
+      "name": "nfc_decomposed",
+      "text": "Café naïve",
+      "tokens": [
+        "C",
+        "af",
+        "Ã©",
+        "ĠnaÃ¯",
+        "ve"
+      ]
+    },
+    {
+      "add_special_tokens": false,
+      "category": "Qwen chat control tokens",
+      "decoded": "<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n",
+      "decoded_skip_special_tokens": "user\nHello\nassistant\n",
+      "input_ids": [
+        151644,
+        872,
+        198,
+        9707,
+        151645,
+        198,
+        151644,
+        77091,
+        198
+      ],
+      "name": "special_tokens",
+      "text": "<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n",
+      "tokens": [
+        "<|im_start|>",
+        "user",
+        "Ċ",
+        "Hello",
+        "<|im_end|>",
+        "Ċ",
+        "<|im_start|>",
+        "assistant",
+        "Ċ"
+      ]
+    },
+    {
+      "add_special_tokens": false,
+      "category": "EOS literal",
+      "decoded": "done<|endoftext|>",
+      "decoded_skip_special_tokens": "done",
+      "input_ids": [
+        10438,
+        151643
+      ],
+      "name": "eos_literal",
+      "text": "done<|endoftext|>",
+      "tokens": [
+        "done",
+        "<|endoftext|>"
+      ]
+    }
+  ],
+  "eos_token_id": 151643,
+  "kind": "qwen_tokenizer_golden_corpus",
+  "model": "Qwen3-0.6B-Base",
+  "pad_token_id": 151643,
+  "schema_version": 1,
+  "source_files": {
+    "config.json": {
+      "path": "Qwen3-0.6B-Base/config.json",
+      "sha256": "19A7F4D1B0D23DF7C0CE5D1B8D77B1698678910E17F2B2FA6DD430AC4931C3C7",
+      "size": 757
+    },
+    "generation_config.json": {
+      "path": "Qwen3-0.6B-Base/generation_config.json",
+      "sha256": "644EDD2E8C1DE128E73112C2CCCDA3BFA7B84E39722B24264BB500F196E2EC1A",
+      "size": 144
+    },
+    "merges.txt": {
+      "path": "Qwen3-0.6B-Base/merges.txt",
+      "sha256": "B8E04AF9C950E393054010DCEF499C3F005E803E9B2DA1A09B96A26C33266EB1",
+      "size": 1823241
+    },
+    "tokenizer.json": {
+      "path": "Qwen3-0.6B-Base/tokenizer.json",
+      "sha256": "47EC9BE242D3EF39B9C97AC0A3F06C1752F061B234E295BC0A2842067A3FE4F9",
+      "size": 7334926
+    },
+    "tokenizer_config.json": {
+      "path": "Qwen3-0.6B-Base/tokenizer_config.json",
+      "sha256": "7992A7924330571AC9B97D58E39D4A4993CCDB865335034CEC29CF2C482FD460",
+      "size": 9916
+    },
+    "vocab.json": {
+      "path": "Qwen3-0.6B-Base/vocab.json",
+      "sha256": "CA10D7E9FB3ED18575DD1E277A2579C16D108E32F27439684AFA0E10B1440910",
+      "size": 2776833
+    }
+  },
+  "tokenizer_class": "Qwen2Tokenizer",
+  "tokenizer_id_count": 151669,
+  "tokenizer_is_fast": true,
+  "tokenizers_version": "0.22.2",
+  "transformers_version": "5.9.0"
+}

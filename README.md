@@ -20,8 +20,9 @@ routing/DRC/methodology Error or Critical Warning.
 The complete 394,547,200-byte PL-DDR runtime is packed into 61 verified
 segments. Its 281 QMAP packets, model-manifest provenance, non-overlap/aperture
 rules, and 397 zero-initialized accelerator-writable regions are release-gated.
-The short-path Vitis workspace `F:\vws` builds the AXI-Lite control smoke and
-the full28 persistent two-token model smoke from the current XSA. The single
+The latest short-path Vitis workspace `F:\vwi` builds the AXI-Lite control
+smoke, the full28 persistent two-token model smoke, and the interactive
+text/token application from the current XSA. The single
 requested final full28 no-reset two-token XSim, including its independent
 exact-write, producer-before-consumer, address, timing, and retained-KV audit,
 passed in `Temp/final_qwen3_full28_20260802/20260802_162706`. Its exact outputs
@@ -36,6 +37,32 @@ persistent two-token model smoke then passed on physical hardware. See
 [Source/BOARD_VALIDATION_20260808.md](Source/BOARD_VALIDATION_20260808.md) for
 the artifact hashes, exact acceptance evidence, and remaining prompt-integration
 boundary.
+
+Latest PS/application milestone (2026-08-09): `qmap_prompt_demo` now implements
+bounded arbitrary token-ID prefill, actual argmax feedback, EOS/IM_END/max/context
+stops, and exact PS-native Qwen Unicode/ByteLevel-BPE tokenization plus raw-byte
+detokenization. Its 79-case Hugging-Face differential suite and the host chain
+`The future of FPGA is -> 785,3853,315,89462,374 -> 264,26291 ->
+" a fascinating"` pass. The clean `a_qgen` ELF embeds the verified tokenizer
+asset and is packaged in the verified non-release workbench
+`F:\qot_boardtest_prompt_text_v9_20260809`. That format-v5 workbench contains
+88 hash-audited files: the preserved 61-segment board runtime, `a_qgen`, the
+PC Web Serial GUI, and a strict eight-transaction pyserial acceptance tool.
+It also pins the trusted ELF, launcher, UI, and acceptance-tool provenance;
+the tool's 21 host tests and packaged transcript replay pass. This new
+interactive path has not yet been run on the board, so the latest hardware
+claim remains the fixed 2026-08-08 two-position PASS.
+
+The board-hosted Web path is now staged under
+`FPGA_Project/software/qmap_web_demo/`: bounded fragmented HTTP/1.1, strict
+prompt/token JSON, the exact tokenizer-backed generation job, and health,
+submit, status, and raw-output routes pass host checks. Its production C
+functions also pass a 1 KiB stack-frame gate, and a read-only XSA audit guards
+both the future GEM3/MDIO/TTC0 configuration and the existing QMAP/PL-DDR
+address contracts. The current XSA is expectedly rejected because networking
+is still disabled. A guarded generator is ready to create a separate
+`F:\vwn`/`p_net`/`a_net_echo` Vitis workspace only from a passing future XSA;
+no lwIP or Ethernet board PASS is claimed yet.
 Start with
 [Source/CURRENT_STATE.md](Source/CURRENT_STATE.md) for the live handoff.
 

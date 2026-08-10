@@ -24,13 +24,18 @@ board smoke.
 ## Reproducible Vitis build
 
 `create_vitis_workspace.py` is run by Vitis Python, not ordinary CPython. It
-creates a short-path standalone A53 platform and two applications:
+creates a short-path standalone A53 platform and three applications:
 
 - `a_qctl`: no-memory AXI-Lite control smoke;
 - `a_qmdl`: full28 persistent two-token model smoke.
+- `a_qgen`: bounded interactive UTF-8/text or token-ID prompt/decode
+  application. It embeds the deterministic PS-native Qwen tokenizer asset,
+  uses durable sources from `../qmap_prompt_demo/`, and leaves both smoke apps
+  intact.
 
-Set `QOT_XSA` to the routed board XSA and optionally set
-`QOT_VITIS_WORKSPACE` (default `F:\vws`). The generated launches use FSBL,
+Set `QOT_XSA` to the routed board XSA, set `QOT_TOKENIZER_ASSET` to the verified
+`qwen3_tokenizer.qtk`, and optionally set `QOT_VITIS_WORKSPACE` (default
+`F:\vws`). The generated launches use FSBL,
 keep `runPsuInit=false`, and stop the model app at entry so the PL-DDR runtime
 image can be loaded first.
 
@@ -45,7 +50,8 @@ image can be loaded first.
   `dow -data -bypass-cache-sync <file> <physical-address>`. The bypass is a
   required contract, not an optional speed setting: PL-DDR writes must not
   trigger Cortex-A53 cache flush/invalidate operations.
-- `run_board_smoke.ps1` invokes that launcher in `control` or `model` mode.
+- `run_board_smoke.ps1` invokes that launcher in `control`, `model`, or
+  `generate` mode.
 - `package_board_release.py` refuses to create a release unless post-route
   timing/routing/DRC, the complete runtime image, and the full28 persistent
   two-token XSim audit all pass. It also proves that all 397 accelerator-writable
@@ -53,11 +59,19 @@ image can be loaded first.
   be satisfied by preloaded golden scratch data. It additionally compares all
   280 per-layer QMAP bases and all eight global model-address constants compiled
   into the model app against the runtime's exact full-chain manifest. It emits
-  a self-contained package with per-file SHA256 values and an explicit
-  `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED` state.
+  a self-contained format-v2 package with per-file SHA256 values and an explicit
+  `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED` state. All four packaged ELFs
+  must hash-identically match the audited Vitis workspace build outputs. Release
+  assembly occurs in a same-parent staging directory and only replaces an
+  existing recognized release after the new package is complete. The generation
+  audit also requires the exact seven-source `a_qgen` compile list and the fixed
+  Qwen3 tokenizer asset (`3,629,566` bytes, SHA256
+  `c20242603ef4144e3f3f2ec4ba97c0e9c315aadd41f1bd2c5740e2a7ffa03a7d`).
 - `verify_board_release.py` independently rehashes the complete packaged
-  inventory before the package is used at the bench. It also rejects malformed
-  board-readme control characters or missing verify/control/model commands.
+  inventory before the package is used at the bench. It strictly validates
+  manifest paths, counts, byte totals, and hashes. It accepts historical
+  format-v1 control/model packages, while format v2 additionally requires the
+  audited `a_qgen` ELF and generate command.
 
 ## Current verified board milestone
 
@@ -106,6 +120,8 @@ positions:
 | `0` | `374` | `28458` | `1227344433` | `done=1, err=0` | `28/28` | `0x0fffffff` | `0` |
 | `1` | `28458` | `64` | `1015661901` | `done=1, err=0` | `28/28` | `0x0fffffff` | `0` |
 
-This is a fixed two-token token-ID board validation. It proves neither an
-arbitrary text prompt-to-text interface nor board-side tokenization,
-detokenization, EOS/stop handling, sampling, or arbitrary-length generation.
+This remains the fixed two-token hardware validation baseline. A later
+2026-08-09 `a_qgen` build adds PS-side tokenization, detokenization, EOS/stop
+handling, and bounded dynamic feedback, but those new interactive paths still
+require their own UART board acceptance before they inherit hardware-PASS
+status. Sampling and arbitrary-length generation remain outside the scope.
