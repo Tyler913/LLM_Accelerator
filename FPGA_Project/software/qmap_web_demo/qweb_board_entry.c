@@ -3,8 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "lwip/ip4_addr.h"
 #include "lwip/netif.h"
-#include "xtime_l.h"
+#include "xiltimer.h"
 #include "xparameters.h"
 
 #include "qmap_model_config_generated.h"
@@ -66,14 +67,6 @@
 #define QWEB_HTTP_CACHE_MAX_AGE_SECONDS UINT32_C(60)
 #endif
 
-#ifndef QWEB_BOARD_HOST
-#define QWEB_BOARD_HOST "192.168.1.10"
-#endif
-
-#ifndef QWEB_BOARD_HOST_WITH_PORT
-#define QWEB_BOARD_HOST_WITH_PORT "192.168.1.10:80"
-#endif
-
 #define QWEB_DDR4_CALIB_COMPLETE_MASK UINT32_C(0x00000001)
 #define QWEB_DDR4_UI_RESET_MASK       UINT32_C(0x00000002)
 #define QWEB_DDR4_AXI_RESETN_MASK     UINT32_C(0x00000004)
@@ -94,6 +87,8 @@ static qweb_lwip_adapter_t qweb_adapter;
 static qweb_board_app_t qweb_app;
 static qweb_board_xilinx_network_t qweb_network;
 static uint8_t qweb_started;
+static char qweb_board_host[IP4ADDR_STRLEN_MAX];
+static char qweb_board_authority[IP4ADDR_STRLEN_MAX + 6u];
 
 #if defined(QWEB_BOARD_ENTRY_HOST_TEST)
 extern uint32_t qweb_board_entry_host_read32(uint64_t address);
@@ -151,6 +146,34 @@ static uint32_t qweb_now_ms(void *context)
     return (uint32_t)((uint64_t)ticks / ticks_per_millisecond);
 }
 
+static int qweb_capture_board_authority(void)
+{
+    const ip4_addr_t *address;
+    int written;
+
+    if (echo_netif == NULL) return 0;
+    address = netif_ip4_addr(echo_netif);
+    if (address == NULL ||
+        (ip4_addr1(address) == 0u && ip4_addr2(address) == 0u &&
+         ip4_addr3(address) == 0u && ip4_addr4(address) == 0u)) {
+        return 0;
+    }
+    written = snprintf(qweb_board_host,
+                       sizeof(qweb_board_host),
+                       "%u.%u.%u.%u",
+                       (unsigned)ip4_addr1(address),
+                       (unsigned)ip4_addr2(address),
+                       (unsigned)ip4_addr3(address),
+                       (unsigned)ip4_addr4(address));
+    if (written <= 0 || (size_t)written >= sizeof(qweb_board_host)) return 0;
+    written = snprintf(qweb_board_authority,
+                       sizeof(qweb_board_authority),
+                       "%s:%u",
+                       qweb_board_host,
+                       (unsigned)QWEB_HTTP_PORT);
+    return written > 0 && (size_t)written < sizeof(qweb_board_authority);
+}
+
 static int qweb_content_type_from_mime(
     const char *mime,
     qweb_http_content_type_t *content_type)
@@ -198,9 +221,9 @@ static int qweb_resolve_static_asset(
 
 static int qweb_initialize_runtime(void)
 {
-    static const char *allowed_hosts[] = {
-        QWEB_BOARD_HOST,
-        QWEB_BOARD_HOST_WITH_PORT,
+    const char *allowed_hosts[] = {
+        qweb_board_host,
+        qweb_board_authority,
     };
     qweb_lwip_config_t network_config;
     qot_run_config_t model_config;
@@ -211,6 +234,10 @@ static int qweb_initialize_runtime(void)
 
     if ((uintptr_t)QWEB_QOT_BASEADDR == (uintptr_t)0u ||
         echo_netif == NULL || !qweb_model_memory_ready()) {
+        return 0;
+    }
+    if (!qweb_capture_board_authority()) {
+        (void)printf("ERROR NETWORK_ADDRESS\r\n");
         return 0;
     }
 #if defined(QWEB_BOARD_ENTRY_HOST_TEST)
@@ -286,7 +313,7 @@ static int qweb_initialize_runtime(void)
                  (unsigned long)qweb_tokenizer.eos_token_id,
                  (unsigned long)tokenizer_size);
     (void)printf("QWEB READY http://%s/ context=%u vocab=%u\r\n",
-                 QWEB_BOARD_HOST,
+                 qweb_board_authority,
                  (unsigned)QOT_MAX_CONTEXT,
                  (unsigned)QOT_VOCAB_SIZE);
     return 1;

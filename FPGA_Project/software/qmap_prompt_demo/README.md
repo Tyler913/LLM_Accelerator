@@ -182,14 +182,24 @@ conda run -n llm_fpga python `
 The tool opens UART before reset/loading, requires the exact new `a_qgen`
 startup sequence, then runs eight single-flight cases. It rejects stale logs,
 missing command echoes, malformed or out-of-order records, incorrect BUSY
-positions, wrong token/score/BYTES data, invalid UTF-8, nonzero launcher exit,
-and unexpected PL-facing records after the out-of-range negative request. It
+positions, wrong token/score/BYTES data, invalid UTF-8, a nonzero launcher exit
+before `READY`, and unexpected PL-facing records after the out-of-range
+negative request. A successful launcher may return before the first UART line
+because XSDB `con` resumes the A53 asynchronously; the startup oracle still
+requires the complete ordered banner through `READY`. The line normalizer
+removes only a leading terminal `CR` left between the FSBL banner and the first
+application line; it does not trim protocol whitespace. It
 saves `uart_raw.bin`, `acceptance.json`, and `launcher.log`. Its timestamped
 default output is outside the immutable workbench under the host temporary
 directory; use `--output-dir` to choose a durable evidence directory. If the
 launcher hangs, the Windows path first terminates the complete PowerShell/XSDB
-process tree with `taskkill /T /F`, records the cleanup result, and fails closed;
-its 21 host tests and a live parent/child cleanup check pass.
+process tree with `taskkill /T /F`, records the cleanup result, and fails closed.
+The PowerShell wrapper invokes adjacent AMD `loader.bat -exec xsdb` on Windows;
+calling `xsdb.bat` directly is unsafe because its final `endlocal` discards an
+uncaught Tcl error code. The default `--ready-timeout` is 3600 seconds because
+it includes the complete 394,547,200-byte cold JTAG runtime download; the first
+physical v10 attempt reached only segment 23/61 before the former 900-second
+budget expired. Its 24 host tests and a live parent/child cleanup check pass.
 
 ## Vitis and Board Integration Status
 
@@ -208,23 +218,35 @@ The launch keeps `runPsuInit=false` and `stopAtEntry=true`, and all durable
 source hashes match the Vitis copies.
 
 `make_prompt_demo_workbench.py` creates a non-destructive text/token workbench
-that retains the 2026-08-08 validated hardware/runtime lineage but is
-explicitly marked `WORKBENCH_NOT_RELEASE`. The next gate is physical UART
-acceptance of both a general `TOKENS` request and a `PROMPT` request. A new
-release should be promoted only after those board logs pass.
+that retains the 2026-08-08 validated hardware/runtime lineage and is initially
+marked `WORKBENCH_NOT_RELEASE`. Physical UART acceptance of both general
+`TOKENS` and `PROMPT` requests passed on 2026-08-12; the immutable workbench is
+left unchanged and the separate evidence directory binds the result.
 
 New workbenches use manifest format 5, pin every non-segment file from the
 2026-08-08 board lineage, validate every segment against the pinned runtime
 manifest, bind the exact trusted ELF/launcher/UI/acceptance provenance, execute
 the packaged host tests and transcript replay, build in a temporary sibling
 directory, and move into place only after verification. Formats 2 through 4
-remain verifier-compatible. Verify the current workbench with:
+remain verifier-compatible. The hardware-validated v13 package has 88 files and
+412,241,806 bytes, and verifies with `trusted_provenance=True`. Verify it with:
 
 ```powershell
 conda run -n llm_fpga python `
   FPGA_Project/software/qmap_prompt_demo/verify_prompt_demo_workbench.py `
-  F:/qot_boardtest_prompt_text_v9_20260809
+  F:/qot_boardtest_prompt_text_v13_20260812
 ```
+
+The final cold run is
+`Temp/a_qgen_board_acceptance_20260812_v13_cold/`. It loaded all 61 segments,
+checked all 281 QMAP headers, observed the complete startup sequence, and passed
+all eight cases. `acceptance.json` SHA256 is
+`735C987EBE8AEB13C3243EB1FBA8D4CD057590DEF94C4BBEF5131A6A37798645`;
+the 19,918-byte raw UART SHA256 is
+`8C2DCF4810BB53F39B6068166BDDBB15706E8B8D068760AC0FBB62076C0176D7`.
+Earlier FSBL, DDR `0x00000004`, DAP, 900-second startup-budget, normal-launcher
+exit, and FSBL-leading-CR failures remain useful fail-closed diagnostics, not
+counterexamples to the final PASS.
 
 ## First Board Acceptance Matrix
 

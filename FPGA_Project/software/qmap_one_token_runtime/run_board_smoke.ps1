@@ -26,9 +26,26 @@ if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
 $previousMode = $env:QOT_BOARD_MODE
 try {
     $env:QOT_BOARD_MODE = $Mode
-    & $Xsdb $launcher
-    if ($LASTEXITCODE -ne 0) {
-        throw "XSDB board launch failed with exit code $LASTEXITCODE."
+
+    # AMD's Windows xsdb.bat ends with `endlocal` and discards the exit code
+    # returned by loader.bat. Invoke the adjacent loader directly so an
+    # uncaught Tcl error cannot be reported to the acceptance harness as a
+    # successful launcher exit.
+    $xsdbCommand = $Xsdb
+    $xsdbArguments = @($launcher)
+    if ([System.IO.Path]::GetFileName($Xsdb) -ieq "xsdb.bat") {
+        $loader = Join-Path (Split-Path -Parent $Xsdb) "loader.bat"
+        if (-not (Test-Path -LiteralPath $loader -PathType Leaf)) {
+            throw "AMD loader.bat was not found next to '$Xsdb'."
+        }
+        $xsdbCommand = $loader
+        $xsdbArguments = @("-exec", "xsdb", $launcher)
+    }
+
+    & $xsdbCommand @xsdbArguments
+    $xsdbExitCode = $LASTEXITCODE
+    if ($xsdbExitCode -ne 0) {
+        throw "XSDB board launch failed with exit code $xsdbExitCode."
     }
 } finally {
     $env:QOT_BOARD_MODE = $previousMode

@@ -98,6 +98,15 @@ class GeneratorContractTests(unittest.TestCase):
                     generator.MANIFEST_NAME,
                 },
             )
+            index_path = project / "web" / "index.html"
+            index_path.write_bytes(
+                index_path.read_bytes().replace(
+                    generator.SCRIPT_REFERENCE,
+                    b'  <script src="/app.js" async></script>\n',
+                )
+            )
+            with self.assertRaisesRegex(generator.AssetError, "deferred script reference"):
+                generator.render_outputs(project)
 
     def test_detects_generated_output_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -158,8 +167,9 @@ class GeneratorContractTests(unittest.TestCase):
 
 
 class UiContractTests(unittest.TestCase):
-    def test_html_has_local_assets_unique_ids_and_both_inputs(self) -> None:
-        html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+    def test_html_template_and_generated_single_connection_document(self) -> None:
+        html_bytes = (ROOT / "web" / "index.html").read_bytes()
+        html = html_bytes.decode("utf-8")
         inventory = _HtmlInventory()
         inventory.feed(html)
         self.assertEqual(inventory.stylesheets, ["/styles.css"])
@@ -177,6 +187,42 @@ class UiContractTests(unittest.TestCase):
             "outputText",
         ):
             self.assertIn(required_id, inventory.ids)
+
+        source_styles = (ROOT / "web" / "styles.css").read_bytes()
+        source_script = (ROOT / "web" / "app.js").read_bytes()
+        payloads = {
+            payload.spec.source_name: payload for payload in generator.load_assets(ROOT)
+        }
+        generated_index = payloads["index.html"].body
+        generated_inventory = _HtmlInventory()
+        generated_inventory.feed(generated_index.decode("utf-8"))
+
+        self.assertEqual(generated_inventory.stylesheets, [])
+        self.assertEqual(generated_inventory.scripts, [""])
+        self.assertNotIn(b'href="/styles.css"', generated_index)
+        self.assertNotIn(b'src="/app.js"', generated_index)
+        self.assertEqual(
+            generated_index.count(
+                generator.INLINE_STYLE_OPEN
+                + source_styles
+                + generator.INLINE_STYLE_CLOSE
+            ),
+            1,
+        )
+        self.assertEqual(
+            generated_index.count(
+                generator.INLINE_SCRIPT_OPEN
+                + source_script
+                + generator.INLINE_SCRIPT_CLOSE
+            ),
+            1,
+        )
+        self.assertLess(
+            generated_index.index(b'id="outputText"'),
+            generated_index.index(generator.INLINE_SCRIPT_OPEN),
+        )
+        self.assertEqual(payloads["styles.css"].body, source_styles)
+        self.assertEqual(payloads["app.js"].body, source_script)
 
     def test_assets_are_offline_only_and_js_uses_exact_api(self) -> None:
         combined = b"\n".join(

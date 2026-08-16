@@ -18,9 +18,22 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_HWH_BYTES = 16 * 1024 * 1024
 MAX_JSON_BYTES = 4 * 1024 * 1024
+MAX_BIT_HEADER_BYTES = 64 * 1024
+
+EXPECTED_HWH_SYSTEM = {
+    "ARCH": "zynquplus",
+    "DEVICE": "xczu2eg",
+    "PACKAGE": "sfvc784",
+    "SPEEDGRADE": "-2",
+}
+EXPECTED_PART_NAME = "xczu2eg-sfvc784-2-i"
+EXPECTED_FPGA_PART = "zynquplus:xczu2eg:sfvc784:-2:i"
+EXPECTED_TOP_MODULE = "llm_system_wrapper"
+
+_BIT_MAGIC = bytes.fromhex("0f f0 0f f0 0f f0 0f f0 00")
 
 NETWORK_PARAMETERS = {
     "PSU__ENET3__PERIPHERAL__ENABLE": "1",
@@ -32,6 +45,25 @@ NETWORK_PARAMETERS = {
     "PSU__CRL_APB__GEM3_REF_CTRL__FREQMHZ": "125",
     "PSU__CRL_APB__GEM3_REF_CTRL__ACT_FREQMHZ": "125",
     "PSU__CRL_APB__GEM3_REF_CTRL__SRCSEL": "IOPLL",
+}
+
+NETWORK_FLOAT_TOLERANCES = {
+    "PSU__CRL_APB__GEM3_REF_CTRL__ACT_FREQMHZ": 0.01,
+}
+
+NETWORK_PS_PERIPHERALS = {
+    "psu_ethernet_3": {
+        "domain": "LPD",
+        "name": "GEM3",
+        "base": "FF0E0000",
+        "high": "FF0EFFFF",
+    },
+    "psu_ttc_0": {
+        "domain": "LPD",
+        "name": "TTC0",
+        "base": "FF110000",
+        "high": "FF11FFFF",
+    },
 }
 
 QMAP_INSTANCE = "qmap_one_token_axi_bd_0"
@@ -65,6 +97,116 @@ def _sha256_zip_entry(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _parse_bitstream_header(
+    archive: zipfile.ZipFile,
+    info: zipfile.ZipInfo,
+    errors: list[str],
+) -> dict[str, Any]:
+    """Parse and bind the standard Xilinx ``.bit`` header.
+
+    Only the bounded header prefix is read.  The declared configuration payload
+    length is checked against the ZIP member's uncompressed size, while the
+    complete member is independently streamed through SHA-256 by the caller.
+    """
+
+    facts: dict[str, Any] = {"parse_ok": False}
+    label = f"embedded bitstream {info.filename}"
+    if info.file_size <= 0:
+        errors.append(f"{label} is empty")
+        return facts
+
+    try:
+        with archive.open(info, "r") as stream:
+            data = stream.read(min(info.file_size, MAX_BIT_HEADER_BYTES))
+    except OSError as exc:
+        errors.append(f"cannot read {label} header: {exc}")
+        return facts
+
+    offset = 0
+
+    def take(count: int, description: str) -> bytes:
+        nonlocal offset
+        if count < 0 or offset + count > len(data):
+            raise ValueError(f"truncated while reading {description}")
+        value = data[offset : offset + count]
+        offset += count
+        return value
+
+    def u16(description: str) -> int:
+        return int.from_bytes(take(2, description), "big")
+
+    def text_field(tag: str) -> str:
+        length = u16(f"field {tag} length")
+        if length <= 0:
+            raise ValueError(f"field {tag} is empty")
+        raw = take(length, f"field {tag}")
+        if raw[-1:] != b"\0":
+            raise ValueError(f"field {tag} is not NUL terminated")
+        try:
+            return raw[:-1].decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"field {tag} is not ASCII: {exc}") from exc
+
+    try:
+        magic_length = u16("magic length")
+        magic = take(magic_length, "magic")
+        if magic != _BIT_MAGIC:
+            raise ValueError("unexpected Xilinx bitstream magic")
+
+        first_tag_length = u16("first tag length")
+        if first_tag_length != 1 or take(first_tag_length, "first tag") != b"a":
+            raise ValueError("first metadata tag is not 'a'")
+
+        fields: dict[str, str] = {"a": text_field("a")}
+        for tag in ("b", "c", "d"):
+            if take(1, f"tag {tag}") != tag.encode("ascii"):
+                raise ValueError(f"expected metadata tag {tag!r}")
+            fields[tag] = text_field(tag)
+
+        if take(1, "payload tag") != b"e":
+            raise ValueError("expected configuration payload tag 'e'")
+        payload_length = int.from_bytes(take(4, "payload length"), "big")
+        payload_offset = offset
+        payload_size_matches = payload_length == info.file_size - payload_offset
+        if payload_length <= 0:
+            raise ValueError("configuration payload is empty")
+        if not payload_size_matches:
+            raise ValueError(
+                "configuration payload length does not match the embedded file size"
+            )
+
+        design_name = fields["a"]
+        design_top = design_name.split(";", 1)[0]
+        part_name = fields["b"]
+        facts.update(
+            {
+                "parse_ok": True,
+                "design_name": design_name,
+                "design_top": design_top,
+                "part_name": part_name,
+                "date": fields["c"],
+                "time": fields["d"],
+                "payload_offset": payload_offset,
+                "payload_size": payload_length,
+                "payload_size_matches": payload_size_matches,
+                "target_part_match": part_name == EXPECTED_PART_NAME,
+                "target_top_match": design_top == EXPECTED_TOP_MODULE,
+            }
+        )
+        if part_name != EXPECTED_PART_NAME:
+            errors.append(
+                f"{label} targets part {part_name!r}, expected {EXPECTED_PART_NAME!r}"
+            )
+        if design_top != EXPECTED_TOP_MODULE:
+            errors.append(
+                f"{label} design top is {design_top!r}, expected {EXPECTED_TOP_MODULE!r}"
+            )
+    except ValueError as exc:
+        errors.append(f"cannot parse {label} header: {exc}")
+
+    return facts
 
 
 def _number(value: str | None) -> int | None:
@@ -136,6 +278,35 @@ def _has_memrange(
 
 def _module_identity_ok(module: ET.Element, vlnv: str) -> bool:
     return module.get("VLNV") == vlnv and module.get("IS_ENABLE") == "1"
+
+
+def _check_hwh_system_identity(root: ET.Element, errors: list[str]) -> dict[str, Any]:
+    system_infos = root.findall("./SYSTEMINFO")
+    if len(system_infos) != 1:
+        errors.append(f"expected exactly one HWH SYSTEMINFO entry, found {len(system_infos)}")
+        return {
+            "actual": {},
+            "expected": dict(EXPECTED_HWH_SYSTEM),
+            "fields": {},
+            "match": False,
+        }
+
+    actual = dict(system_infos[0].attrib)
+    fields: dict[str, Any] = {}
+    for name, expected in EXPECTED_HWH_SYSTEM.items():
+        value = actual.get(name)
+        match = value == expected
+        fields[name] = {"actual": value, "expected": expected, "match": match}
+        if not match:
+            errors.append(
+                f"HWH SYSTEMINFO {name}: expected {expected!r}, found {value!r}"
+            )
+    return {
+        "actual": actual,
+        "expected": dict(EXPECTED_HWH_SYSTEM),
+        "fields": fields,
+        "match": all(field["match"] for field in fields.values()),
+    }
 
 
 def _check_datapath(root: ET.Element, errors: list[str]) -> dict[str, Any]:
@@ -272,25 +443,82 @@ def _check_datapath(root: ET.Element, errors: list[str]) -> dict[str, Any]:
 def _check_network(root: ET.Element, errors: list[str]) -> dict[str, Any]:
     ps_modules = [module for module in _modules(root) if module.get("MODTYPE") == "zynq_ultra_ps_e"]
     if len(ps_modules) != 1:
-        return {"parameters": {}, "instances": {}}
+        return {"parameters": {}, "ps_peripherals": {}}
     ps = ps_modules[0]
     params = _parameter_map(ps, errors, "zynq_ultra_ps_e")
     param_facts: dict[str, Any] = {}
     for name, expected in NETWORK_PARAMETERS.items():
         actual = params.get(name)
-        match = actual == expected
-        param_facts[name] = {"actual": actual, "expected": expected, "match": match}
+        tolerance = NETWORK_FLOAT_TOLERANCES.get(name)
+        if tolerance is None:
+            match = actual == expected
+        else:
+            try:
+                match = actual is not None and abs(float(actual) - float(expected)) <= tolerance
+            except ValueError:
+                match = False
+        param_facts[name] = {
+            "actual": actual,
+            "expected": expected,
+            "match": match,
+            **({"tolerance": tolerance} if tolerance is not None else {}),
+        }
         if not match:
             errors.append(f"network parameter {name}: expected {expected!r}, found {actual!r}")
 
-    instance_facts: dict[str, Any] = {}
-    for instance in ("psu_ethernet_3", "psu_ttc_0"):
-        count = len(_find_modules(root, instance))
-        instance_facts[instance] = {"count": count, "present_once": count == 1}
-        if count != 1:
-            errors.append(f"expected exactly one generated network module {instance}, found {count}")
+    protection_value = params.get("PSU__PROTECTION__SLAVES")
+    protection_entries: list[dict[str, str]] = []
+    if protection_value is None:
+        errors.append("zynq_ultra_ps_e parameter PSU__PROTECTION__SLAVES is missing")
+    else:
+        for raw_entry in protection_value.split("|"):
+            fields = raw_entry.split(";")
+            if len(fields) != 5:
+                errors.append(
+                    "PSU__PROTECTION__SLAVES contains a malformed entry: "
+                    f"{raw_entry!r}"
+                )
+                continue
+            domain, peripheral, base, high, enabled = fields
+            protection_entries.append(
+                {
+                    "domain": domain,
+                    "name": peripheral,
+                    "base": base.upper(),
+                    "high": high.upper(),
+                    "enabled": enabled,
+                }
+            )
 
-    return {"parameters": param_facts, "instances": instance_facts}
+    peripheral_facts: dict[str, Any] = {}
+    for instance, expected in NETWORK_PS_PERIPHERALS.items():
+        matches = [
+            entry
+            for entry in protection_entries
+            if entry["domain"] == expected["domain"]
+            and entry["name"] == expected["name"]
+            and entry["base"] == expected["base"]
+            and entry["high"] == expected["high"]
+            and entry["enabled"] == "1"
+        ]
+        count = len(matches)
+        peripheral_facts[instance] = {
+            "protection_map_name": expected["name"],
+            "domain": expected["domain"],
+            "base": f"0x{expected['base']}",
+            "high": f"0x{expected['high']}",
+            "enabled": True,
+            "matching_entries": count,
+            "present_once": count == 1,
+        }
+        if count != 1:
+            errors.append(
+                "PS protection map must contain exactly one enabled "
+                f"{expected['name']} entry at 0x{expected['base']}..0x{expected['high']}; "
+                f"found {count}"
+            )
+
+    return {"parameters": param_facts, "ps_peripherals": peripheral_facts}
 
 
 def _read_json_entry(
@@ -336,6 +564,76 @@ def _provenance_from_json(payload: dict[str, Any] | None) -> dict[str, Any]:
         "part_name": part.get("name"),
         "declared_full_bit_entries": declared_bits,
     }
+
+
+def _check_xsa_json_provenance(
+    payload: dict[str, Any],
+    bit_entries: list[dict[str, Any]],
+    errors: list[str],
+) -> dict[str, Any]:
+    facts = _provenance_from_json(payload)
+
+    devices = payload.get("devices")
+    valid_devices = (
+        isinstance(devices, list)
+        and len(devices) == 1
+        and isinstance(devices[0], dict)
+    )
+    if not valid_devices:
+        count = len(devices) if isinstance(devices, list) else "non-list"
+        errors.append(f"xsa.json must declare exactly one device, found {count}")
+
+    top = facts.get("top_module_name")
+    top_match = top == EXPECTED_TOP_MODULE
+    facts["expected_top_module_name"] = EXPECTED_TOP_MODULE
+    facts["top_module_match"] = top_match
+    if not top_match:
+        errors.append(
+            f"xsa.json topModuleName: expected {EXPECTED_TOP_MODULE!r}, found {top!r}"
+        )
+
+    part_name = facts.get("part_name")
+    part_match = part_name == EXPECTED_PART_NAME
+    facts["expected_part_name"] = EXPECTED_PART_NAME
+    facts["part_name_match"] = part_match
+    if not part_match:
+        errors.append(
+            f"xsa.json part name: expected {EXPECTED_PART_NAME!r}, found {part_name!r}"
+        )
+
+    fpga_part = facts.get("fpga_part")
+    fpga_part_match = fpga_part == EXPECTED_FPGA_PART
+    facts["expected_fpga_part"] = EXPECTED_FPGA_PART
+    facts["fpga_part_match"] = fpga_part_match
+    if not fpga_part_match:
+        errors.append(
+            f"xsa.json fpgaPart: expected {EXPECTED_FPGA_PART!r}, found {fpga_part!r}"
+        )
+
+    files = payload.get("files")
+    full_bit_items = (
+        [item for item in files if isinstance(item, dict) and item.get("type") == "FULL_BIT"]
+        if isinstance(files, list)
+        else []
+    )
+    if not isinstance(files, list):
+        errors.append("xsa.json files must be a list")
+    if len(full_bit_items) != 1:
+        errors.append(
+            f"xsa.json must declare exactly one FULL_BIT entry, found {len(full_bit_items)}"
+        )
+
+    declared = facts.get("declared_full_bit_entries", [])
+    embedded = [entry["name"] for entry in bit_entries]
+    declaration_match = declared == embedded and len(declared) == 1
+    facts["embedded_bit_entries"] = embedded
+    facts["full_bit_declaration_match"] = declaration_match
+    if not declaration_match:
+        errors.append(
+            "xsa.json FULL_BIT declarations do not exactly match the unique embedded .bit entry"
+        )
+
+    return facts
 
 
 def audit_network_xsa(
@@ -408,7 +706,7 @@ def audit_network_xsa(
                 errors.append(f"expected exactly one top-level HWH containing the PS, found {len(candidates)}")
             else:
                 hwh_info, hwh_data, root = candidates[0]
-                system_info = root.find("./SYSTEMINFO")
+                target = _check_hwh_system_identity(root, errors)
                 report["hwh"].update(
                     {
                         "entry": hwh_info.filename,
@@ -417,40 +715,41 @@ def audit_network_xsa(
                         "edw_version": root.get("EDWVERSION"),
                         "vivado_version": root.get("VIVADOVERSION"),
                         "timestamp": root.get("TIMESTAMP"),
-                        "system": dict(system_info.attrib) if system_info is not None else {},
+                        "system": target["actual"],
+                        "target": target,
                     }
                 )
                 report["network"] = _check_network(root, errors)
                 report["datapath"] = _check_datapath(root, errors)
 
             bit_infos = [info for info in infos if info.filename.lower().endswith(".bit")]
-            bit_entries = [
-                {
-                    "name": info.filename,
-                    "size": info.file_size,
-                    "sha256": _sha256_zip_entry(archive, info),
-                }
-                for info in bit_infos
-            ]
+            if len(bit_infos) != 1:
+                errors.append(
+                    f"expected exactly one embedded .bit entry, found {len(bit_infos)}"
+                )
+            bit_entries = []
+            for info in bit_infos:
+                bit_entries.append(
+                    {
+                        "name": info.filename,
+                        "size": info.file_size,
+                        "sha256": _sha256_zip_entry(archive, info),
+                        "header": _parse_bitstream_header(archive, info, errors),
+                    }
+                )
             report["bitstream"] = {"embedded": bool(bit_entries), "entries": bit_entries}
-            if not bit_entries:
-                warnings.append("XSA contains no embedded bitstream")
 
-            json_infos = [info for info in infos if info.filename.lower() == "xsa.json"]
-            if len(json_infos) > 1:
-                errors.append(f"expected at most one xsa.json, found {len(json_infos)}")
-            if json_infos:
+            json_infos = [info for info in infos if info.filename == "xsa.json"]
+            if len(json_infos) != 1:
+                errors.append(f"expected exactly one xsa.json, found {len(json_infos)}")
+            if len(json_infos) == 1:
                 metadata = _read_json_entry(archive, json_infos[0], errors)
-                report["provenance"] = _provenance_from_json(metadata)
+                report["provenance"] = (
+                    _check_xsa_json_provenance(metadata, bit_entries, errors)
+                    if metadata is not None
+                    else {}
+                )
                 report["provenance"]["xsa_json_entry"] = json_infos[0].filename
-                declared = set(report["provenance"].get("declared_full_bit_entries", []))
-                embedded = {entry["name"] for entry in bit_entries}
-                if declared != embedded:
-                    warnings.append(
-                        "xsa.json FULL_BIT declarations do not exactly match embedded .bit entries"
-                    )
-            else:
-                warnings.append("XSA contains no xsa.json provenance metadata")
     except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
         errors.append(f"cannot inspect XSA ZIP archive: {exc}")
 

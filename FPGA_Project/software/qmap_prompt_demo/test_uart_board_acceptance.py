@@ -133,6 +133,13 @@ class TranscriptAcceptanceTests(unittest.TestCase):
         self.assertFalse(report["passed"])
         self.assertIn("startup record", report["failure"])
 
+    def test_startup_accepts_fsbl_terminal_carriage_return_prefix(self) -> None:
+        next_index, observed = acceptance._advance_startup(
+            0, "\rQwen3 text/token prompt demo"
+        )
+        self.assertEqual(next_index, 1)
+        self.assertEqual(observed, "Qwen3 text/token prompt demo")
+
     def test_fail_before_ready_is_immediate_failure(self) -> None:
         data = PASS_FIXTURE.read_bytes().replace(
             b"DDR4 status=0x00000005\n",
@@ -202,6 +209,12 @@ class TranscriptAcceptanceTests(unittest.TestCase):
                 ]
             )
 
+    def test_default_ready_timeout_covers_cold_jtag_runtime_load(self) -> None:
+        args = acceptance.build_parser().parse_args(
+            ["--verify-transcript", str(PASS_FIXTURE)]
+        )
+        self.assertEqual(args.ready_timeout, acceptance.MAX_READY_TIMEOUT_SECONDS)
+
     def test_default_artifacts_do_not_mutate_a_packaged_workbench(self) -> None:
         output = acceptance._default_output_dir()
         self.assertEqual(
@@ -265,7 +278,7 @@ class TranscriptAcceptanceTests(unittest.TestCase):
         self.assertFalse(report["passed"])
         self.assertIn("negative-case grace", report["failure"])
 
-    def test_nonzero_launcher_return_code_cannot_pass(self) -> None:
+    def test_nonzero_launcher_exit_before_ready_cannot_pass(self) -> None:
         class FailedLauncher:
             pid = 123
             returncode = 9
@@ -297,7 +310,7 @@ class TranscriptAcceptanceTests(unittest.TestCase):
                 launcher_log=io.BytesIO(),
             )
         self.assertFalse(report["passed"])
-        self.assertIn("nonzero return code 9", report["failure"])
+        self.assertIn("nonzero return code 9 before READY", report["failure"])
         popen_kwargs = popen.call_args.kwargs
         if os.name == "nt":
             self.assertEqual(
@@ -305,6 +318,39 @@ class TranscriptAcceptanceTests(unittest.TestCase):
             )
         else:
             self.assertTrue(popen_kwargs["start_new_session"])
+
+    def test_successful_launcher_exit_allows_uart_ready(self) -> None:
+        class SuccessfulLauncher:
+            pid = 124
+            returncode = 0
+
+            def wait(self, timeout: float) -> int:
+                return self.returncode
+
+            def poll(self) -> int:
+                return self.returncode
+
+            def kill(self) -> None:
+                raise AssertionError("completed launcher must not be killed")
+
+        fake = ScriptedSerial()
+        with (
+            mock.patch.object(acceptance, "_open_serial", return_value=fake),
+            mock.patch.object(
+                acceptance.subprocess, "Popen", return_value=SuccessfulLauncher()
+            ),
+        ):
+            report = acceptance.run_live(
+                "FAKE",
+                io.BytesIO(),
+                ready_timeout=1.0,
+                ping_timeout=1.0,
+                model_timeout=1.0,
+                negative_grace=0.001,
+                launcher=HERE / "run_board_smoke.ps1",
+                launcher_log=io.BytesIO(),
+            )
+        self.assertTrue(report["passed"], report["failure"])
 
     def test_launcher_timeout_is_structured_and_closes_serial(self) -> None:
         class HangingLauncher:

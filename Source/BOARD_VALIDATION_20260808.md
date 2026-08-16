@@ -23,6 +23,11 @@ yet proof of arbitrary natural-language prompt-to-text generation: board-side
 tokenization, detokenization, general prompt prefill, EOS/stop handling, and a
 user-facing serial generation protocol remain future integration work.
 
+Superseded status note (2026-08-12): the prompt/tokenizer/detokenizer boundary
+described above was subsequently closed by the strict eight-case physical
+acceptance in `Source/BOARD_VALIDATION_20260812.md`. This dated document retains
+the narrower scope of the 2026-08-08 evidence.
+
 ## Hardware and runtime lineage
 
 - Vivado/Vitis: `2025.1.1`

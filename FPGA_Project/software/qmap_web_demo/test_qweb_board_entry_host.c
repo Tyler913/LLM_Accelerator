@@ -47,6 +47,19 @@ static const qweb_web_asset_t test_index_asset = {
     sizeof(test_index_body) - 1u,
 };
 
+static void test_set_ipv4(uint8_t first,
+                          uint8_t second,
+                          uint8_t third,
+                          uint8_t fourth)
+{
+    uint8_t *bytes = (uint8_t *)&test_netif.ip_addr.addr;
+
+    bytes[0] = first;
+    bytes[1] = second;
+    bytes[2] = third;
+    bytes[3] = fourth;
+}
+
 uint32_t qweb_board_entry_host_read32(uint64_t address);
 const uint8_t *qweb_board_entry_host_tokenizer(size_t *size);
 
@@ -225,9 +238,9 @@ static void test_static_resolver_and_clock(void)
     TEST_CHECK(test_network_config.connection_timeout_ms == 30000u);
     TEST_CHECK(test_network_config.allowed_host_count == 2u);
     TEST_CHECK(strcmp(test_network_config.allowed_hosts[0],
-                      "192.168.1.10") == 0);
+                      "10.20.30.40") == 0);
     TEST_CHECK(strcmp(test_network_config.allowed_hosts[1],
-                      "192.168.1.10:80") == 0);
+                      "10.20.30.40:80") == 0);
     TEST_CHECK(test_network_config.now_ms != NULL);
     test_ticks = UINT64_C(123400000);
     TEST_CHECK(test_network_config.now_ms(
@@ -256,6 +269,10 @@ int main(void)
     TEST_CHECK(test_tokenizer_init_calls == 0u);
 
     test_ddr_status = TEST_DDR_READY;
+    TEST_CHECK(start_application() == -1);
+    TEST_CHECK(test_tokenizer_init_calls == 0u);
+
+    test_set_ipv4(10u, 20u, 30u, 40u);
     test_adapter_start_result = QWEB_LWIP_ERR_LWIP;
     TEST_CHECK(start_application() == -1);
     TEST_CHECK(test_adapter_stop_calls == 1u);

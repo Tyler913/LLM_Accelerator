@@ -9,6 +9,37 @@ static const qweb_web_asset_t *find_literal(const char *path)
     return qweb_web_asset_find(path, strlen(path));
 }
 
+static int contains_bytes(
+    const uint8_t *body,
+    size_t body_length,
+    const uint8_t *needle,
+    size_t needle_length)
+{
+    size_t offset;
+
+    if (body == NULL || needle == NULL || needle_length > body_length) return 0;
+    if (needle_length == 0u) return 1;
+    for (offset = 0u; offset <= body_length - needle_length; ++offset) {
+        if (body[offset] == needle[0] &&
+            memcmp(body + offset, needle, needle_length) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int contains_literal(
+    const uint8_t *body,
+    size_t body_length,
+    const char *needle)
+{
+    return contains_bytes(
+        body,
+        body_length,
+        (const uint8_t *)needle,
+        strlen(needle));
+}
+
 int main(void)
 {
     const qweb_web_asset_t *root = find_literal("/");
@@ -31,6 +62,26 @@ int main(void)
     assert(strcmp(root->mime_type, "text/html; charset=utf-8") == 0);
     assert(strcmp(styles->mime_type, "text/css; charset=utf-8") == 0);
     assert(strcmp(script->mime_type, "text/javascript; charset=utf-8") == 0);
+    assert(!contains_literal(root->body, root->body_length, "href=\"/styles.css\""));
+    assert(!contains_literal(root->body, root->body_length, "src=\"/app.js\""));
+    assert(contains_literal(
+        root->body,
+        root->body_length,
+        "data-qweb-inline=\"/styles.css\""));
+    assert(contains_literal(
+        root->body,
+        root->body_length,
+        "data-qweb-inline=\"/app.js\""));
+    assert(contains_bytes(
+        root->body,
+        root->body_length,
+        styles->body,
+        styles->body_length));
+    assert(contains_bytes(
+        root->body,
+        root->body_length,
+        script->body,
+        script->body_length));
 
     for (index_number = 0u; index_number < qweb_web_asset_count; ++index_number) {
         const qweb_web_asset_t *asset = &qweb_web_assets[index_number];

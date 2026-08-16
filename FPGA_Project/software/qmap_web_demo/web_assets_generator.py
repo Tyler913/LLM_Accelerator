@@ -22,6 +22,14 @@ HEADER_NAME = "web_assets.h"
 SOURCE_NAME = "web_assets.c"
 MANIFEST_NAME = "web_assets_manifest.json"
 
+STYLESHEET_REFERENCE = b'  <link rel="stylesheet" href="/styles.css">\n'
+SCRIPT_REFERENCE = b'  <script src="/app.js" defer></script>\n'
+BODY_CLOSE = b"</body>\n"
+INLINE_STYLE_OPEN = b'  <style data-qweb-inline="/styles.css">\n'
+INLINE_STYLE_CLOSE = b"  </style>\n"
+INLINE_SCRIPT_OPEN = b'  <script data-qweb-inline="/app.js">\n'
+INLINE_SCRIPT_CLOSE = b"  </script>\n"
+
 
 class AssetError(RuntimeError):
     """Raised when source or output paths violate the fixed asset contract."""
@@ -105,6 +113,48 @@ def _validate_source_text(path: Path, body: bytes) -> None:
         raise AssetError(f"web asset is not strict UTF-8: {path.name}") from exc
 
 
+def _replace_exactly_once(
+    body: bytes,
+    needle: bytes,
+    replacement: bytes,
+    description: str,
+) -> bytes:
+    count = body.count(needle)
+    if count != 1:
+        raise AssetError(
+            f"index.html must contain exactly one canonical {description}; found {count}"
+        )
+    return body.replace(needle, replacement, 1)
+
+
+def compose_index_html(index_html: bytes, styles_css: bytes, app_js: bytes) -> bytes:
+    """Build the one-connection boot document from the three canonical sources."""
+    if b"</style" in styles_css.lower():
+        raise AssetError("styles.css contains an unsafe inline style terminator")
+    if b"</script" in app_js.lower():
+        raise AssetError("app.js contains an unsafe inline script terminator")
+
+    composed = _replace_exactly_once(
+        index_html,
+        STYLESHEET_REFERENCE,
+        INLINE_STYLE_OPEN + styles_css + INLINE_STYLE_CLOSE,
+        "stylesheet reference",
+    )
+    composed = _replace_exactly_once(
+        composed,
+        SCRIPT_REFERENCE,
+        b"",
+        "deferred script reference",
+    )
+    composed = _replace_exactly_once(
+        composed,
+        BODY_CLOSE,
+        INLINE_SCRIPT_OPEN + app_js + INLINE_SCRIPT_CLOSE + BODY_CLOSE,
+        "body closing tag",
+    )
+    return composed
+
+
 def load_assets(project_directory: Path | str) -> tuple[AssetPayload, ...]:
     project = validate_project_directory(project_directory)
     web_directory = project / "web"
@@ -122,8 +172,7 @@ def load_assets(project_directory: Path | str) -> tuple[AssetPayload, ...]:
         raise AssetError("web asset inventory drift: " + " ".join(details))
 
     by_name = {entry.name: entry for entry in entries}
-    payloads: list[AssetPayload] = []
-    total_bytes = 0
+    source_bodies: dict[str, bytes] = {}
     for spec in ASSET_SPECS:
         path = by_name[spec.source_name]
         if path.is_symlink():
@@ -138,6 +187,20 @@ def load_assets(project_directory: Path | str) -> tuple[AssetPayload, ...]:
             raise AssetError(f"web asset escapes its fixed directory: {path.name}")
         body = path.read_bytes()
         _validate_source_text(path, body)
+        source_bodies[spec.source_name] = body
+
+    served_bodies = dict(source_bodies)
+    served_bodies["index.html"] = compose_index_html(
+        source_bodies["index.html"],
+        source_bodies["styles.css"],
+        source_bodies["app.js"],
+    )
+
+    payloads: list[AssetPayload] = []
+    total_bytes = 0
+    for spec in ASSET_SPECS:
+        body = served_bodies[spec.source_name]
+        _validate_source_text(web_directory / spec.source_name, body)
         total_bytes += len(body)
         digest = hashlib.sha256(body).hexdigest()
         payloads.append(

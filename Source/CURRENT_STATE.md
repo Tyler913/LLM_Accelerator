@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-08-09
+Last updated: 2026-08-12
 
 This file is the concise working-state handoff. For durable project context,
 read `Source/PROJECT_CONTEXT.md` first. For detailed address planning, read
@@ -1090,9 +1090,9 @@ Previous useful checkpoint:
   the tokenizer-bearing `a_qgen`. The last ELF is `4,050,704` bytes with SHA256
   `F37EB88D4E1B75FEC815D01306EE85678C1E8555D02E5B42D3EFCA22FD337BBE`;
   its launch keeps `runPsuInit=false` and `stopAtEntry=true`. The verified
-  non-release bench package is
-  `F:\qot_boardtest_prompt_text_v9_20260809` (format v5, `88` files,
-  `412,238,960` bytes, 61 runtime segments, four Web UI files, and three strict
+  current hardware-validated bench package is
+  `F:\qot_boardtest_prompt_text_v13_20260812` (format v5, `88` files,
+  `412,241,806` bytes, 61 runtime segments, four Web UI files, and three strict
   UART-acceptance files). Its verifier reports `trusted_provenance=True` after
   pinning the exact ELF, launcher, wrapper, UI, and acceptance-tool hashes and
   executing the packaged host tests and replay. The acceptance tool binds results to the
@@ -1100,22 +1100,40 @@ Previous useful checkpoint:
   progress plus exact token/score/BYTES/order for eight single-flight cases,
   repeats the text prompt, checks the out-of-range negative case, and writes
   raw UART plus JSON evidence. Its launcher timeout path terminates the full
-  PowerShell/XSDB process tree before any parent-only fallback; all 21 host tests,
-  a live Windows parent/child cleanup check, and the packaged transcript replay
-  pass. This new interactive application has not yet run on hardware, so
-  arbitrary prompt-to-text is not yet a board PASS.
-- The PS-network prerequisite has been audited but not enabled. The current
-  `llm_system` XCI/HWH and the 2026-08-08 XSA still have GEM3, GEM3 MDIO, and
-  TTC0 disabled. `FPGA_Project/Vivado_Project/scripts/configure_ps_gem3_network.tcl`
-  now provides a strict default dry-run for GEM3 RGMII on MIO 64..75, MDIO on
-  MIO 76..77, a 125 MHz GEM3 reference-clock request, and TTC0; only explicit
-  `--apply` can save the BD. Its Tcl syntax-load check and a Vivado 2025.1.1
-  read-only live dry-run both pass against the current project. The script has
-  not been applied, no new XSA has been exported, and no Ethernet board test
-  has run. The staged acceptance path is documented in
-  `Source/PS_NETWORK_BRINGUP.md` as
-  `a_net_echo -> ping/TCP -> a_qweb`.
-- The transport-independent `a_qweb` core now exists under
+  PowerShell/XSDB process tree before any parent-only fallback. The Windows
+  wrapper invokes AMD `loader.bat -exec xsdb` instead of trusting `xsdb.bat`,
+  whose final `endlocal` discards XSDB failures. The 3600-second startup budget
+  covers a measured cold JTAG load; nonzero launcher exits fail immediately,
+  while a normal asynchronous `con` exit continues waiting for the complete
+  UART banner. Only a leading terminal CR left by FSBL is normalized. All 24
+  host tests and the packaged transcript replay pass; the v13 verifier reports
+  `trusted_provenance=True` before and after physical use once two generated
+  XSDB debris files are moved out recoverably.
+- Physical arbitrary prompt-to-text passed on 2026-08-12. The single cold run at
+  `Temp/a_qgen_board_acceptance_20260812_v13_cold/` passed FSBL, PL DDR status
+  `0x00000005`, all 61 runtime segments / 394,547,200 bytes, all 281 QMAP
+  headers, exact ordered startup through `READY`, and all eight single-flight
+  UART cases. Both immediate `PROMPT 2 The future of FPGA is` runs produced
+  `PROMPT_IDS 5 785 3853 315 89462 374`, tokens/scores
+  `264/1296911292,26291/1225544557`, and raw bytes for ` a fascinating`.
+  `acceptance.json` is SHA256
+  `735C987EBE8AEB13C3243EB1FBA8D4CD057590DEF94C4BBEF5131A6A37798645`;
+  the 19,918-byte `uart_raw.bin` is SHA256
+  `8C2DCF4810BB53F39B6068166BDDBB15706E8B8D068760AC0FBB62076C0176D7`.
+  Detailed evidence is in `Source/BOARD_VALIDATION_20260812.md`.
+- PS-network Gate 0 is closed. The GEM3 RGMII MIO 64..75, MDIO MIO 76..77,
+  125 MHz IOPLL reference, and TTC0 change was applied without changing the
+  full28 accelerator datapath. A fresh no-simulation synthesis,
+  implementation, bitstream, and include-bitstream XSA lineage is preserved in
+  `Temp/network_board_build_20260812_v1/`. The final routed report has WNS
+  `+0.208 ns`, WHS `+0.010 ns`, zero failed or partially routed nets, and no
+  routing error. The bitstream SHA256 is
+  `C926B3DB8021E976E5EA6CC2F71DA3C44899EA5C3DF61DA573475CE6D8C21239`;
+  the XSA SHA256 is
+  `0AF1257442A68A6BEB31D94811713F2AE8E6AF63E0A85DD497146405E37406CF`.
+  The network-XSA audit passes while preserving the QMAP control,
+  DDR-status GPIO, and full PL-DDR apertures.
+- The complete host-side `a_qweb` source now exists under
   `FPGA_Project/software/qmap_web_demo/`. Its allocation-free HTTP/1.1 parser
   accepts fragmented fixed-length requests and rejects ambiguous framing; the
   strict JSON API accepts exactly one of UTF-8 `prompt` or bounded token IDs;
@@ -1123,21 +1141,45 @@ Previous useful checkpoint:
   actual-result feedback, and retains IDs, Q26 scores, stop/error state, and
   raw detokenized bytes. The router provides `GET /api/health`,
   `POST /api/generate`, `GET /api/generate/<id>`, and the binary-safe
-  `GET /api/generate/<id>/output`. Strict host checks pass for 19 HTTP/JSON
-  cases, the real-tokenizer job chain, and 11 route/status cases. A production
-  stack-frame gate limits every core function to 1 KiB; measured key frames are
-  288 bytes for JSON parse, 256 bytes for job submit, and 208 bytes for route
-  handling. A separate 11-test XSA audit now fails closed unless a future XSA
-  both enables GEM3/MDIO/TTC0 and preserves the QMAP control, DDR-status GPIO,
-  and PL-DDR apertures. The current XSA is correctly rejected only for its
-  disabled network resources while all datapath-address checks pass. A guarded
-  delayed-import workspace generator also stages an isolated `F:\vwn` /
-  `p_net` / `a_net_echo` build only after that audit passes; its path, embedded
-  bitstream, overlap, new-workspace, snapshot, build-status, and Vitis-call
-  contract bring the Python gate total to 20 passing tests. Execution uses a
-  content-addressed XSA snapshot and audits it before and after Vitis so a
-  mutable export path cannot silently change the recorded lineage. No lwIP
-  adapter, network-enabled XSA, or Ethernet board PASS exists yet.
+  `GET /api/generate/<id>/output`.
+- The raw-lwIP adapter now handles fragmented pbuf chains, one bounded
+  connection, exact Host checking, incremental TX/ACK, request and absolute
+  connection deadlines, asynchronous HTTP 202, and ROM static assets. The
+  board runner pumps `xemacif_input` plus TTC fast/slow timers every bounded
+  poll interval during each full28 token and validates the complete layer mask
+  and zero-error result. The AMD echo-template entry replacement checks DDR
+  ready/runtime sentinels, initializes the tokenizer/job/router/server, and
+  derives its Host authorities and UART URL from the interface's actual
+  DHCP/static IPv4 address. It serves a deterministic offline UI for text or
+  token IDs; the UI polls job status and streams cumulative raw output.
+- The five strict C host executables pass: 19 HTTP/JSON cases, the exact
+  tokenizer/job chain, 11 router/status cases, the raw-lwIP mock suite, and the
+  final board-entry assembly. Every production C function still passes the
+  1 KiB stack-frame gate. The 55 Python tests also pass: 22 network-XSA gates,
+  16 isolated-workspace/provenance/build/ELF gates, 14 deterministic
+  asset/UI/Node/GCC checks, and three exact YT8521 patcher gates. The generated
+  asset source-set SHA256 is
+  `D2FC8E450BEF24ABED3E44B3D05402972FF7AC33F813EC8F289ABE6725457090`.
+  A real Chromium exercise against mocked API responses completed the exact
+  `264,26291` / ` a fascinating` UI flow with no console error.
+- A clean real Vitis 2025.1.1 build at `F:\vwc` records platform, echo, and Web
+  build result `0` in `network_workspace_manifest.json`. Its private EmbeddedSW
+  repository stages an exact patched `lwip220_v1_2`; the BSP-copied PHY source
+  SHA256 is
+  `4900358C786793496501E0A19D0970E43AD70E378D909AB2C8D7458CC1BAC930`.
+  The audited `a_net_echo.elf` SHA256 is
+  `93192F0D37741604036F1B502CC7BAE257EE8E8151103F3F09415C592FBA5C67`.
+  The 5,002,800-byte AArch64 `a_qweb.elf` contains the required Web, session,
+  tokenizer, and board-runner symbols and has SHA256
+  `3B83026EC7647A79D6DF2D9FE584A2555157E5D87A212F7ADB478EBD036E8650`.
+  These are network-XSA and build PASS results, not physical Ethernet/Web PASS.
+- Physical `a_net_echo` bring-up reached exact Motorcomm YT8521 detection at
+  PHY address 7 with ID `0x0000011A`. The patched path then timed out waiting
+  for auto-negotiation; the BMSR link and auto-negotiation-complete bits stayed
+  clear. Both Windows wired adapters were `Disconnected`, so no IP, ping, or
+  TCP echo acceptance was possible. Gate 1 remains open, and `a_qweb` has not
+  yet received physical HTTP or prompt-to-text acceptance. Evidence is under
+  `Temp/network_echo_board_acceptance_20260812_v3_yt8521/`.
 
 ### Historical Gap-Closure Log (through 2026-07-13)
 
@@ -1635,31 +1677,25 @@ current board-candidate summary or `Immediate Next Step`.
 
 ## Immediate Next Step
 
-The full28 fixed two-position board baseline and the complete PS-side
-text/token application are now separate closed milestones. The remaining
-correctness gate is to join them on the physical board:
+The correctness-first UART product path is closed. It already provides a usable
+demo through either the UART CLI or the PC-hosted Web Serial GUI; neither needs
+board Ethernet. The remaining preferred-interface work is the board-hosted Web
+path:
 
-1. Reconnect JTAG and CH340 UART, start `hw_server`, close Vitis Serial Monitor
-   and the Web GUI so the COM port has one owner, then run the packaged strict
-   acceptance tool from `F:\qot_boardtest_prompt_text_v9_20260809`:
-
-   ```powershell
-   conda run -n llm_fpga python `
-     .\host_tools\run_uart_board_acceptance.py `
-     --port <CH340_COM> `
-     --launch-workbench .
-   ```
-2. Require its eight single-flight cases to pass. These cover the out-of-range
-   negative gate before any model command, actual-result feedback, two-token
-   prefill, token-ID and text forms of `The future of FPGA is`, an immediate
-   bit-exact repeated text request, and the highest legal model-vocabulary ID.
-3. Preserve the tool's raw UART and JSON report, re-run the workbench verifier,
-   and only then
-   promote `a_qgen` from `WORKBENCH_NOT_RELEASE` to a hardware-validated
-   release.
-4. After serial prompt-to-text is physically accepted, apply the already
-   dry-run-validated GEM3/TTC0 BD change, re-export XSA, bring up `a_net_echo`,
-   and then attach the same session engine to bare-metal lwIP HTTP.
+1. Connect the board's `PS_ETH` RJ45 to a router/switch or a PC wired adapter
+   that Windows reports as `Up`; do not change PHY software while the host link
+   remains physically disconnected.
+2. Rerun the patched `a_net_echo` from the audited `F:\vwc` lineage and require
+   resolved link speed, an assigned/fallback IP, repeated ping, and exact TCP
+   echo on port 7 before closing Gate 1.
+3. Load the preserved 61-segment runtime and run the already built `a_qweb`.
+   Require the page and `/api/health`, responsiveness during PL inference, and
+   two exact physical browser runs of `The future of FPGA is -> a fascinating`
+   before closing Gate 2.
+4. After the board-hosted Web PASS, decide whether the first release stops at
+   JTAG-loaded bench operation or also includes boot image, SD/QSPI storage, and
+   an autonomous PS weight loader. The latter is required for power-on product
+   autonomy, not for the already working bench demo.
 
 Do not return to smaller row/DDR smokes unless a specific integration failure
 requires that diagnostic slice. Performance and extra parallelism remain after

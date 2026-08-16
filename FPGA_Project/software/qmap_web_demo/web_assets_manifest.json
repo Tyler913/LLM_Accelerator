@@ -1,14 +1,14 @@
 {
   "assets": [
     {
-      "body_length": 6350,
-      "etag": "\"4d4f262d2c9704895415a8526c1dc0fe5091b5e43bc9cded4db398cf9fd52247\"",
+      "body_length": 43776,
+      "etag": "\"39b0b58717f9c0c6fb7c4b73c9bb76d6e65fdd029e3e80e675afaf57824744e7\"",
       "mime_type": "text/html; charset=utf-8",
       "routes": [
         "/",
         "/index.html"
       ],
-      "sha256": "4d4f262d2c9704895415a8526c1dc0fe5091b5e43bc9cded4db398cf9fd52247",
+      "sha256": "39b0b58717f9c0c6fb7c4b73c9bb76d6e65fdd029e3e80e675afaf57824744e7",
       "source": "web/index.html"
     },
     {
@@ -33,5 +33,5 @@
     }
   ],
   "schema_version": 1,
-  "source_set_sha256": "bc4af2d87c54b0dffefa80a13a87a202b1d53ae12b5309a40fbee762c3d4f53d"
+  "source_set_sha256": "d2fc8e450bef24abed3e44b3d05402972ff7ac33f813ec8f289abe6725457090"
 }

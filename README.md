@@ -38,31 +38,40 @@ persistent two-token model smoke then passed on physical hardware. See
 the artifact hashes, exact acceptance evidence, and remaining prompt-integration
 boundary.
 
-Latest PS/application milestone (2026-08-09): `qmap_prompt_demo` now implements
+Latest PS/application milestone (2026-08-12): `qmap_prompt_demo` now implements
 bounded arbitrary token-ID prefill, actual argmax feedback, EOS/IM_END/max/context
 stops, and exact PS-native Qwen Unicode/ByteLevel-BPE tokenization plus raw-byte
 detokenization. Its 79-case Hugging-Face differential suite and the host chain
 `The future of FPGA is -> 785,3853,315,89462,374 -> 264,26291 ->
-" a fascinating"` pass. The clean `a_qgen` ELF embeds the verified tokenizer
-asset and is packaged in the verified non-release workbench
-`F:\qot_boardtest_prompt_text_v9_20260809`. That format-v5 workbench contains
-88 hash-audited files: the preserved 61-segment board runtime, `a_qgen`, the
-PC Web Serial GUI, and a strict eight-transaction pyserial acceptance tool.
-It also pins the trusted ELF, launcher, UI, and acceptance-tool provenance;
-the tool's 21 host tests and packaged transcript replay pass. This new
-interactive path has not yet been run on the board, so the latest hardware
-claim remains the fixed 2026-08-08 two-position PASS.
+" a fascinating"` now pass on physical hardware as well. The verified format-v5
+workbench is `F:\qot_boardtest_prompt_text_v13_20260812`: 88 hash-audited files,
+the preserved 61-segment runtime, `a_qgen`, the PC Web Serial GUI, and a strict
+eight-transaction pyserial oracle. One cold run loaded all 394,547,200 bytes,
+checked all 281 QMAP headers, observed `READY vocab=151936 context=256`, and
+passed all eight token/text cases including an immediate repeated text prompt.
+The final report is
+`Temp/a_qgen_board_acceptance_20260812_v13_cold/acceptance.json` (SHA256
+`735C987EBE8AEB13C3243EB1FBA8D4CD057590DEF94C4BBEF5131A6A37798645`);
+the 19,918-byte raw UART SHA256 is
+`8C2DCF4810BB53F39B6068166BDDBB15706E8B8D068760AC0FBB62076C0176D7`.
+See [Source/BOARD_VALIDATION_20260812.md](Source/BOARD_VALIDATION_20260812.md).
 
-The board-hosted Web path is now staged under
+The board-hosted Web application is implemented under
 `FPGA_Project/software/qmap_web_demo/`: bounded fragmented HTTP/1.1, strict
-prompt/token JSON, the exact tokenizer-backed generation job, and health,
-submit, status, and raw-output routes pass host checks. Its production C
-functions also pass a 1 KiB stack-frame gate, and a read-only XSA audit guards
-both the future GEM3/MDIO/TTC0 configuration and the existing QMAP/PL-DDR
-address contracts. The current XSA is expectedly rejected because networking
-is still disabled. A guarded generator is ready to create a separate
-`F:\vwn`/`p_net`/`a_net_echo` Vitis workspace only from a passing future XSA;
-no lwIP or Ethernet board PASS is claimed yet.
+prompt/token JSON, the exact tokenizer-backed generation job, raw-lwIP
+transport, cooperative network pumping during every PL token, a fail-closed
+board entry, and an offline responsive browser UI pass the five C host suites
+and 55 Python gates. A fresh GEM3/MDIO/TTC0-enabled Vivado lineage under
+`Temp/network_board_build_20260812_v1/` also passes the network-XSA audit,
+fresh synthesis/implementation/bitstream/XSA flow, full routing, and final
+timing with WNS `+0.208 ns` and WHS `+0.010 ns`. The isolated `F:\vwc`
+manifest records successful platform, patched-YT8521 `a_net_echo`, and
+source/tokenizer-audited `a_qweb` builds. On the physical board the patched
+echo application detects Motorcomm YT8521 at PHY address 7 with ID
+`0x0000011A`, but auto-negotiation times out with link down; both PC wired
+adapters were disconnected during that run. Stable link, ping/TCP echo, and
+physical `a_qweb` HTTP prompt-to-text acceptance therefore remain open. No
+Ethernet Gate 1 or Gate 2 board PASS is claimed yet.
 Start with
 [Source/CURRENT_STATE.md](Source/CURRENT_STATE.md) for the live handoff.
 

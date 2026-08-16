@@ -18,7 +18,7 @@ PINNED_RUNTIME_TOOL_SHA256 = {
     "launch_qwen3_board.tcl":
         "d72a49b21175c4ae28264cf5a2962f478247d0f1df501545e883f574249c7bea",
     "run_board_smoke.ps1":
-        "ecfa1996dfe8fd2ad970538711c4877de9fc7a7d66400ca684ff815a57bd4c1c",
+        "483def4143ab7d0530a6de688f9695f6c7740c20c67df3eaac3d7e8544dfadc6",
 }
 HOST_UI_SOURCE_FILES = {
     "host_ui/serve_web_serial_ui.py": "serve_web_serial_ui.py",
@@ -44,9 +44,9 @@ HOST_ACCEPTANCE_SOURCE_FILES = {
 }
 PINNED_HOST_ACCEPTANCE_SHA256 = {
     "host_tools/run_uart_board_acceptance.py":
-        "c9582abdfeb38efd2c0594eaf02312f431b64a60b217003f72cac26dec5f73b4",
+        "6f1c30fc31a33d9c9fe100df804896f7591d51153687665d622cdcfad24ab007",
     "host_tools/test_uart_board_acceptance.py":
-        "9345c166060c9135f290045bf7e7353ba5c5b25059d4bb53dbc63d7b62c11047",
+        "4f47b3d2e6c95d58bf60ec31fa7b281ffb2af85143f54f6252954af8b106248e",
     "host_tools/fixtures/uart_board_acceptance_pass.txt":
         "b398734dc4ebe15cd5c1ec06f625e371012af6c07b8f2c1df03161113966b970",
 }

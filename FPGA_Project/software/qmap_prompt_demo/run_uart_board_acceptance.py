@@ -240,9 +240,12 @@ class LineFramer:
 
 
 def normalize_line(line: str) -> str:
-    """Remove only the application's non-record prompt prefix."""
+    """Remove terminal CR residue and the application's prompt prefix."""
 
-    normalized = line
+    # The ZynqMP FSBL banner can end with LF followed by a standalone CR before
+    # the application starts. A terminal treats that CR as a carriage return;
+    # preserve all other bytes and whitespace so protocol matching stays exact.
+    normalized = line.lstrip("\r")
     while normalized.startswith("qot> "):
         normalized = normalized[5:]
     return normalized
@@ -913,7 +916,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="optionally launch run_board_smoke.ps1 -Mode generate after opening UART",
     )
     parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument("--ready-timeout", type=float, default=900.0)
+    parser.add_argument(
+        "--ready-timeout",
+        type=float,
+        default=MAX_READY_TIMEOUT_SECONDS,
+        help="startup budget including cold JTAG runtime load (default/max: 3600s)",
+    )
     parser.add_argument("--ping-timeout", type=float, default=10.0)
     parser.add_argument("--model-timeout", type=float, default=1_800.0)
     parser.add_argument(

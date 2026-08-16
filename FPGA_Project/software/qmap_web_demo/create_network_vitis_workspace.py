@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Create an isolated Vitis lwIP-echo workspace from an audited network XSA.
+"""Create an isolated Vitis network workspace from an audited network XSA.
 
 The module deliberately imports ``vitis`` only when a real build is requested,
 so its path, provenance, and fail-closed XSA gates remain host-testable with the
-repository's normal conda environment.
+repository's normal conda environment. The default is the independent lwIP echo
+gate; explicit Web mode additionally stages and builds the audited ``a_qweb``
+application.
 """
 
 from __future__ import annotations
@@ -17,11 +19,19 @@ import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import sys
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from audit_network_xsa import audit_network_xsa
 from web_assets_generator import output_drift
+from yt8521_lwip220_patch import (
+    LIBRARY_NAME as PATCHED_BSP_LIBRARY,
+    LIBRARY_VERSION as PATCHED_BSP_LIBRARY_VERSION,
+    PATCH_RELATIVE_PATH as PATCHED_BSP_RELATIVE_PATH,
+    stage_patched_library,
+    verify_staged_library,
+)
 
 
 DEFAULT_WORKSPACE = Path(r"F:\vwn")
@@ -29,6 +39,22 @@ DEFAULT_PLATFORM_NAME = "p_net"
 DEFAULT_APP_NAME = "a_net_echo"
 DEFAULT_WEB_APP_NAME = "a_qweb"
 DOMAIN_NAME = "standalone_psu_cortexa53_0"
+REQUIRED_BSP_LIBRARIES = ("lwip220",)
+VITIS_LWIP220_RELATIVE_PATH = Path(
+    "data/embeddedsw/ThirdParty/sw_services/lwip220_v1_2"
+)
+# Keep this contract synchronized with AMD Vitis 2025.1.1's
+# ``lwip_echo_server.yaml``.  Adding lwip220 alone leaves several defaults
+# incompatible with the template, so configure every declared dependency
+# explicitly before the platform is generated.
+REQUIRED_BSP_CONFIG = (
+    ("lwip220", "lwip220_api_mode", "RAW_API"),
+    ("lwip220", "lwip220_dhcp", "true"),
+    ("lwip220", "lwip220_lwip_dhcp_does_acd_check", "true"),
+    ("lwip220", "lwip220_ipv6_enable", "false"),
+    ("lwip220", "lwip220_pbuf_pool_size", "2048"),
+    ("xiltimer", "XILTIMER_en_interval_timer", "true"),
+)
 COMPONENT_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,31}$")
 PROTECTED_WORKSPACES = (Path(r"F:\vwi"), Path(r"F:\vws"))
 PINNED_TOKENIZER_SHA256 = (
@@ -114,11 +140,54 @@ WEB_SOURCE_SPECS: tuple[tuple[str, str, bool], ...] = (
      "provenance_web_assets_generator.py", False),
 )
 
-WEB_COMPILE_SOURCES = tuple(
+VITIS_TEMPLATE_COMPILE_SOURCES = (
+    "echo.c",
+    "i2c_access.c",
+    "iic_phyreset.c",
+    "main.c",
+    "platform.c",
+    "platform_mb.c",
+    "platform_zynq.c",
+    "platform_zynqmp.c",
+    "sfp.c",
+    "si5324.c",
+)
+
+WEB_ADDED_COMPILE_SOURCES = tuple(
     destination
     for _, destination, compile_source in WEB_SOURCE_SPECS
     if compile_source
 ) + ("tokenizer_asset.S",)
+
+WEB_COMPILE_SOURCES = (
+    VITIS_TEMPLATE_COMPILE_SOURCES + WEB_ADDED_COMPILE_SOURCES
+)
+
+# Exact AMD Vitis 2025.1.1 lwip_echo_server template inputs used by the real
+# builder. Injected fake-Vitis unit tests exercise the semantic contract below,
+# while the CLI path also requires these content hashes before modifying CMake.
+PINNED_VITIS_TEMPLATE_SHA256 = {
+    "i2c_access.c": "f3bce468a8f4a1b6f6a5885254a217d60deef8a0bad90e6f843905c79f95b6d3",
+    "iic_phyreset.c": "cbfa0470bad9465ce781ca32530e839879d9d9626a22f0b40c0d843cb0755b59",
+    "lwip_echo_server.cmake": "8c6aa1cc9f76894ec7d481021cd6409f8f591cda584cca74bbbde1901f4d87ec",
+    "main.c": "1d6f0c8b05995ae3d934f72fceabb90fb9790f963ecd2bc8c06014883da2e182",
+    "platform.c": "1d1ef3d70d50b16dcbac38ee0e6d0ea36aed5d5dcb6f227f3701359a4f690650",
+    "platform.h": "c245a181566d148e2cf2dc60be18a2291d71ec3797127a0ff3532d67715e9705",
+    "platform_config.h.in": "384dab5e84698c7915b1f9e6a3ae81f2a71efe904a4e2c1bf1222e8d057686d5",
+    "platform_zynqmp.c": "76830b48abe799d5804526bef485635fd1c8a1ba668bf2940df0b4fedd91033c",
+    "sfp.c": "d23826a3a4ed13770c437aeffa5f3556b45c46a867842a8214070643ea6d5f33",
+    "si5324.c": "62e55eed0a135d793a2bcea88b65fbe08d1dfe71f9f0ff8057aea268897c4bef",
+}
+
+VITIS_GENERATED_SOURCE_PATHS = frozenset(("compile_commands.json",))
+VITIS_GENERATED_SOURCE_PREFIXES = (".compile_commands/",)
+
+
+def _is_vitis_generated_source(relative: str) -> bool:
+    normalized = relative.replace("\\", "/")
+    return (normalized in VITIS_GENERATED_SOURCE_PATHS or
+            any(normalized.startswith(prefix)
+                for prefix in VITIS_GENERATED_SOURCE_PREFIXES))
 
 
 @dataclass(frozen=True)
@@ -139,6 +208,11 @@ class NetworkWorkspacePlan:
         record["xsa"] = str(self.xsa)
         record["workspace"] = str(self.workspace)
         record["domain_name"] = DOMAIN_NAME
+        record["bsp_libraries"] = list(REQUIRED_BSP_LIBRARIES)
+        record["bsp_config"] = [
+            {"library": library, "parameter": parameter, "value": value}
+            for library, parameter, value in REQUIRED_BSP_CONFIG
+        ]
         record["template"] = "lwip_echo_server"
         record.pop("web_app_name", None)
         record.pop("tokenizer_asset", None)
@@ -153,6 +227,11 @@ class NetworkWorkspacePlan:
                 "heap_bytes": WEB_HEAP_BYTES,
                 "compile_sources": list(WEB_COMPILE_SOURCES),
                 "sources": [item.json_record() for item in self.web_sources],
+                "vitis_template_contract": {
+                    "name": "lwip_echo_server",
+                    "version": "AMD Vitis 2025.1.1",
+                    "sha256": dict(PINNED_VITIS_TEMPLATE_SHA256),
+                },
             }
         record.pop("web_sources", None)
         return record
@@ -160,6 +239,28 @@ class NetworkWorkspacePlan:
 
 def _resolved(path: str | Path) -> Path:
     return Path(path).expanduser().resolve()
+
+
+def _resolve_lwip220_source_root(
+    environ: Mapping[str, str] | None = None,
+) -> Path:
+    values = os.environ if environ is None else environ
+    explicit = values.get("QWEB_VITIS_LWIP220_SOURCE", "").strip()
+    if explicit:
+        candidate = Path(explicit).expanduser()
+    else:
+        vitis_root = values.get("XILINX_VITIS", "").strip()
+        if not vitis_root:
+            raise RuntimeError(
+                "XILINX_VITIS or QWEB_VITIS_LWIP220_SOURCE must identify "
+                "the pinned Vitis 2025.1.1 lwip220 source"
+            )
+        candidate = Path(vitis_root).expanduser() / VITIS_LWIP220_RELATIVE_PATH
+    if candidate.is_symlink() or not candidate.is_dir():
+        raise RuntimeError(
+            f"Vitis lwip220 source must be a regular directory: {candidate}"
+        )
+    return candidate.resolve(strict=True)
 
 
 def _sha256_file(path: Path) -> str:
@@ -213,7 +314,7 @@ def _audit_web_sources(repository_root: Path) -> tuple[WebSourceRecord, ...]:
     actual_compile_sources = tuple(
         item.destination for item in records if item.compile_source
     ) + ("tokenizer_asset.S",)
-    if actual_compile_sources != WEB_COMPILE_SOURCES:
+    if actual_compile_sources != WEB_ADDED_COMPILE_SOURCES:
         raise RuntimeError("internal Web compile-source inventory mismatch")
     return tuple(records)
 
@@ -241,6 +342,9 @@ def _reaudit_web_inputs(plan: NetworkWorkspacePlan) -> None:
         raise RuntimeError("Web application plan lacks tokenizer provenance")
     if _audit_tokenizer_asset(plan.tokenizer_asset) != plan.tokenizer_sha256:
         raise RuntimeError("tokenizer asset changed after planning")
+    canonical = _audit_web_sources(Path(__file__).resolve().parents[3])
+    if plan.web_sources != canonical:
+        raise RuntimeError("Web application plan source inventory is not canonical")
     for record in plan.web_sources:
         _require_regular_source(record.source, "Web application source")
         if (record.source.stat().st_size != record.byte_count or
@@ -249,6 +353,71 @@ def _reaudit_web_inputs(plan: NetworkWorkspacePlan) -> None:
                 f"Web application source changed after planning: "
                 f"{record.logical_path}"
             )
+
+
+def _audit_vitis_template_sources(
+    source_dir: Path,
+    *,
+    expected_app_name: str,
+    require_pinned_hashes: bool,
+) -> tuple[Path, ...]:
+    required_fragments: dict[str, tuple[str, ...]] = {
+        "CMakeLists.txt": (
+            "include(${CMAKE_CURRENT_SOURCE_DIR}/UserConfig.cmake)",
+            "add_executable(${APP_NAME}.elf ${_sources})",
+        ),
+        "main.c": (
+            "lwip_init();",
+            "xemac_add(echo_netif",
+            "netif_set_up(echo_netif);",
+            "start_application();",
+            "xemacif_input(echo_netif);",
+            "transfer_data();",
+        ),
+        "platform.c": ("TcpFastTmrFlag", "TcpSlowTmrFlag"),
+        "platform_zynqmp.c": ("platform_setup_timer",),
+        "lwip_echo_server.cmake": (
+            "EMACPS_NUM_DRIVER_INSTANCES",
+            "TTCPS_NUM_DRIVER_INSTANCES",
+        ),
+        "platform_config.h.in": ("PLATFORM_EMAC_BASEADDR",),
+    }
+    regular_files: list[Path] = []
+    for path in sorted(source_dir.rglob("*")):
+        if path.is_symlink():
+            raise RuntimeError(f"Vitis template source must not be a symlink: {path}")
+        if path.is_file():
+            relative = path.relative_to(source_dir).as_posix()
+            if _is_vitis_generated_source(relative):
+                continue
+            regular_files.append(path)
+    for relative, fragments in required_fragments.items():
+        path = source_dir / relative
+        _require_regular_source(path, "required Vitis lwIP template input")
+        text = path.read_text(encoding="utf-8")
+        for fragment in fragments:
+            if fragment not in text:
+                raise RuntimeError(
+                    f"{path}: missing required template fragment {fragment!r}"
+                )
+    cmake_text = (source_dir / "CMakeLists.txt").read_text(encoding="utf-8")
+    app_name_assignment = f"set(APP_NAME {expected_app_name})"
+    if cmake_text.count(app_name_assignment) != 1:
+        raise RuntimeError(
+            f"{source_dir / 'CMakeLists.txt'}: expected one generated "
+            f"component assignment {app_name_assignment!r}"
+        )
+    if require_pinned_hashes:
+        for relative, expected_sha256 in PINNED_VITIS_TEMPLATE_SHA256.items():
+            path = source_dir / relative
+            _require_regular_source(path, "pinned Vitis 2025.1.1 template input")
+            actual_sha256 = _sha256_file(path)
+            if actual_sha256 != expected_sha256:
+                raise RuntimeError(
+                    f"{path}: Vitis template SHA-256 mismatch; "
+                    f"expected {expected_sha256}, got {actual_sha256}"
+                )
+    return tuple(regular_files)
 
 
 def _is_within(path: Path, parent: Path) -> bool:
@@ -318,15 +487,9 @@ def _audit_snapshot(
     return report
 
 
-def _require_claimed_workspace(workspace: Path, snapshot: Path) -> None:
+def _require_initialized_workspace(workspace: Path, snapshot: Path) -> None:
     if not workspace.is_dir() or not snapshot.is_file():
-        raise RuntimeError("claimed workspace or XSA snapshot disappeared")
-    entries = list(workspace.iterdir())
-    if entries != [snapshot]:
-        raise RuntimeError(
-            "claimed workspace changed before Vitis took ownership: "
-            + ", ".join(str(entry) for entry in entries)
-        )
+        raise RuntimeError("initialized Vitis workspace or XSA snapshot disappeared")
 
 
 def plan_from_environment(
@@ -432,19 +595,90 @@ def _tokenizer_assembly_text(copied_asset: Path) -> str:
 
 def _replace_cmake_sources(user_config: Path) -> None:
     text = user_config.read_text(encoding="utf-8")
+    pattern = re.compile(
+        r"^set\(USER_COMPILE_SOURCES[ \t]*\r?\n(.*?)^\)",
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    match = pattern.search(text)
+    if match is None:
+        raise RuntimeError(
+            f"{user_config}: could not locate USER_COMPILE_SOURCES"
+        )
+    template_sources = tuple(re.findall(r'^\s*"([^"\r\n]+)"\s*$',
+                                        match.group(1), re.MULTILINE))
+    if template_sources != VITIS_TEMPLATE_COMPILE_SOURCES:
+        raise RuntimeError(
+            f"{user_config}: unexpected Vitis template compile sources; "
+            f"expected {VITIS_TEMPLATE_COMPILE_SOURCES!r}, "
+            f"got {template_sources!r}"
+        )
     replacement = "set(USER_COMPILE_SOURCES\n" + "".join(
         f'"{name}"\n' for name in WEB_COMPILE_SOURCES
     ) + ")"
-    pattern = re.compile(
-        r"^set\(USER_COMPILE_SOURCES[ \t]*\r?\n.*?^\)",
-        flags=re.MULTILINE | re.DOTALL,
-    )
     updated, count = pattern.subn(replacement, text, count=1)
     if count != 1:
         raise RuntimeError(
             f"{user_config}: could not locate USER_COMPILE_SOURCES"
         )
     user_config.write_text(updated, encoding="utf-8", newline="\n")
+
+
+def _patch_web_cmake(cmake_file: Path) -> None:
+    text = cmake_file.read_text(encoding="utf-8")
+    source_marker = "list(APPEND _sources ${USER_COMPILE_SOURCES})"
+    source_pattern = re.compile(
+        r"^[ \t]*list\s*\(\s*APPEND\s+_sources\s+"
+        r"\$\{USER_COMPILE_SOURCES\}\s*\)[ \t]*$",
+        flags=re.MULTILINE,
+    )
+    target_pattern = re.compile(
+        r"^[ \t]*add_executable\s*\(\s*\$\{APP_NAME\}\.elf\s+"
+        r"\$\{_sources\}\s*\)[ \t]*$",
+        flags=re.MULTILINE,
+    )
+    if text.count("include(${CMAKE_CURRENT_SOURCE_DIR}/UserConfig.cmake)") != 1:
+        raise RuntimeError(
+            f"{cmake_file}: expected one UserConfig.cmake include"
+        )
+    matches = tuple(source_pattern.finditer(text))
+    if len(matches) > 1:
+        raise RuntimeError(f"{cmake_file}: duplicate Web source append markers")
+    if matches:
+        updated = text
+    else:
+        collector_pattern = re.compile(
+            r"^([ \t]*collector_list\s*\(\s*_sources\s+"
+            r"PROJECT_LIB_SOURCES\s*\)[ \t]*)$",
+            flags=re.MULTILINE,
+        )
+        collectors = tuple(collector_pattern.finditer(text))
+        if len(collectors) != 1:
+            raise RuntimeError(
+                f"{cmake_file}: could not locate a USER_COMPILE_SOURCES append "
+                "or unique PROJECT_LIB_SOURCES collector"
+            )
+        updated, count = collector_pattern.subn(
+            lambda match: match.group(1) + "\n" + source_marker,
+            text,
+            count=1,
+        )
+        if count != 1:
+            raise RuntimeError(
+                f"{cmake_file}: could not locate a USER_COMPILE_SOURCES append "
+                "or unique PROJECT_LIB_SOURCES collector"
+            )
+        matches = tuple(source_pattern.finditer(updated))
+    targets = tuple(target_pattern.finditer(updated))
+    if len(targets) != 1:
+        raise RuntimeError(
+            f"{cmake_file}: expected one _sources application target"
+        )
+    if matches[0].start() > targets[0].start():
+        raise RuntimeError(
+            f"{cmake_file}: USER_COMPILE_SOURCES append occurs after the target"
+        )
+    if updated != text:
+        cmake_file.write_text(updated, encoding="utf-8", newline="\n")
 
 
 def _patch_web_linker_script(linker_script: Path) -> None:
@@ -477,6 +711,8 @@ def _patch_web_linker_script(linker_script: Path) -> None:
 def _populate_web_application(
     component_dir: Path,
     plan: NetworkWorkspacePlan,
+    *,
+    require_pinned_template: bool,
 ) -> list[dict[str, Any]]:
     if plan.web_app_name is None or plan.tokenizer_asset is None:
         raise RuntimeError("cannot populate Web application from an echo-only plan")
@@ -484,17 +720,47 @@ def _populate_web_application(
     source_dir = component_dir / "src"
     if not source_dir.is_dir():
         raise FileNotFoundError(source_dir)
+    template_files = _audit_vitis_template_sources(
+        source_dir,
+        expected_app_name=plan.web_app_name,
+        require_pinned_hashes=require_pinned_template,
+    )
     user_config = source_dir / "UserConfig.cmake"
+    cmake_file = source_dir / "CMakeLists.txt"
     linker_script = source_dir / "lscript.ld"
     _require_regular_source(user_config, "Vitis UserConfig.cmake")
+    _require_regular_source(cmake_file, "Vitis application CMakeLists.txt")
     _require_regular_source(linker_script, "Vitis linker script")
 
+    replaced_template_paths = {
+        source_dir / "echo.c",
+        user_config,
+        cmake_file,
+        linker_script,
+    }
     inventory: list[dict[str, Any]] = []
+    for template_file in template_files:
+        if template_file in replaced_template_paths:
+            continue
+        relative = template_file.relative_to(source_dir).as_posix()
+        inventory.append(
+            {
+                "path": f"src/{relative}",
+                "sha256": _sha256_file(template_file),
+                "bytes": template_file.stat().st_size,
+                "origin": "Vitis lwip_echo_server template input",
+            }
+        )
     for record in plan.web_sources:
         destination = source_dir / record.destination
         if destination.parent != source_dir:
             raise RuntimeError(
                 f"invalid Web staging destination: {record.destination}"
+            )
+        if destination.exists() and destination != source_dir / "echo.c":
+            raise RuntimeError(
+                f"Web staging destination collides with Vitis template: "
+                f"{record.destination}"
             )
         shutil.copy2(record.source, destination)
         if (destination.stat().st_size != record.byte_count or
@@ -512,6 +778,8 @@ def _populate_web_application(
         )
 
     copied_tokenizer = source_dir / "qwen3_tokenizer.qtk"
+    if copied_tokenizer.exists():
+        raise RuntimeError("tokenizer staging destination already exists")
     shutil.copy2(plan.tokenizer_asset, copied_tokenizer)
     copied_digest = _audit_tokenizer_asset(copied_tokenizer)
     if copied_digest != plan.tokenizer_sha256:
@@ -526,6 +794,8 @@ def _populate_web_application(
     )
 
     assembly = source_dir / "tokenizer_asset.S"
+    if assembly.exists():
+        raise RuntimeError("tokenizer assembly destination already exists")
     assembly.write_text(
         _tokenizer_assembly_text(copied_tokenizer),
         encoding="utf-8",
@@ -540,6 +810,7 @@ def _populate_web_application(
         }
     )
     _replace_cmake_sources(user_config)
+    _patch_web_cmake(cmake_file)
     _patch_web_linker_script(linker_script)
     inventory.extend(
         (
@@ -548,6 +819,12 @@ def _populate_web_application(
                 "sha256": _sha256_file(user_config),
                 "bytes": user_config.stat().st_size,
                 "origin": "Vitis template with exact Web source list",
+            },
+            {
+                "path": "src/CMakeLists.txt",
+                "sha256": _sha256_file(cmake_file),
+                "bytes": cmake_file.stat().st_size,
+                "origin": "Vitis template with explicit Web source append",
             },
             {
                 "path": "src/lscript.ld",
@@ -581,21 +858,319 @@ def _reaudit_staged_web_application(
             raise RuntimeError(
                 f"staged Web application file changed: {relative}"
             )
+    source_dir = component_dir / "src"
+    actual: set[str] = set()
+    for path in source_dir.rglob("*"):
+        if path.is_symlink():
+            raise RuntimeError(f"staged Web source must not be a symlink: {path}")
+        if path.is_file():
+            relative = path.relative_to(source_dir).as_posix()
+            if _is_vitis_generated_source(relative):
+                continue
+            actual.add(f"src/{relative}")
+    if actual != seen:
+        missing = sorted(seen - actual)
+        unexpected = sorted(actual - seen)
+        raise RuntimeError(
+            "staged Web source inventory mismatch: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
 
 
 def _audit_aarch64_elf(path: Path) -> dict[str, Any]:
     _require_regular_source(path, "built Web ELF")
-    header = path.read_bytes()[:64]
-    if (len(header) < 20 or header[:4] != b"\x7fELF" or
-            header[4] != 2 or header[5] != 1 or
-            int.from_bytes(header[18:20], "little") != 183):
-        raise RuntimeError(f"built Web ELF is not ELF64 little-endian AArch64: {path}")
+    data = path.read_bytes()
+    elf_header = struct.Struct("<16sHHIQQQIHHHHHH")
+    program_header = struct.Struct("<IIQQQQQQ")
+    section_header = struct.Struct("<IIQQQQIIQQ")
+    symbol_entry = struct.Struct("<IBBHQQ")
+
+    def require_range(offset: int, size: int, label: str) -> None:
+        if offset < 0 or size < 0 or offset > len(data) or size > len(data) - offset:
+            raise RuntimeError(f"built Web ELF has invalid {label} range")
+
+    def string_at(table: bytes, offset: int, label: str) -> str:
+        if offset < 0 or offset >= len(table):
+            raise RuntimeError(f"built Web ELF has invalid {label} string offset")
+        terminator = table.find(b"\0", offset)
+        if terminator < 0:
+            raise RuntimeError(f"built Web ELF has unterminated {label} string")
+        try:
+            return table[offset:terminator].decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise RuntimeError(f"built Web ELF has non-ASCII {label} string") from exc
+
+    if len(data) < elf_header.size:
+        raise RuntimeError(f"built Web ELF is truncated: {path}")
+    (
+        ident,
+        elf_type,
+        machine,
+        version,
+        entry,
+        program_offset,
+        section_offset,
+        _flags,
+        header_size,
+        program_entry_size,
+        program_count,
+        section_entry_size,
+        section_count,
+        section_name_index,
+    ) = elf_header.unpack_from(data)
+    if (ident[:4] != b"\x7fELF" or ident[4] != 2 or ident[5] != 1 or
+            ident[6] != 1 or elf_type != 2 or machine != 183 or version != 1 or
+            header_size != elf_header.size):
+        raise RuntimeError(
+            f"built Web ELF is not an executable ELF64 little-endian AArch64 image: {path}"
+        )
+    if (program_count == 0 or program_entry_size != program_header.size or
+            section_count == 0 or section_entry_size != section_header.size or
+            section_name_index == 0 or section_name_index >= section_count):
+        raise RuntimeError("built Web ELF has invalid header-table metadata")
+    require_range(program_offset,
+                  program_count * program_entry_size,
+                  "program-header table")
+    require_range(section_offset,
+                  section_count * section_entry_size,
+                  "section-header table")
+
+    executable_entry = False
+    for index in range(program_count):
+        values = program_header.unpack_from(
+            data, program_offset + index * program_entry_size
+        )
+        segment_type, segment_flags, file_offset, virtual_address, _, file_size, memory_size, _ = values
+        if segment_type != 1:
+            continue
+        if file_size > memory_size:
+            raise RuntimeError("built Web ELF has a PT_LOAD file size larger than memory size")
+        require_range(file_offset, file_size, "PT_LOAD segment")
+        if ((segment_flags & 1) != 0 and file_size != 0 and
+                virtual_address <= entry < virtual_address + file_size):
+            executable_entry = True
+    if not executable_entry:
+        raise RuntimeError("built Web ELF entry point is not in an executable PT_LOAD segment")
+
+    sections: list[dict[str, int | str]] = []
+    raw_sections: list[tuple[int, ...]] = []
+    for index in range(section_count):
+        raw_sections.append(
+            section_header.unpack_from(
+                data, section_offset + index * section_entry_size
+            )
+        )
+    shstr = raw_sections[section_name_index]
+    if shstr[1] != 3:
+        raise RuntimeError("built Web ELF section-name table is not STRTAB")
+    require_range(shstr[4], shstr[5], "section-name string table")
+    section_names = data[shstr[4]:shstr[4] + shstr[5]]
+    for raw in raw_sections:
+        name = string_at(section_names, raw[0], "section") if raw[0] != 0 else ""
+        sections.append(
+            {
+                "name": name,
+                "type": raw[1],
+                "flags": raw[2],
+                "address": raw[3],
+                "offset": raw[4],
+                "size": raw[5],
+                "link": raw[6],
+                "entry_size": raw[9],
+            }
+        )
+    text_sections = [
+        item for item in sections
+        if item["name"] == ".text" and item["type"] == 1 and
+        (int(item["flags"]) & 0x6) == 0x6 and int(item["size"]) > 0
+    ]
+    if len(text_sections) != 1:
+        raise RuntimeError("built Web ELF lacks one non-empty executable .text section")
+    require_range(int(text_sections[0]["offset"]),
+                  int(text_sections[0]["size"]),
+                  ".text section")
+    executable_sections = [
+        item for item in sections
+        if (int(item["flags"]) & 0x6) == 0x6 and int(item["size"]) > 0
+    ]
+    if not any(
+        int(item["address"]) <= entry <
+        int(item["address"]) + int(item["size"])
+        for item in executable_sections
+    ):
+        raise RuntimeError("built Web ELF entry point is not in an executable section")
+
+    symtabs = [
+        (index, item) for index, item in enumerate(sections)
+        if item["name"] == ".symtab" and item["type"] == 2
+    ]
+    if len(symtabs) != 1:
+        raise RuntimeError("built Web ELF must contain one .symtab")
+    _, symtab = symtabs[0]
+    symtab_offset = int(symtab["offset"])
+    symtab_size = int(symtab["size"])
+    symtab_entry_size = int(symtab["entry_size"])
+    string_index = int(symtab["link"])
+    if (symtab_entry_size != symbol_entry.size or
+            symtab_size == 0 or symtab_size % symbol_entry.size != 0 or
+            string_index <= 0 or string_index >= section_count or
+            sections[string_index]["type"] != 3):
+        raise RuntimeError("built Web ELF has invalid .symtab metadata")
+    require_range(symtab_offset, symtab_size, ".symtab")
+    string_section = sections[string_index]
+    require_range(int(string_section["offset"]),
+                  int(string_section["size"]),
+                  "symbol string table")
+    symbol_strings = data[
+        int(string_section["offset"]):
+        int(string_section["offset"]) + int(string_section["size"])
+    ]
+    symbols: dict[str, tuple[int, int, int]] = {}
+    for offset in range(symtab_offset, symtab_offset + symtab_size, symbol_entry.size):
+        name_offset, info, _, section_index, value, size = symbol_entry.unpack_from(data, offset)
+        if name_offset == 0:
+            continue
+        name = string_at(symbol_strings, name_offset, "symbol")
+        symbols[name] = (section_index, value, size)
+
+    required_functions = (
+        "main",
+        "start_application",
+        "transfer_data",
+        "qweb_board_qot_runner",
+        "qweb_job_step",
+        "qot_session_step",
+        "qtk_tokenize_utf8",
+    )
+    for name in required_functions:
+        symbol = symbols.get(name)
+        if symbol is None:
+            raise RuntimeError(f"built Web ELF is missing required symbol {name}")
+        section_index, value, _ = symbol
+        if (section_index <= 0 or section_index >= section_count or value == 0 or
+                (int(sections[section_index]["flags"]) & 0x6) != 0x6):
+            raise RuntimeError(f"built Web ELF symbol {name} is not executable code")
+
+    tokenizer_start = symbols.get("qot_tokenizer_asset_start")
+    tokenizer_end = symbols.get("qot_tokenizer_asset_end")
+    if tokenizer_start is None or tokenizer_end is None:
+        raise RuntimeError("built Web ELF is missing tokenizer boundary symbols")
+    start_section, start_value, _ = tokenizer_start
+    end_section, end_value, _ = tokenizer_end
+    if (start_section <= 0 or start_section >= section_count or
+            end_section != start_section or
+            end_value - start_value != PINNED_TOKENIZER_BYTES):
+        raise RuntimeError("built Web ELF tokenizer symbol span is invalid")
+    tokenizer_section = sections[start_section]
+    section_start = int(tokenizer_section["address"])
+    section_end = section_start + int(tokenizer_section["size"])
+    if (tokenizer_section["type"] != 1 or
+            (int(tokenizer_section["flags"]) & 0x2) == 0 or
+            start_value < section_start or end_value > section_end):
+        raise RuntimeError("built Web ELF tokenizer is not file-backed allocated data")
+    require_range(int(tokenizer_section["offset"]),
+                  int(tokenizer_section["size"]),
+                  "tokenizer section")
+
     return {
         "path": str(path),
         "sha256": _sha256_file(path),
-        "bytes": path.stat().st_size,
+        "bytes": len(data),
         "elf_class": 64,
         "machine": "AArch64",
+        "elf_type": "ET_EXEC",
+        "entry": entry,
+        "section_count": section_count,
+        "required_symbols": list(required_functions),
+        "tokenizer_bytes": end_value - start_value,
+    }
+
+
+def _audit_built_lwip_override(
+    plan: NetworkWorkspacePlan,
+    override: dict[str, Any],
+) -> dict[str, Any]:
+    expected_source_hash = str(override.get("patched_sha256", ""))
+    if len(expected_source_hash) != 64:
+        raise RuntimeError("BSP override lacks a patched-source SHA-256")
+    bsp_root = (
+        plan.workspace
+        / plan.platform_name
+        / "psu_cortexa53_0"
+        / DOMAIN_NAME
+        / "bsp"
+    )
+    copied_source = (
+        bsp_root
+        / "libsrc"
+        / PATCHED_BSP_LIBRARY
+        / PATCHED_BSP_RELATIVE_PATH
+    )
+    _require_regular_source(copied_source, "Vitis BSP copied lwip220 source")
+    copied_hash = _sha256_file(copied_source)
+    if copied_hash != expected_source_hash:
+        raise RuntimeError(
+            "Vitis BSP did not adopt the audited YT8521 lwip220 source: "
+            f"expected {expected_source_hash}, got {copied_hash}"
+        )
+    archive = (
+        plan.workspace
+        / plan.platform_name
+        / "export"
+        / plan.platform_name
+        / "sw"
+        / DOMAIN_NAME
+        / "lib"
+        / f"lib{PATCHED_BSP_LIBRARY}.a"
+    )
+    _require_regular_source(archive, "exported patched lwip220 archive")
+    with archive.open("rb") as stream:
+        archive_magic = stream.read(8)
+    if archive_magic != b"!<arch>\n":
+        raise RuntimeError(f"exported lwip220 output is not an archive: {archive}")
+    return {
+        "bsp_copied_source": {
+            "path": str(copied_source),
+            "sha256": copied_hash,
+            "bytes": copied_source.stat().st_size,
+        },
+        "export_archive": {
+            "path": str(archive),
+            "sha256": _sha256_file(archive),
+            "bytes": archive.stat().st_size,
+        },
+    }
+
+
+ECHO_PATCH_MARKERS = (
+    "Detected Motorcomm YT8521",
+    "YT8521 link resolved",
+)
+
+
+def _audit_echo_elf(plan: NetworkWorkspacePlan) -> dict[str, Any]:
+    path = plan.workspace / plan.app_name / "build" / f"{plan.app_name}.elf"
+    _require_regular_source(path, "built network echo ELF")
+    data = path.read_bytes()
+    if (len(data) < 64 or data[:4] != b"\x7fELF" or data[4] != 2 or
+            data[5] != 1 or int.from_bytes(data[18:20], "little") != 183):
+        raise RuntimeError(
+            f"built network echo image is not ELF64 little-endian AArch64: {path}"
+        )
+    missing = [marker for marker in ECHO_PATCH_MARKERS
+               if marker.encode("ascii") not in data]
+    if missing:
+        raise RuntimeError(
+            "built network echo ELF does not contain the YT8521 BSP patch: "
+            + ", ".join(missing)
+        )
+    return {
+        "path": str(path),
+        "sha256": _sha256_file(path),
+        "bytes": len(data),
+        "elf_class": 64,
+        "machine": "AArch64",
+        "required_patch_markers": list(ECHO_PATCH_MARKERS),
     }
 
 
@@ -603,6 +1178,15 @@ def execute_plan(
     plan: NetworkWorkspacePlan,
     *,
     vitis_module: Any | None = None,
+    lwip_source_root: str | Path | None = None,
+    lwip_stager: Callable[[Path, Path], dict[str, Any]] = stage_patched_library,
+    lwip_verifier: Callable[[dict[str, Any]], None] = verify_staged_library,
+    built_lwip_auditor: Callable[
+        [NetworkWorkspacePlan, dict[str, Any]], dict[str, Any]
+    ] = _audit_built_lwip_override,
+    echo_elf_auditor: Callable[
+        [NetworkWorkspacePlan], dict[str, Any]
+    ] = _audit_echo_elf,
 ) -> dict[str, Any]:
     """Execute a previously audited plan in one newly claimed workspace."""
 
@@ -612,100 +1196,206 @@ def execute_plan(
         repository_root=repository_root,
         xsa=plan.xsa,
     )
-    plan.workspace.mkdir(exist_ok=False)
-    snapshot = plan.workspace / f"network_input_{plan.xsa_sha256}.xsa"
-    with plan.xsa.open("rb") as source, snapshot.open("xb") as destination:
-        shutil.copyfileobj(source, destination, length=1024 * 1024)
+    # Re-audit the original before claiming anything.  This catches a changed
+    # XSA without leaving a half-created workspace behind.
     _audit_snapshot(
-        snapshot,
+        plan.xsa,
         xsa_sha256=plan.xsa_sha256,
         bitstream_sha256=plan.bitstream_sha256,
     )
-    _require_claimed_workspace(plan.workspace, snapshot)
-    vitis_api = (
-        importlib.import_module("vitis")
-        if vitis_module is None
-        else vitis_module
-    )
-    _require_claimed_workspace(plan.workspace, snapshot)
-    client = vitis_api.create_client()
+    if lwip_source_root is None:
+        resolved_lwip_source = _resolve_lwip220_source_root()
+    else:
+        resolved_lwip_source = Path(lwip_source_root).expanduser().resolve(
+            strict=True
+        )
+
+    # Vitis 2025.1 requires a new workspace path to be absent when
+    # set_workspace() is called.  Claim the name with an exclusive sibling
+    # lock instead of pre-creating an empty directory that Vitis rejects as an
+    # unrecognized legacy workspace.
+    claim = plan.workspace.with_name(f".{plan.workspace.name}.qweb-claim")
+    try:
+        with claim.open("x", encoding="utf-8") as stream:
+            stream.write(
+                f"workspace={plan.workspace}\n"
+                f"xsa_sha256={plan.xsa_sha256}\n"
+                f"pid={os.getpid()}\n"
+            )
+    except FileExistsError as exc:
+        raise RuntimeError(f"workspace claim already exists: {claim}") from exc
+
     build_results: dict[str, Any] = {}
+    bsp_override_record: dict[str, Any] | None = None
+    built_lwip_record: dict[str, Any] | None = None
+    echo_elf_record: dict[str, Any] | None = None
     web_inventory: list[dict[str, Any]] = []
     web_elf_record: dict[str, Any] | None = None
     try:
-        client.set_workspace(path=plan.workspace.as_posix())
-        advanced = client.create_advanced_options_dict(dt_overlay="0")
-        client.create_platform_component(
-            name=plan.platform_name,
-            hw_design=str(snapshot),
-            os="standalone",
-            cpu="psu_cortexa53_0",
-            domain_name=DOMAIN_NAME,
-            generate_dtb=False,
-            advanced_options=advanced,
-            architecture="64-bit",
-            compiler="gcc",
+        _require_safe_workspace(
+            plan.workspace,
+            repository_root=repository_root,
+            xsa=plan.xsa,
         )
-        platform = client.get_component(name=plan.platform_name)
-        platform_build = platform.build()
-        build_results["platform"] = platform_build
-        if platform_build != 0:
-            raise RuntimeError(
-                f"Vitis platform build failed with code {platform_build!r}"
+        vitis_api = (
+            importlib.import_module("vitis")
+            if vitis_module is None
+            else vitis_module
+        )
+        client = vitis_api.create_client()
+        try:
+            client.set_workspace(path=plan.workspace.as_posix())
+            if not plan.workspace.is_dir():
+                raise RuntimeError("Vitis did not initialize the requested workspace")
+            snapshot = plan.workspace / f"network_input_{plan.xsa_sha256}.xsa"
+            with plan.xsa.open("rb") as source, snapshot.open("xb") as destination:
+                shutil.copyfileobj(source, destination, length=1024 * 1024)
+            _audit_snapshot(
+                snapshot,
+                xsa_sha256=plan.xsa_sha256,
+                bitstream_sha256=plan.bitstream_sha256,
             )
-        xpfm = (
-            f"$COMPONENT_LOCATION/../{plan.platform_name}/export/"
-            f"{plan.platform_name}/{plan.platform_name}.xpfm"
-        )
-        client.create_app_component(
-            name=plan.app_name,
-            platform=xpfm,
-            domain=DOMAIN_NAME,
-            template="lwip_echo_server",
-        )
-        application = client.get_component(name=plan.app_name)
-        application_build = application.build()
-        build_results["application"] = application_build
-        if application_build != 0:
-            raise RuntimeError(
-                f"Vitis echo application build failed with code {application_build!r}"
+            _require_initialized_workspace(plan.workspace, snapshot)
+            embedded_repo_root = plan.workspace / "software_repo"
+            bsp_override_record = lwip_stager(
+                resolved_lwip_source,
+                embedded_repo_root
+                / "ThirdParty"
+                / "sw_services"
+                / PATCHED_BSP_LIBRARY_VERSION,
             )
-        if plan.web_app_name is not None:
-            _reaudit_web_inputs(plan)
+            bsp_override_record = dict(bsp_override_record)
+            bsp_override_record["repository_root"] = str(embedded_repo_root)
+            lwip_verifier(bsp_override_record)
+            embedded_repo_text = embedded_repo_root.as_posix()
+            if client.set_embedded_sw_repo(
+                level="LOCAL",
+                path=embedded_repo_text,
+            ) is not True:
+                raise RuntimeError(
+                    "Vitis failed to register the isolated embedded SW repository"
+                )
+            configured_repositories = client.get_embedded_sw_repo(level="LOCAL")
+            if not any(
+                Path(str(item)).resolve() == embedded_repo_root.resolve()
+                for item in configured_repositories
+            ):
+                raise RuntimeError(
+                    "Vitis did not retain the isolated embedded SW repository"
+                )
+            advanced = client.create_advanced_options_dict(dt_overlay="0")
+            client.create_platform_component(
+                name=plan.platform_name,
+                hw_design=str(snapshot),
+                os="standalone",
+                cpu="psu_cortexa53_0",
+                domain_name=DOMAIN_NAME,
+                generate_dtb=False,
+                advanced_options=advanced,
+                architecture="64-bit",
+                compiler="gcc",
+            )
+            platform = client.get_component(name=plan.platform_name)
+            domain = platform.get_domain(name=DOMAIN_NAME)
+            for library in REQUIRED_BSP_LIBRARIES:
+                set_library = domain.set_lib(lib_name=library)
+                if set_library is not True:
+                    raise RuntimeError(
+                        f"Vitis failed to enable required BSP library {library!r}"
+                    )
+            for library, parameter, value in REQUIRED_BSP_CONFIG:
+                if domain.set_config(
+                    option="lib",
+                    param=parameter,
+                    value=value,
+                    lib_name=library,
+                ) is not True:
+                    raise RuntimeError(
+                        "Vitis failed to set required BSP parameter "
+                        f"{library}.{parameter}={value}"
+                    )
+            platform_build = platform.build()
+            build_results["platform"] = platform_build
+            if platform_build != 0:
+                raise RuntimeError(
+                    f"Vitis platform build failed with code {platform_build!r}"
+                )
+            built_lwip_record = built_lwip_auditor(
+                plan,
+                bsp_override_record,
+            )
+            xpfm = (
+                f"$COMPONENT_LOCATION/../{plan.platform_name}/export/"
+                f"{plan.platform_name}/{plan.platform_name}.xpfm"
+            )
             client.create_app_component(
-                name=plan.web_app_name,
+                name=plan.app_name,
                 platform=xpfm,
                 domain=DOMAIN_NAME,
                 template="lwip_echo_server",
             )
-            web_application = client.get_component(name=plan.web_app_name)
-            web_component_dir = plan.workspace / plan.web_app_name
-            web_inventory = _populate_web_application(
-                web_component_dir,
-                plan,
-            )
-            web_build = web_application.build()
-            build_results["web_application"] = web_build
-            if web_build != 0:
+            application = client.get_component(name=plan.app_name)
+            application_build = application.build()
+            build_results["application"] = application_build
+            if application_build != 0:
                 raise RuntimeError(
-                    f"Vitis Web application build failed with code {web_build!r}"
+                    f"Vitis echo application build failed with code {application_build!r}"
                 )
-            _reaudit_staged_web_application(
-                web_component_dir,
-                plan,
-                web_inventory,
-            )
-            web_elf_record = _audit_aarch64_elf(
-                web_component_dir / "build" / f"{plan.web_app_name}.elf"
-            )
+            echo_elf_record = echo_elf_auditor(plan)
+            if plan.web_app_name is not None:
+                _reaudit_web_inputs(plan)
+                client.create_app_component(
+                    name=plan.web_app_name,
+                    platform=xpfm,
+                    domain=DOMAIN_NAME,
+                    template="lwip_echo_server",
+                )
+                web_application = client.get_component(name=plan.web_app_name)
+                web_component_dir = plan.workspace / plan.web_app_name
+                web_inventory = _populate_web_application(
+                    web_component_dir,
+                    plan,
+                    require_pinned_template=vitis_module is None,
+                )
+                web_build = web_application.build()
+                build_results["web_application"] = web_build
+                if web_build != 0:
+                    raise RuntimeError(
+                        f"Vitis Web application build failed with code {web_build!r}"
+                    )
+                _reaudit_staged_web_application(
+                    web_component_dir,
+                    plan,
+                    web_inventory,
+                )
+                web_elf_record = _audit_aarch64_elf(
+                    web_component_dir / "build" / f"{plan.web_app_name}.elf"
+                )
+        except (OSError, RuntimeError, ValueError):
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"Vitis API operation failed: {exc}") from exc
+        finally:
+            vitis_api.dispose()
     finally:
-        vitis_api.dispose()
+        claim.unlink(missing_ok=True)
 
     _audit_snapshot(
         snapshot,
         xsa_sha256=plan.xsa_sha256,
         bitstream_sha256=plan.bitstream_sha256,
     )
+    if bsp_override_record is None:
+        raise RuntimeError("Vitis build produced no audited BSP library override")
+    lwip_verifier(bsp_override_record)
+    if built_lwip_record is None:
+        raise RuntimeError("Vitis build produced no audited lwip220 output")
+    if built_lwip_auditor(plan, bsp_override_record) != built_lwip_record:
+        raise RuntimeError("built lwip220 output changed before manifest creation")
+    if echo_elf_record is None:
+        raise RuntimeError("Vitis build produced no audited network echo ELF")
+    if echo_elf_auditor(plan) != echo_elf_record:
+        raise RuntimeError("network echo ELF changed before manifest creation")
     if plan.web_app_name is not None:
         _reaudit_staged_web_application(
             plan.workspace / plan.web_app_name,
@@ -720,6 +1410,13 @@ def execute_plan(
     manifest = plan.json_record()
     manifest["xsa_snapshot"] = str(snapshot)
     manifest["build_results"] = build_results
+    bsp_override_record = dict(bsp_override_record)
+    bsp_override_record["build_outputs"] = built_lwip_record
+    manifest["bsp_library_overrides"] = [bsp_override_record]
+    manifest["echo_application"] = {
+        "name": plan.app_name,
+        "elf": echo_elf_record,
+    }
     if plan.web_app_name is not None:
         manifest["web_application"]["staged_inventory"] = web_inventory
         manifest["web_application"]["elf"] = web_elf_record

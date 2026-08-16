@@ -1,4 +1,5 @@
 #ifndef QWEB_BOARD_APP_H
+
 #define QWEB_BOARD_APP_H
 
 #include <stdint.h>
