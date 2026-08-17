@@ -25,11 +25,14 @@ struct tcp_pcb {
     u8_t closed;
     u8_t aborted;
     u8_t listening;
+    u8_t prio;
 };
 
 #define IPADDR_TYPE_ANY 0u
 #define IP_ANY_TYPE ((const void *)0)
 #define TCP_WRITE_FLAG_COPY 1u
+#define TCP_PRIO_MIN 1u
+#define TCP_PRIO_NORMAL 64u
 
 struct tcp_pcb *tcp_new_ip_type(u8_t type);
 void tcp_arg(struct tcp_pcb *pcb, void *argument);
@@ -38,6 +41,7 @@ void tcp_sent(struct tcp_pcb *pcb, tcp_sent_fn callback);
 void tcp_err(struct tcp_pcb *pcb, tcp_err_fn callback);
 void tcp_accept(struct tcp_pcb *pcb, tcp_accept_fn callback);
 void tcp_poll(struct tcp_pcb *pcb, tcp_poll_fn callback, u8_t interval);
+void tcp_setprio(struct tcp_pcb *pcb, u8_t priority);
 u16_t test_tcp_sndbuf(struct tcp_pcb *pcb);
 #define tcp_sndbuf(pcb) test_tcp_sndbuf(pcb)
 void tcp_recved(struct tcp_pcb *pcb, u16_t length);

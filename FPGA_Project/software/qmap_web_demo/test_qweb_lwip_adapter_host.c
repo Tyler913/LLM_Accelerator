@@ -38,6 +38,14 @@ static err_t test_forced_output_error;
 static err_t test_forced_bind_error;
 static err_t test_forced_listen_error;
 static err_t test_forced_close_error;
+static unsigned test_close_calls;
+static struct tcp_pcb *test_last_close_pcb;
+static size_t test_close_tx_queued;
+static size_t test_close_tx_acked;
+static size_t test_close_tx_total;
+static qweb_lwip_connection_state_t test_close_connection_state;
+static u8_t test_close_priority;
+static int test_close_callbacks_detached;
 static uint32_t test_mmio[TEST_MMIO_WORDS];
 static qot_layer_qmap_bases_t test_layer_tables[QOT_MAX_LAYERS];
 static unsigned test_runner_pumps_after_start;
@@ -199,6 +207,7 @@ struct tcp_pcb *tcp_new_ip_type(u8_t type)
     TEST_CHECK(type == IPADDR_TYPE_ANY);
     memset(&test_listener_pcb, 0, sizeof(test_listener_pcb));
     test_listener_pcb.send_buffer = UINT16_MAX;
+    test_listener_pcb.prio = TCP_PRIO_NORMAL;
     return &test_listener_pcb;
 }
 
@@ -237,6 +246,12 @@ void tcp_poll(struct tcp_pcb *pcb, tcp_poll_fn callback, u8_t interval)
     TEST_CHECK(pcb != NULL);
     pcb->poll_callback = callback;
     pcb->poll_interval = interval;
+}
+
+void tcp_setprio(struct tcp_pcb *pcb, u8_t priority)
+{
+    TEST_CHECK(pcb != NULL);
+    pcb->prio = priority;
 }
 
 u16_t test_tcp_sndbuf(struct tcp_pcb *pcb)
@@ -282,6 +297,20 @@ void tcp_abort(struct tcp_pcb *pcb)
 err_t tcp_close(struct tcp_pcb *pcb)
 {
     TEST_CHECK(pcb != NULL);
+    ++test_close_calls;
+    test_last_close_pcb = pcb;
+    test_close_tx_queued = test_adapter.tx_queued;
+    test_close_tx_acked = test_adapter.tx_acked;
+    test_close_tx_total = test_adapter.tx_total;
+    test_close_connection_state = test_adapter.connection_state;
+    test_close_priority = pcb->prio;
+    test_close_callbacks_detached =
+        pcb->callback_argument == NULL &&
+        pcb->recv_callback == NULL &&
+        pcb->sent_callback == NULL &&
+        pcb->error_callback == NULL &&
+        pcb->poll_callback == NULL &&
+        pcb->poll_interval == 0u;
     if (test_forced_close_error != ERR_OK) {
         err_t error = test_forced_close_error;
         test_forced_close_error = ERR_OK;
@@ -401,6 +430,14 @@ static void test_reset_fakes(void)
     test_forced_bind_error = ERR_OK;
     test_forced_listen_error = ERR_OK;
     test_forced_close_error = ERR_OK;
+    test_close_calls = 0u;
+    test_last_close_pcb = NULL;
+    test_close_tx_queued = 0u;
+    test_close_tx_acked = 0u;
+    test_close_tx_total = 0u;
+    test_close_connection_state = QWEB_LWIP_CONNECTION_IDLE;
+    test_close_priority = 0u;
+    test_close_callbacks_detached = 0;
     test_runner_pumps_after_start = 0u;
     test_runner_done_mask = UINT32_C(0x0fffffff);
     TcpFastTmrFlag = 0;
@@ -433,19 +470,26 @@ static void test_setup_adapter(int with_assets)
     TEST_CHECK(test_listener_pcb.accept_callback != NULL);
 }
 
-static void test_accept_connection(u16_t send_buffer)
+static void test_accept_pcb(struct tcp_pcb *pcb, u16_t send_buffer)
 {
     err_t error;
 
-    memset(&test_connection_pcb, 0, sizeof(test_connection_pcb));
-    test_connection_pcb.send_buffer = send_buffer;
+    TEST_CHECK(pcb != NULL);
+    memset(pcb, 0, sizeof(*pcb));
+    pcb->send_buffer = send_buffer;
+    pcb->prio = TCP_PRIO_NORMAL;
     error = test_listener_pcb.accept_callback(
         test_listener_pcb.callback_argument,
-        &test_connection_pcb,
+        pcb,
         ERR_OK);
     TEST_CHECK(error == ERR_OK);
-    TEST_CHECK(test_adapter.connection == &test_connection_pcb);
-    TEST_CHECK(test_connection_pcb.recv_callback != NULL);
+    TEST_CHECK(test_adapter.connection == pcb);
+    TEST_CHECK(pcb->recv_callback != NULL);
+}
+
+static void test_accept_connection(u16_t send_buffer)
+{
+    test_accept_pcb(&test_connection_pcb, send_buffer);
 }
 
 static void test_send_bytes(const uint8_t *bytes, size_t length)
@@ -560,6 +604,188 @@ static void test_ack_until_closed(void)
     TEST_CHECK(guard < 100u);
     TEST_CHECK(test_adapter.connection == NULL);
     TEST_CHECK(test_connection_pcb.closed != 0u);
+    TEST_CHECK(test_connection_pcb.callback_argument == NULL);
+    TEST_CHECK(test_connection_pcb.recv_callback == NULL);
+    TEST_CHECK(test_connection_pcb.sent_callback == NULL);
+    TEST_CHECK(test_connection_pcb.error_callback == NULL);
+    TEST_CHECK(test_connection_pcb.poll_callback == NULL);
+    TEST_CHECK(test_connection_pcb.poll_interval == 0u);
+    TEST_CHECK(test_connection_pcb.prio == TCP_PRIO_MIN);
+}
+
+static void test_consecutive_connections_detach_callbacks(void)
+{
+    size_t request_length;
+    unsigned iteration;
+
+    test_reset_fakes();
+    test_setup_adapter(0);
+    request_length = test_build_request("GET",
+                                        "/api/health",
+                                        "board.local:8080",
+                                        NULL,
+                                        0u,
+                                        0);
+
+    for (iteration = 0u; iteration < 128u; ++iteration) {
+        test_accept_connection(UINT16_MAX);
+        test_send_bytes(test_request_bytes, request_length);
+        TEST_CHECK(test_route_calls == iteration + 1u);
+        TEST_CHECK(test_bytes_contain(test_tx_bytes,
+                                      test_tx_length,
+                                      "HTTP/1.1 200 OK\r\n"));
+        test_ack_until_closed();
+    }
+}
+
+static void test_zero_ack_close_releases_connection_slot(void)
+{
+    size_t request_length;
+
+    test_reset_fakes();
+    test_setup_adapter(0);
+    test_accept_connection(UINT16_MAX);
+    request_length = test_build_request("GET",
+                                        "/api/health",
+                                        "board.local:8080",
+                                        NULL,
+                                        0u,
+                                        0);
+    test_send_bytes(test_request_bytes, request_length);
+    TEST_CHECK(test_adapter.connection == NULL);
+    TEST_CHECK(test_close_calls == 1u);
+    TEST_CHECK(test_last_close_pcb == &test_connection_pcb);
+    TEST_CHECK(test_connection_pcb.closed != 0u);
+    TEST_CHECK(test_close_tx_total != 0u);
+    TEST_CHECK(test_close_tx_queued == test_close_tx_total);
+    TEST_CHECK(test_close_tx_acked == 0u);
+    TEST_CHECK(test_close_connection_state ==
+               QWEB_LWIP_CONNECTION_CLOSING);
+    TEST_CHECK(test_close_priority == TCP_PRIO_MIN);
+    TEST_CHECK(test_close_callbacks_detached != 0);
+
+    test_accept_pcb(&test_second_pcb, UINT16_MAX);
+    TEST_CHECK(test_adapter.connection == &test_second_pcb);
+    TEST_CHECK(test_second_pcb.prio == TCP_PRIO_NORMAL);
+    TEST_CHECK(test_second_pcb.recv_callback != NULL);
+}
+
+static void test_partial_queue_closes_after_final_write(void)
+{
+    size_t request_length;
+    unsigned guard = 0u;
+
+    test_reset_fakes();
+    test_setup_adapter(0);
+    test_accept_connection(23u);
+    request_length = test_build_request("GET",
+                                        "/api/health",
+                                        "board.local:8080",
+                                        NULL,
+                                        0u,
+                                        0);
+    test_send_bytes(test_request_bytes, request_length);
+    TEST_CHECK(test_adapter.connection == &test_connection_pcb);
+    TEST_CHECK(test_adapter.connection_state == QWEB_LWIP_CONNECTION_SENDING);
+    TEST_CHECK(test_adapter.tx_queued == 23u);
+    TEST_CHECK(test_adapter.tx_queued < test_adapter.tx_total);
+    TEST_CHECK(test_adapter.tx_acked == 0u);
+    TEST_CHECK(test_close_calls == 0u);
+
+    while (test_adapter.connection != NULL && guard < 100u) {
+        size_t outstanding = test_adapter.tx_queued - test_adapter.tx_acked;
+        size_t queued_before = test_adapter.tx_queued;
+        u16_t acknowledged;
+        tcp_sent_fn sent_callback = test_connection_pcb.sent_callback;
+        void *callback_argument = test_connection_pcb.callback_argument;
+
+        ++guard;
+        TEST_CHECK(outstanding != 0u);
+        TEST_CHECK(outstanding <= (size_t)UINT16_MAX);
+        TEST_CHECK(sent_callback != NULL);
+        acknowledged = (u16_t)outstanding;
+        test_connection_pcb.send_buffer = (u16_t)(
+            UINT16_MAX - test_connection_pcb.send_buffer < acknowledged
+                ? UINT16_MAX
+                : test_connection_pcb.send_buffer + acknowledged);
+        TEST_CHECK(sent_callback(callback_argument,
+                                 &test_connection_pcb,
+                                 acknowledged) == ERR_OK);
+        if (test_adapter.connection != NULL) {
+            TEST_CHECK(test_adapter.tx_queued > queued_before);
+            TEST_CHECK(test_adapter.tx_queued < test_adapter.tx_total);
+            TEST_CHECK(test_close_calls == 0u);
+        }
+    }
+    TEST_CHECK(guard < 100u);
+    TEST_CHECK(test_adapter.connection == NULL);
+    TEST_CHECK(test_close_calls == 1u);
+    TEST_CHECK(test_last_close_pcb == &test_connection_pcb);
+    TEST_CHECK(test_close_tx_queued == test_close_tx_total);
+    TEST_CHECK(test_close_tx_acked < test_close_tx_total);
+    TEST_CHECK(test_close_connection_state ==
+               QWEB_LWIP_CONNECTION_CLOSING);
+    TEST_CHECK(test_close_priority == TCP_PRIO_MIN);
+    TEST_CHECK(test_close_callbacks_detached != 0);
+    TEST_CHECK(test_connection_pcb.closed != 0u);
+}
+
+static void test_close_err_mem_restores_connection_contract(void)
+{
+    const u8_t original_priority = 37u;
+    size_t request_length;
+
+    test_reset_fakes();
+    test_setup_adapter(0);
+    test_accept_connection(UINT16_MAX);
+    test_connection_pcb.prio = original_priority;
+    test_forced_close_error = ERR_MEM;
+    request_length = test_build_request("GET",
+                                        "/api/health",
+                                        "board.local:8080",
+                                        NULL,
+                                        0u,
+                                        0);
+    test_send_bytes(test_request_bytes, request_length);
+
+    TEST_CHECK(test_adapter.connection == &test_connection_pcb);
+    TEST_CHECK(test_adapter.connection_state == QWEB_LWIP_CONNECTION_SENDING);
+    TEST_CHECK(test_adapter.tx_queued == test_adapter.tx_total);
+    TEST_CHECK(test_adapter.tx_acked == 0u);
+    TEST_CHECK(test_close_calls == 1u);
+    TEST_CHECK(test_last_close_pcb == &test_connection_pcb);
+    TEST_CHECK(test_close_tx_queued == test_close_tx_total);
+    TEST_CHECK(test_close_tx_acked == 0u);
+    TEST_CHECK(test_close_connection_state ==
+               QWEB_LWIP_CONNECTION_CLOSING);
+    TEST_CHECK(test_close_priority == TCP_PRIO_MIN);
+    TEST_CHECK(test_close_callbacks_detached != 0);
+    TEST_CHECK(test_connection_pcb.closed == 0u);
+    TEST_CHECK(test_connection_pcb.callback_argument == &test_adapter);
+    TEST_CHECK(test_connection_pcb.recv_callback != NULL);
+    TEST_CHECK(test_connection_pcb.sent_callback != NULL);
+    TEST_CHECK(test_connection_pcb.error_callback != NULL);
+    TEST_CHECK(test_connection_pcb.poll_callback != NULL);
+    TEST_CHECK(test_connection_pcb.poll_interval == 1u);
+    TEST_CHECK(test_connection_pcb.prio == original_priority);
+
+    TEST_CHECK(qweb_lwip_adapter_service(&test_adapter) == QWEB_LWIP_OK);
+    TEST_CHECK(test_adapter.connection == NULL);
+    TEST_CHECK(test_close_calls == 2u);
+    TEST_CHECK(test_last_close_pcb == &test_connection_pcb);
+    TEST_CHECK(test_close_tx_queued == test_close_tx_total);
+    TEST_CHECK(test_close_tx_acked == 0u);
+    TEST_CHECK(test_close_connection_state ==
+               QWEB_LWIP_CONNECTION_CLOSING);
+    TEST_CHECK(test_close_priority == TCP_PRIO_MIN);
+    TEST_CHECK(test_close_callbacks_detached != 0);
+    TEST_CHECK(test_connection_pcb.closed != 0u);
+    TEST_CHECK(test_connection_pcb.callback_argument == NULL);
+    TEST_CHECK(test_connection_pcb.recv_callback == NULL);
+    TEST_CHECK(test_connection_pcb.sent_callback == NULL);
+    TEST_CHECK(test_connection_pcb.error_callback == NULL);
+    TEST_CHECK(test_connection_pcb.poll_callback == NULL);
+    TEST_CHECK(test_connection_pcb.prio == TCP_PRIO_MIN);
 }
 
 static void test_config_and_start_failures(void)
@@ -880,7 +1106,6 @@ static void test_error_and_retry_paths(void)
     TEST_CHECK(test_tx_length == 0u);
     TEST_CHECK(qweb_lwip_adapter_service(&test_adapter) == QWEB_LWIP_OK);
     TEST_CHECK(test_tx_length != 0u);
-    test_forced_close_error = ERR_MEM;
     test_ack_until_closed();
 
     test_reset_fakes();
@@ -1015,6 +1240,10 @@ static void test_xilinx_pump_and_full28_runner(void)
 int main(void)
 {
     test_config_and_start_failures();
+    test_consecutive_connections_detach_callbacks();
+    test_zero_ack_close_releases_connection_slot();
+    test_partial_queue_closes_after_final_write();
+    test_close_err_mem_restores_connection_contract();
     test_fragmented_submit_is_async();
     test_static_asset_hit_miss_and_method();
     test_host_pipeline_timeout_and_close_paths();

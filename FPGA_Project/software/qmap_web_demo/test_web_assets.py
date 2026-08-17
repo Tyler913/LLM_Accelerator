@@ -172,6 +172,7 @@ class UiContractTests(unittest.TestCase):
         html = html_bytes.decode("utf-8")
         inventory = _HtmlInventory()
         inventory.feed(html)
+        self.assertIn('<link rel="icon" href="data:,">', html)
         self.assertEqual(inventory.stylesheets, ["/styles.css"])
         self.assertEqual(inventory.scripts, ["/app.js"])
         self.assertEqual(sorted(inventory.input_modes), ["prompt", "tokens"])

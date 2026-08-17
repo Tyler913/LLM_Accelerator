@@ -653,6 +653,12 @@ class NetworkWorkspaceTests(unittest.TestCase):
                 },
                 {
                     "option": "lib",
+                    "param": "lwip220_memp_n_tcp_pcb",
+                    "value": "256",
+                    "lib_name": "lwip220",
+                },
+                {
+                    "option": "lib",
                     "param": "lwip220_pbuf_pool_size",
                     "value": "2048",
                     "lib_name": "lwip220",
@@ -669,7 +675,7 @@ class NetworkWorkspaceTests(unittest.TestCase):
         self.assertEqual(fake.client.app_args["domain"], "standalone_psu_cortexa53_0")
         self.assertEqual(manifest["build_results"]["platform"], 0)
         self.assertEqual(manifest["bsp_libraries"], ["lwip220"])
-        self.assertEqual(len(manifest["bsp_config"]), 6)
+        self.assertEqual(len(manifest["bsp_config"]), 7)
         self.assertEqual(
             manifest["bsp_library_overrides"][0]["motorcomm_phy_id"],
             "0x0000011A",

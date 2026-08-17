@@ -1,6 +1,6 @@
 # PS Ethernet and Bare-Metal Web Bring-Up
 
-Last updated: 2026-08-12
+Last updated: 2026-08-17
 
 This runbook stages the user-facing path without changing the PL model math:
 
@@ -9,9 +9,10 @@ a_net_echo -> ping/TCP echo -> a_qweb health page -> token-id generation API
            -> tokenizer/detokenizer -> text prompt and continuation UI
 ```
 
-The first target is a standalone A53/lwIP application. Linux is intentionally
-deferred: it would add PetaLinux, device-tree, boot-image, driver, cache, and
-userspace integration before the network-to-accelerator boundary is proven.
+The accepted first target is a standalone A53/lwIP application. Linux remains
+optional productization scope because PetaLinux, device-tree, boot-image,
+driver, cache, and userspace integration are not required to re-prove the
+already accepted network-to-accelerator boundary.
 
 ## Confirmed Hardware Route
 
@@ -37,14 +38,19 @@ Current checkpoint:
 - The network-XSA audit passes GEM3 RGMII MIO 64..75, MDIO MIO 76..77, TTC0,
   the 125 MHz IOPLL source, embedded-bitstream lineage, and all preserved
   QMAP/status/PL-DDR address checks.
-- The clean `F:\vwc` Vitis workspace builds the platform, patched-YT8521
-  `a_net_echo`, and `a_qweb`; its provenance manifest records build result zero
-  for all three components.
-- The patched echo image physically detects Motorcomm YT8521 at PHY address 7
-  with ID `0x0000011A`, but auto-negotiation times out with the link and
-  AN-complete bits clear. Both Windows wired adapters were `Disconnected` at
-  that point. Gate 1 link/IP/ping/TCP acceptance and all physical `a_qweb`
-  acceptance therefore remain open.
+- The final clean `F:\vwk` Vitis workspace builds the platform, patched-YT8521
+  `a_net_echo`, and `a_qweb`; manifest SHA256
+  `33CA1A825AFF72DD7A59C9938C0B0E838062C5C6E18EE1826432341E7A85E401`
+  records build result zero for all three components.
+- Gate 1 is closed on the physical board: YT8521 address 7/ID `0x0000011A`,
+  1000-Mb/s full duplex, board `192.168.1.10`, ping `10/10`, and an exact
+  75-byte port-7 echo. Its formal echo oracle is bound to the earlier `F:\vwc`
+  build; the final `F:\vwk` QWEB startup independently re-proved the same PHY,
+  link, and address.
+- Gate 2 is closed by the `F:\vwk` `final_v4` cold launch, two immediate strict
+  HTTP jobs, and two live-browser jobs. Every accepted generation returns IDs
+  `264,26291`, scores `1296911292,1225544557`, `MAX_NEW`, and exact 14-byte
+  text ` a fascinating`; the final page remains `Board ready`.
 
 Board-vendor references:
 
@@ -111,9 +117,9 @@ In the existing Vivado GUI:
 Do not proceed to Vitis if validation fails or the exported HWH still reports
 GEM3/TTC0 disabled.
 
-## Gate 1: `a_net_echo` - Physical Link Pending
+## Gate 1: `a_net_echo` - PASS
 
-The audited reference build is the short-path `F:\vwc` workspace with
+The current audited reference build is the short-path `F:\vwk` workspace with
 components `p_net`, `a_net_echo`, and `a_qweb`; it does not mutate the proven
 `F:\vwi` workspace. Use a different new short path for any reproduction because
 the generator correctly rejects an existing output directory.
@@ -160,31 +166,87 @@ the generator correctly rejects an existing output directory.
 
 Acceptance for Gate 1:
 
-- Stable 1000/100/10 Mb/s link is reported.
-- Repeated ping succeeds without intermittent loss.
-- TCP port 7 accepts a connection and echoes payload bytes.
+- Stable 1000 Mb/s full-duplex link is reported. The current SDT clock path has
+  not independently accepted 100/10 Mb/s operation.
+- Exactly ten address-bound ping replies are observed.
+- TCP port 7 accepts a unique nonempty payload and returns the exact bytes.
 - UART remains usable for diagnostics.
 
-Current Gate 1 evidence is a PHY-detection PASS but a link failure. The audited
-echo ELF SHA256 is
-`93192F0D37741604036F1B502CC7BAE257EE8E8151103F3F09415C592FBA5C67`.
-Its physical UART capture reports exact YT8521 address 7 and ID `0x0000011A`,
-then an auto-negotiation timeout with `bmsr_latch=0x7949` and
-`bmsr_now=0x7949`; link and AN-complete are clear. At the same time both PC
-wired adapters were `Disconnected`. Establish an electrically connected host
-or router path before changing PHY software again. The AMD template's early
-banner mentions port 6001, but its actual `tcp_bind()` and this acceptance gate
-use port 7. Do not start physical Web acceptance on an unstable link.
+The accepted Gate-1 report is
+`Temp/network_echo_gate1_20260817_direct_v2/acceptance.json`, SHA256
+`B7DFF37B2328B97242982A852A45EAC045C3AE3F5D90380F41F3969B040D9212`.
+It records exact YT8521 address 7 and ID `0x0000011A`, 1000-Mb/s full duplex,
+board `192.168.1.10`, ping `10/10`, and an exact 75-byte TCP echo whose TX/RX
+SHA256 is
+`E59A0DC34F0FF69AABDD4473C6139C771EEFDE0A31109715789149D370C444B3`.
+This report is hash-bound to the earlier `F:\vwc` echo image, so it is the
+accepted physical-port oracle rather than a claim that `F:\vwk` echo itself was
+run. The `F:\vwk` `final_v4` QWEB UART later independently confirmed the same
+PHY identity, resolved link, and IP before physical HTTP acceptance. The AMD
+template's early banner mentions port 6001, but its actual `tcp_bind()` and this
+acceptance gate use port 7.
 
-## Gate 2: `a_qweb` - Build PASS, Physical Acceptance Pending
+### Gate 1 executable acceptance
 
-The durable application is assembled, host-tested, and built under
-`FPGA_Project/software/qmap_web_demo/`, but do not run it on the board until
-Gate 1 proves the exact PHY/link/platform lineage. It keeps lwIP in RAW mode
+Connect the `PS_ETH` cable before launching. The current BSP contains a link
+recovery attempt, but its interrupt-context reset/wait path and DHCP address
+refresh have not been accepted as stable hot-plug behavior. Close every other
+program that owns the CH340 UART and inspect the physical adapters when using a
+direct PC cable:
+
+```powershell
+Get-NetAdapter -Physical |
+  Select-Object Name, InterfaceDescription, Status, LinkSpeed
+```
+
+The preferred flow is now one command. Its output directory must not exist. It
+opens and clears UART before it starts PowerShell/XSDB, pins the formal
+workspace, launch scripts, network bit/XSA/FSBL/echo ELF, and Vitis 2025.1
+execution files, then requires the ordered YT8521/link/IP/READY transcript,
+ping `10/10`, and a byte-exact port-7 response:
+
+```powershell
+cd F:\LLM_Accelerator
+conda run -n llm_fpga python -B `
+  .\FPGA_Project\software\qmap_web_demo\run_network_echo_acceptance.py `
+  --port COM230 `
+  --workspace F:\vwk `
+  --output-dir `
+    F:\LLM_Accelerator\Temp\network_echo_gate1_rerun_01
+```
+
+Every attempt atomically writes `acceptance.json`, even for a failed serial,
+launcher, link, ping, or TCP step. The same new directory also retains
+`uart_raw.bin`, separate launcher logs, ping output, and exact TX/RX payloads.
+Do not call Gate 1 PASS from a launcher message alone; require the final
+`PASS Ethernet Gate 1` line and `passed=true` in that report.
+
+With a DHCP router/switch, the tool uses the address printed by UART. For a
+direct cable without DHCP, the image falls back to board
+`192.168.1.10/24`; temporarily give the actual `Up` PC adapter an unused
+address such as `192.168.1.20/24` with no gateway. The tool deliberately does
+not change host network configuration. Do not configure a disconnected
+adapter or assume its interface name.
+
+The older two-terminal path remains useful only for diagnosis. Start
+`capture_network_echo_uart.py` before `run_network_echo_board.ps1`, then inspect
+the UART manually. That capture stops on the first PHY failure and does not by
+itself prove ping or exact TCP echo. The launch inputs can also be audited
+without XSDB or the board:
+
+```powershell
+& .\FPGA_Project\software\qmap_web_demo\run_network_echo_board.ps1 `
+  -Workspace F:\vwk -AuditOnly
+```
+
+## Gate 2: `a_qweb` - PASS
+
+The durable application is assembled, host-tested, built, and physically
+accepted under `FPGA_Project/software/qmap_web_demo/`. It keeps lwIP in RAW mode
 and uses an application-owned TCP adapter; the installed `lwip220_v1_2`
 library does not link the optional application HTTPD implementation.
 
-The clean reference Web build already exists in `F:\vwc`. To reproduce it,
+The clean reference Web build already exists in `F:\vwk`. To reproduce it,
 create a different fresh workspace from the same audited XSA and explicitly
 request the Web build:
 
@@ -204,13 +266,123 @@ The builder creates `p_net`, keeps `a_net_echo` as an independent reference,
 then stages the exact audited Web/session/tokenizer sources into `a_qweb`, sets
 64 KiB stack and heap defaults, requires successful platform/application build
 codes, audits the AArch64 ELF, and writes a provenance manifest. The real
-`F:\vwc` manifest records platform, echo, and Web build result zero. Its
-5,002,800-byte AArch64 `a_qweb.elf` has SHA256
-`3B83026EC7647A79D6DF2D9FE584A2555157E5D87A212F7ADB478EBD036E8650`
-and contains the required board, HTTP, session, and tokenizer symbols. This is
-a build PASS only; no physical HTTP request has reached this ELF yet.
+`F:\vwk` manifest records platform, echo, and Web build result zero. Its
+5,003,296-byte AArch64 `a_qweb.elf` has SHA256
+`38A772F093CE3996177640863888B6700F1AC26F7BCB82E5F2159C0EF46F89DA`
+and contains the required board, HTTP, session, and tokenizer symbols. The BSP
+uses `MEMP_NUM_TCP_PCB=256`; all copied response bytes may be handed to lwIP and
+gracefully closed without holding the single application slot for the final
+ACK. The UI uses a 3000-ms generation poll and one-miss quiet-health grace.
+A 128-connection diagnostic with distinct client source ports passed. A test
+that deliberately rebinds the identical source port immediately after the
+server's active close can still wait on lwIP TIME_WAIT; this did not occur in
+the accepted browser flow. Persistent HTTP/keep-alive is optional future work
+if a product must sustain aggressive connection churn.
 
-Bring it up in this order:
+Before any physical run, the complete current lineage can be re-audited without
+touching XSDB or the board:
+
+```powershell
+& .\FPGA_Project\software\qmap_web_demo\run_qweb_board.ps1 `
+  -Workspace F:\vwk `
+  -RuntimeWorkbench F:\qot_boardtest_prompt_text_v13_20260812 `
+  -AuditOnly
+```
+
+The accepted audit prints the pinned network manifest, bitstream, XSA, FSBL,
+Web-ELF, and runtime-manifest hashes plus `61 segments / 394547200 bytes`.
+
+### Gate 2 executable acceptance
+
+The following accepted sequence is retained for a fresh reproduction. Start the
+UART capture first; the output directory must not exist:
+
+```powershell
+cd F:\LLM_Accelerator
+$qwebEvidence = 'F:\LLM_Accelerator\Temp\qweb_board_rerun_01'
+conda run -n llm_fpga python `
+  .\FPGA_Project\software\qmap_web_demo\capture_qweb_uart.py `
+  --port COM230 `
+  --output-dir $qwebEvidence `
+  --launch-json "$qwebEvidence\launch.json" `
+  --timeout 3600
+```
+
+In terminal B, reprogram the audited network image, run FSBL, load all 61
+runtime segments, check all 281 QMAP headers, and start `a_qweb`:
+
+```powershell
+cd F:\LLM_Accelerator
+$qwebEvidence = 'F:\LLM_Accelerator\Temp\qweb_board_rerun_01'
+$deadline = (Get-Date).AddSeconds(10)
+while (-not (Test-Path -LiteralPath "$qwebEvidence\uart_raw.bin")) {
+  if ((Get-Date) -ge $deadline) { throw 'UART capture did not create uart_raw.bin' }
+  Start-Sleep -Milliseconds 200
+}
+& .\FPGA_Project\software\qmap_web_demo\run_qweb_board.ps1 `
+  -Workspace F:\vwk `
+  -RuntimeWorkbench F:\qot_boardtest_prompt_text_v13_20260812 `
+  -EvidenceDirectory $qwebEvidence
+```
+
+After terminal A reports `PASS QWEB UART startup`, run the strict HTTP oracle
+twice against the same live application. This proves an immediate repeated job
+does not retain stale position, KV, token, score, or output state:
+
+```powershell
+conda run -n llm_fpga python `
+  .\FPGA_Project\software\qmap_web_demo\run_qweb_http_acceptance.py `
+  --startup-json "$qwebEvidence\startup.json" `
+  --output-dir "$qwebEvidence\http_1"
+
+conda run -n llm_fpga python `
+  .\FPGA_Project\software\qmap_web_demo\run_qweb_http_acceptance.py `
+  --startup-json "$qwebEvidence\startup.json" `
+  --output-dir "$qwebEvidence\http_2"
+```
+
+The launcher must first preserve `launch.claim.json`, a hash-bound `xsdb.log`
+with all ordered PASS markers, and a passing immutable `launch.json`; startup
+must bind its UUID, full pinned XSDB execution chain, isolated startup
+environment, wrapper/Tcl hashes, UART READY arrival time, and artifact hashes
+before HTTP begins. Run this on a controlled one-board bench: JTAG, COM230, and
+the connected PS Ethernet cable must belong to the same board because this
+image does not yet publish a hardware-unique nonce.
+Each HTTP run
+must preserve `acceptance.json` and `output.bin`, observe an actual `running`
+HTTP status during PL inference, and finish with exact
+IDs `264,26291`, Q26 scores `1296911292,1225544557`, `MAX_NEW`, and raw UTF-8
+` a fascinating`. The expected `output.bin` SHA256 is
+`8E2B14930832293C41E4EFD76A667178A221082C8E254CE0FC01CF582CD8B55A`.
+
+The accepted run is
+`Temp/qweb_board_acceptance_20260817_final_v4/`. Its launch UUID is
+`aca9c471-93f1-414f-8e04-b1a431bf39ea`; `launch.json` SHA256 is
+`FC7A183366765BA16AA9B0B6B86C3D4A086C3DCDFD92E7EA9DD775FEB943CAD1`
+and `startup.json` SHA256 is
+`DB8CCD18E2E9B1C72AB2B40E2834C6FF78A159814DC0112C6E5EB409A5049D1D`.
+The cold launch loaded 61/61 segments (394,547,200 bytes), checked 281/281 QMAP
+headers, observed DDR status `0x5`, tokenizer metadata, YT8521 1000-full, and
+`QWEB READY http://192.168.1.10:80/`. The two no-cooldown strict reports are
+`http_pair_1/acceptance.json` SHA256
+`7CE1716AFCD28221E38F9485804F67C94211D6B9092F084D5FEE6B0FACA5B5A1`
+and `http_pair_2/acceptance.json` SHA256
+`E8ACDCCE6AFFF467A93404F3B8F724B6A2D8E59470319C7C298D0A7F65DEECDB`.
+Both observed an actual `running` response and finished with the exact values
+above. Live Edge was observed to complete Jobs 3 and 4. The retained
+`browser_final.png` independently proves Job 4 `Board ready / done / MAX_NEW`
+and has SHA256
+`D22D9D153B52940220143A88A5029868C6BC998573386F5CCDFE8C9AF711D9FC`,
+while a live console check returned zero messages.
+
+Open the exact live GUI URL from the UART-bound report for the final demo:
+
+```powershell
+$startup = Get-Content -Raw "$qwebEvidence\startup.json" | ConvertFrom-Json
+Start-Process $startup.network.url
+```
+
+For a fresh reproduction, exercise it in this order:
 
 1. Run `a_qweb`, open the exact `QWEB READY http://<actual-ip>:80/` URL printed
    on UART, and verify the generated static page plus `GET /api/health` without
@@ -237,30 +409,33 @@ HTTP 202 with a job ID. The main loop advances at most one session step, while
 the injected board runner services `xemacif_input`, adapter deadlines/TX, and
 TTC fast/slow timer flags at bounded intervals inside every long single-token
 PL poll. The job rejects a null runner, so the non-pumping default loop cannot
-be selected accidentally. These properties pass host mocks but still require
+be selected accidentally. These properties pass host mocks and the final-v4
 physical responsiveness checks during full28 execution.
 
 Keep request/response buffers fixed and bounded. Reject oversized input before
 tokenization, allow only one active job, and preserve UART logging for every
 PL error/status transition.
 
-Acceptance for Gate 2:
+Accepted Gate-2 observations and retained defensive gates:
 
-- The browser page and `/api/health` remain responsive during a PL run.
-- The token-id request launches the same validated PL path and returns the
-  expected known smoke outputs before arbitrary text is attempted.
-- Repeated requests do not retain stale status, token, score, position, or KV
-  cache state.
-- An invalid request or PL error produces a bounded HTTP error and a useful
-  UART diagnostic instead of hanging the network stack.
+- The page and idle/final `/api/health` requests succeed; job-status requests
+  return `running` throughout each long PL inference, proving that the network
+  pump remains active during computation.
+- Two strict text-prompt jobs and two live-browser text-prompt jobs launch the
+  validated PL path and return the exact expected continuation.
+- Immediate repeated requests do not retain stale status, token, score,
+  position, output, or KV-cache state.
+- Invalid input and injected PL-error behavior remain bounded by the host C and
+  Python suites; those fault cases were not separately injected into the
+  accepted `final_v4` physical run.
 
 ## Product Boundary After Gate 2
 
-The UART CLI and PC Web Serial path already close the physical arbitrary-prompt
-PS-to-PL-to-PS boundary for the JTAG-loaded first version. Passing `a_qweb` with
-token IDs will prove Ethernet-to-PS-to-PL-to-PS transport, and a repeated exact
-text request plus bounded error recovery will close the preferred board-hosted
-Web interface. Gate 1 link/ping/TCP and Gate 2 physical HTTP acceptance remain
-open. A boot image, persistent storage, and autonomous runtime/weight loading
-are a separate power-on productization boundary rather than part of the
-existing bench-demo PASS.
+The UART CLI, PC Web Serial path, and preferred board-hosted Web UI now close
+the physical arbitrary-prompt PS-to-PL-to-PS boundary for the JTAG-loaded first
+version. Two immediate strict HTTP runs plus two live-browser runs prove the
+exact PS tokenize -> PL full28 -> PS detokenize -> Web output chain. The
+requested bench-demo project is therefore complete. A boot image, SD/QSPI
+storage, autonomous runtime/weight loading, production link/DHCP recovery,
+persistent or multi-client HTTP, and performance tuning are separate optional
+power-on productization scope.

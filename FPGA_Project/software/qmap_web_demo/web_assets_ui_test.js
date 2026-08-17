@@ -60,4 +60,10 @@ assert.equal(
 assert.equal(ui.errorMessage({ error: { code: "job_busy" } }, "fallback"), "job_busy");
 assert.equal(ui.errorMessage(null, "fallback"), "fallback");
 
+assert.equal(ui.healthFailureAction(true, true, 0, false, false), "retry");
+assert.equal(ui.healthFailureAction(true, true, 1, false, false), "offline");
+assert.equal(ui.healthFailureAction(false, true, 0, false, false), "offline");
+assert.equal(ui.healthFailureAction(true, true, 0, true, false), "offline");
+assert.equal(ui.healthFailureAction(true, true, 0, false, true), "stale");
+
 console.log("PASS Web UI pure logic tests");

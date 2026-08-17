@@ -102,6 +102,29 @@ static void qweb_lwip_clear_connection_storage(
     adapter->tx_total = 0u;
 }
 
+static void qweb_lwip_detach_connection_callbacks(struct tcp_pcb *pcb)
+{
+    if (pcb == NULL) return;
+    tcp_arg(pcb, NULL);
+    tcp_recv(pcb, NULL);
+    tcp_sent(pcb, NULL);
+    tcp_err(pcb, NULL);
+    tcp_poll(pcb, NULL, 0u);
+}
+
+static void qweb_lwip_attach_connection_callbacks(
+    qweb_lwip_adapter_t *adapter,
+    struct tcp_pcb *pcb)
+{
+    tcp_arg(pcb, adapter);
+    tcp_recv(pcb, qweb_lwip_recv_callback);
+    tcp_sent(pcb, qweb_lwip_sent_callback);
+    tcp_err(pcb, qweb_lwip_error_callback);
+    tcp_poll(pcb,
+             qweb_lwip_poll_callback,
+             adapter->tcp_poll_interval);
+}
+
 static void qweb_lwip_abort_connection(qweb_lwip_adapter_t *adapter)
 {
     struct tcp_pcb *pcb = adapter->connection;
@@ -110,30 +133,53 @@ static void qweb_lwip_abort_connection(qweb_lwip_adapter_t *adapter)
         qweb_lwip_clear_connection_storage(adapter);
         return;
     }
-    tcp_arg(pcb, NULL);
-    tcp_recv(pcb, NULL);
-    tcp_sent(pcb, NULL);
-    tcp_err(pcb, NULL);
-    tcp_poll(pcb, NULL, 0u);
+    qweb_lwip_detach_connection_callbacks(pcb);
     qweb_lwip_clear_connection_storage(adapter);
     tcp_abort(pcb);
 }
 
 static int qweb_lwip_try_close(qweb_lwip_adapter_t *adapter)
 {
+    struct tcp_pcb *pcb;
+    qweb_lwip_connection_state_t previous_state;
+    u8_t previous_priority;
     err_t error;
 
     if (adapter->connection == NULL) {
         qweb_lwip_clear_connection_storage(adapter);
         return QWEB_LWIP_OK;
     }
+    pcb = adapter->connection;
+    previous_state = adapter->connection_state;
+    previous_priority = pcb->prio;
     adapter->connection_state = QWEB_LWIP_CONNECTION_CLOSING;
-    error = tcp_close(adapter->connection);
+    /*
+     * The complete response has been copied into lwIP with
+     * TCP_WRITE_FLAG_COPY, so this PCB is retired from the application's point
+     * of view even if some bytes still await acknowledgment.  Incoming
+     * connections use NORMAL priority.  Marking a retired FIN/close-pending
+     * PCB MIN lets lwIP's tcp_alloc() reclaim it under pool pressure instead
+     * of silently dropping a new SYN when every PCB is waiting for the close
+     * handshake to retire.
+     */
+    tcp_setprio(pcb, TCP_PRIO_MIN);
+    /*
+     * tcp_close() can leave the PCB alive while FIN processing completes.
+     * Do not let a callback from that retired PCB mutate a subsequently
+     * accepted connection through this shared adapter object.
+     */
+    qweb_lwip_detach_connection_callbacks(pcb);
+    error = tcp_close(pcb);
     if (error == ERR_OK) {
         qweb_lwip_clear_connection_storage(adapter);
         return QWEB_LWIP_OK;
     }
-    if (error == ERR_MEM) return QWEB_LWIP_OK;
+    if (error == ERR_MEM) {
+        qweb_lwip_attach_connection_callbacks(adapter, pcb);
+        tcp_setprio(pcb, previous_priority);
+        adapter->connection_state = previous_state;
+        return QWEB_LWIP_OK;
+    }
     qweb_lwip_abort_connection(adapter);
     return QWEB_LWIP_ERR_LWIP;
 }
@@ -466,7 +512,13 @@ static int qweb_lwip_flush(qweb_lwip_adapter_t *adapter)
     if (output_error != ERR_OK && output_error != ERR_MEM) {
         return QWEB_LWIP_ERR_LWIP;
     }
-    if (adapter->tx_total == 0u || adapter->tx_acked == adapter->tx_total) {
+    /*
+     * Every queued byte was copied by tcp_write().  Close now so lwIP owns the
+     * remaining retransmit/FIN lifecycle and the single application slot is
+     * immediately available to a subsequent HTTP connection.  Waiting for
+     * the final ACK here can otherwise pin the slot until its timeout.
+     */
+    if (adapter->tx_queued == adapter->tx_total) {
         return qweb_lwip_try_close(adapter);
     }
     return QWEB_LWIP_OK;
@@ -579,13 +631,7 @@ static err_t qweb_lwip_accept_callback(
     adapter->connection_state = QWEB_LWIP_CONNECTION_RECEIVING;
     adapter->accepted_at_ms = now;
     adapter->request_started_at_ms = now;
-    tcp_arg(new_pcb, adapter);
-    tcp_recv(new_pcb, qweb_lwip_recv_callback);
-    tcp_sent(new_pcb, qweb_lwip_sent_callback);
-    tcp_err(new_pcb, qweb_lwip_error_callback);
-    tcp_poll(new_pcb,
-             qweb_lwip_poll_callback,
-             adapter->tcp_poll_interval);
+    qweb_lwip_attach_connection_callbacks(adapter, new_pcb);
     return ERR_OK;
 }
 

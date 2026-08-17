@@ -5,16 +5,174 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import run_qweb_http_acceptance as acceptance
 
 
+HERE = Path(__file__).resolve().parent
+WRAPPER = HERE / "run_qweb_board.ps1"
+TCL_LAUNCHER = HERE / "launch_qweb_board.tcl"
+VITIS_XSDB = Path(
+    r"D:\Applications\Vivado_2025.1.1\2025.1.1\Vitis\bin\xsdb.bat"
+)
+VITIS_LOADER = VITIS_XSDB.with_name("loader.bat")
+VITIS_SETUP_ENV = VITIS_XSDB.with_name("setupEnv.bat")
+VITIS_RDI_ARGS = VITIS_XSDB.with_name("rdiArgs.bat")
+VITIS_ROOT = VITIS_XSDB.parent.parent
+VITIS_XSDB_EXE = VITIS_ROOT / "bin" / "unwrapped" / "win64.o" / "xsdb.exe"
+VITIS_XSDB_MANIFEST = VITIS_XSDB_EXE.with_suffix(".exe.manifest")
+PINNED_VITIS_FILES = (
+    VITIS_XSDB,
+    VITIS_LOADER,
+    VITIS_SETUP_ENV,
+    VITIS_RDI_ARGS,
+    VITIS_XSDB_EXE,
+    VITIS_XSDB_MANIFEST,
+)
+
 ROOT_BODY = b"<html><title>offline QWEB fixture</title></html>"
 ROOT_HASH = hashlib.sha256(ROOT_BODY).hexdigest()
 ROOT_ETAG = f'"{ROOT_HASH}"'
+
+
+def valid_startup_transcript(ip: str = "192.168.1.10") -> bytes:
+    lines = (
+        "Qwen3-0.6B full28 PS Web demo",
+        "QOT_BASEADDR=0x00000000a0040000",
+        "Detected Motorcomm YT8521 at PHY address 7 (id1=0x0000 id2=0x011a)",
+        "YT8521 link resolved: bmsr=0x0024 status=0xac00 duplex=full",
+        f"Board IP: {ip}",
+        "DDR4 status=0x00000005",
+        "TOKENIZER tokens=151669 model_vocab=151936 eos=151643 bytes=3629566",
+        f"QWEB READY http://{ip}:80/ context=256 vocab=151936",
+    )
+    return ("\r\n".join(lines) + "\r\n").encode("ascii")
+
+
+def write_live_startup_fixture(
+    root: Path,
+    *,
+    transcript: bytes | None = None,
+) -> tuple[Path, Path, dict[str, object]]:
+    if not all(path.is_file() for path in PINNED_VITIS_FILES):
+        raise unittest.SkipTest("pinned Vitis 2025.1 XSDB toolchain is not installed")
+    raw = valid_startup_transcript() if transcript is None else transcript
+    (root / "xsdb_profile").mkdir()
+    raw_path = root / "uart_raw.bin"
+    raw_path.write_bytes(raw)
+    parsed = acceptance.capture_qweb_uart.verify_transcript_bytes(raw)
+    if parsed.get("passed") is not True:
+        raise AssertionError(f"invalid test startup transcript: {parsed}")
+    report_path = root / "startup.json"
+    now = datetime.now(timezone.utc)
+    startup_started = now - timedelta(seconds=3)
+    launch_started = now - timedelta(seconds=2)
+    launch_finished = now - timedelta(seconds=1)
+    uart_ready = now - timedelta(milliseconds=500)
+    run_id = "12345678-1234-4234-8234-123456789abc"
+    claim_path = root / "launch.claim.json"
+    claim_payload = {
+        "schema_version": 1,
+        "tool": "run_qweb_board.ps1",
+        "state": "claimed",
+        "run_id": run_id,
+        "started_utc": launch_started.isoformat(),
+        "evidence_directory": str(root.resolve()),
+    }
+    claim_path.write_text(json.dumps(claim_payload), encoding="utf-8")
+    log_path = root / "xsdb.log"
+    log_path.write_text(
+        "\n".join(acceptance.capture_qweb_uart.REQUIRED_XSDB_MARKERS) + "\n",
+        encoding="utf-8",
+    )
+    launch_path = root / "launch.json"
+    launch_payload = {
+        "schema_version": 1,
+        "tool": "run_qweb_board.ps1",
+        "run_id": run_id,
+        "passed": True,
+        "failure": None,
+        "started_utc": launch_started.isoformat(),
+        "finished_utc": launch_finished.isoformat(),
+        "evidence_directory": str(root.resolve()),
+        "xsdb_exit_code": 0,
+        "claim": {
+            "path": "launch.claim.json",
+            "sha256": hashlib.sha256(claim_path.read_bytes()).hexdigest(),
+        },
+        "audited": acceptance.capture_qweb_uart.EXPECTED_LAUNCH_AUDIT,
+        "launcher": {
+            "wrapper": str(WRAPPER),
+            "wrapper_sha256": hashlib.sha256(WRAPPER.read_bytes()).hexdigest(),
+            "tcl": str(TCL_LAUNCHER),
+            "tcl_sha256": hashlib.sha256(TCL_LAUNCHER.read_bytes()).hexdigest(),
+            "xsdb": str(VITIS_XSDB),
+            "xsdb_sha256": hashlib.sha256(VITIS_XSDB.read_bytes()).hexdigest(),
+            "loader": str(VITIS_LOADER),
+            "loader_sha256": hashlib.sha256(VITIS_LOADER.read_bytes()).hexdigest(),
+            "setup_env": str(VITIS_SETUP_ENV),
+            "setup_env_sha256": hashlib.sha256(
+                VITIS_SETUP_ENV.read_bytes()
+            ).hexdigest(),
+            "rdi_args": str(VITIS_RDI_ARGS),
+            "rdi_args_sha256": hashlib.sha256(
+                VITIS_RDI_ARGS.read_bytes()
+            ).hexdigest(),
+            "xsdb_exe": str(VITIS_XSDB_EXE),
+            "xsdb_exe_sha256": hashlib.sha256(
+                VITIS_XSDB_EXE.read_bytes()
+            ).hexdigest(),
+            "xsdb_manifest": str(VITIS_XSDB_MANIFEST),
+            "xsdb_manifest_sha256": hashlib.sha256(
+                VITIS_XSDB_MANIFEST.read_bytes()
+            ).hexdigest(),
+            "command": str(VITIS_XSDB),
+            "arguments": ["-no-ini", str(TCL_LAUNCHER)],
+            "working_directory": "xsdb_profile",
+            "isolated_home": "xsdb_profile",
+            "profile_initially_empty": True,
+            "sanitized_environment": list(
+                acceptance.capture_qweb_uart.EXPECTED_SANITIZED_XSDB_ENVIRONMENT
+            ),
+            "required_output_markers": list(
+                acceptance.capture_qweb_uart.REQUIRED_XSDB_MARKERS
+            ),
+            "output_log": "xsdb.log",
+            "output_log_sha256": hashlib.sha256(log_path.read_bytes()).hexdigest(),
+        },
+    }
+    launch_path.write_text(json.dumps(launch_payload), encoding="utf-8")
+    launch_raw = launch_path.read_bytes()
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "tool": "capture_qweb_uart.py",
+        "mode": "live",
+        "started_utc": startup_started.isoformat(),
+        "finished_utc": now.isoformat(),
+        **parsed,
+        "uart_ready_utc": uart_ready.isoformat(),
+        "launch_binding": {
+            "report": "launch.json",
+            "report_sha256": hashlib.sha256(launch_raw).hexdigest(),
+            "run_id": run_id,
+            "started_utc": launch_started.isoformat(),
+            "finished_utc": launch_finished.isoformat(),
+            "audited": acceptance.capture_qweb_uart.EXPECTED_LAUNCH_AUDIT,
+            "claim_sha256": hashlib.sha256(claim_path.read_bytes()).hexdigest(),
+            "xsdb_log_sha256": hashlib.sha256(log_path.read_bytes()).hexdigest(),
+        },
+        "artifacts": {
+            "uart_raw": str(raw_path),
+            "uart_raw_sha256": hashlib.sha256(raw).hexdigest(),
+        },
+    }
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+    return report_path, raw_path, payload
 
 
 def expected_root() -> acceptance.ExpectedRootAsset:
@@ -207,6 +365,7 @@ class AcceptanceFlowTests(unittest.TestCase):
         runner, _ = make_runner(transport)
         result = runner.run()
         self.assertEqual(result["job_id"], 1)
+        self.assertIs(result["running_status_observed"], True)
         self.assertEqual(result["output_bytes"], b" a fascinating")
         self.assertEqual(result["output_text"], " a fascinating")
         self.assertEqual(
@@ -254,7 +413,17 @@ class AcceptanceFlowTests(unittest.TestCase):
         runner, _ = make_runner(FakeTransport(final_only))
         with self.assertRaisesRegex(
             acceptance.AcceptanceFailure,
-            "before any queued/running status response",
+            "before any running status response",
+        ):
+            runner.run()
+
+    def test_queued_status_does_not_prove_inference_network_pumping(self) -> None:
+        items = normal_responses()
+        queued_then_done = items[:4] + [items[6]]
+        runner, _ = make_runner(FakeTransport(queued_then_done))
+        with self.assertRaisesRegex(
+            acceptance.AcceptanceFailure,
+            "before any running status response",
         ):
             runner.run()
 
@@ -397,62 +566,17 @@ class ParsingAndEvidenceTests(unittest.TestCase):
     def test_real_asset_manifest_parses(self) -> None:
         manifest = Path(acceptance.__file__).with_name("web_assets_manifest.json")
         root = acceptance._load_expected_root_asset(manifest)
-        self.assertEqual(root.body_length, 43_776)
+        self.assertEqual(root.body_length, 44_729)
         self.assertEqual(
             root.sha256,
-            "39b0b58717f9c0c6fb7c4b73c9bb76d6e65fdd029e3e80e675afaf57824744e7",
+            "50eac58df6365f2b41864f3ae194891bf47a4e455668a3ae47aa1aaf728ad605",
         )
         self.assertEqual(root.etag, f'"{root.sha256}"')
 
     def test_startup_binding_verifies_uart_hash(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            raw_path = root / "uart_raw.bin"
-            raw_path.write_bytes(b"strict-uart-evidence")
-            report_path = root / "startup.json"
-            report_path.write_text(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "tool": "capture_qweb_uart.py",
-                        "mode": "live",
-                        "passed": True,
-                        "qot_baseaddr": 0xA0040000,
-                        "ddr_status": 0x5,
-                        "missing_milestones": [],
-                        "network": {
-                            "board_ip": "192.168.1.10",
-                            "ip": "192.168.1.10",
-                            "port": 80,
-                            "context": 256,
-                            "vocab": 151936,
-                            "url": "http://192.168.1.10:80/",
-                        },
-                        "phy": {
-                            "address": 7,
-                            "id1": 0,
-                            "id2": 0x011A,
-                            "bmsr": 0x0024,
-                            "status": 0xAC00,
-                            "duplex": "full",
-                            "speed_mbps": 1000,
-                        },
-                        "tokenizer": {
-                            "tokens": 151669,
-                            "vocab": 151936,
-                            "eos": 151643,
-                            "bytes": 3629566,
-                        },
-                        "artifacts": {
-                            "uart_raw": str(raw_path),
-                            "uart_raw_sha256": hashlib.sha256(
-                                raw_path.read_bytes()
-                            ).hexdigest(),
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
+            report_path, raw_path, _ = write_live_startup_fixture(root)
             url, binding = acceptance._load_startup_binding(report_path)
             self.assertEqual(url, "http://192.168.1.10:80/")
             self.assertEqual(binding["uart_raw"], str(raw_path.resolve()))
@@ -461,6 +585,82 @@ class ParsingAndEvidenceTests(unittest.TestCase):
                 acceptance.AcceptanceFailure, "raw UART SHA-256 mismatch"
             ):
                 acceptance._load_startup_binding(report_path)
+
+    def test_startup_binding_rejects_arbitrary_raw_with_matching_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            root = parent / "arbitrary"
+            root.mkdir()
+            report_path, raw_path, payload = write_live_startup_fixture(root)
+            arbitrary = b"arbitrary bytes that are not a QWEB startup\r\n"
+            raw_path.write_bytes(arbitrary)
+            artifacts = payload["artifacts"]
+            assert isinstance(artifacts, dict)
+            artifacts["uart_raw_sha256"] = hashlib.sha256(arbitrary).hexdigest()
+            report_path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(
+                acceptance.AcceptanceFailure,
+                "raw UART transcript verification failed",
+            ):
+                acceptance._load_startup_binding(report_path)
+
+            external_root = parent / "external"
+            external_root.mkdir()
+            report_path, raw_path, payload = write_live_startup_fixture(
+                external_root
+            )
+            outside_raw = parent / "outside_uart.bin"
+            outside_raw.write_bytes(raw_path.read_bytes())
+            artifacts = payload["artifacts"]
+            assert isinstance(artifacts, dict)
+            artifacts["uart_raw"] = str(outside_raw)
+            report_path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(
+                acceptance.AcceptanceFailure,
+                "outside the startup evidence run",
+            ):
+                acceptance._load_startup_binding(report_path)
+
+    def test_startup_binding_rejects_mutated_launch_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report_path, _, _ = write_live_startup_fixture(root)
+            launch_path = root / "launch.json"
+            launch = json.loads(launch_path.read_text(encoding="utf-8"))
+            launch["audited"]["qweb_elf_sha256"] = "0" * 64
+            launch_path.write_text(json.dumps(launch), encoding="utf-8")
+            with self.assertRaisesRegex(
+                acceptance.AcceptanceFailure,
+                "launch report SHA-256 mismatch",
+            ):
+                acceptance._load_startup_binding(report_path)
+
+    def test_startup_binding_rejects_fields_inconsistent_with_raw(self) -> None:
+        mutations = (
+            ("network", "board_ip", "192.168.1.11"),
+            ("phy", "bmsr", 0x0025),
+            ("tokenizer", "tokens", 151668),
+            ("ddr_status", None, 0x4),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            for field, member, replacement in mutations:
+                with self.subTest(field=field):
+                    root = parent / field
+                    root.mkdir()
+                    report_path, _, payload = write_live_startup_fixture(root)
+                    if member is None:
+                        payload[field] = replacement
+                    else:
+                        nested = payload[field]
+                        assert isinstance(nested, dict)
+                        nested[member] = replacement
+                    report_path.write_text(json.dumps(payload), encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        acceptance.AcceptanceFailure,
+                        rf"reparsed raw UART field '{field}'",
+                    ):
+                        acceptance._load_startup_binding(report_path)
 
     def test_startup_binding_rejects_transcript_replay(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -489,6 +689,28 @@ class ParsingAndEvidenceTests(unittest.TestCase):
                 acceptance.AcceptanceFailure, "refusing to overwrite"
             ):
                 acceptance._prepare_output_dir(existing)
+
+            race_path = Path(temporary) / "race.json"
+            original_link = acceptance.os.link
+
+            def create_competing_target(source: object, destination: object) -> None:
+                Path(destination).write_bytes(b"competing-writer")
+                original_link(source, destination)
+
+            with mock.patch.object(
+                acceptance.os,
+                "link",
+                side_effect=create_competing_target,
+            ):
+                with self.assertRaisesRegex(
+                    acceptance.AcceptanceFailure,
+                    "refusing to overwrite",
+                ):
+                    acceptance._write_json_exclusive(
+                        race_path,
+                        {"winner": False},
+                    )
+            self.assertEqual(race_path.read_bytes(), b"competing-writer")
 
 
 if __name__ == "__main__":

@@ -7,8 +7,8 @@ Hummingbird+ paper:
 - Title: `Hummingbird+: Advancing FPGA-based LLM Deployment from Research
   Prototype to Edge Product`
 
-For the current working state and immediate next step, read
-`Source/CURRENT_STATE.md` after this file.
+For the current working state, completed first-version boundary, and optional
+next scope, read `Source/CURRENT_STATE.md` after this file.
 
 ## Long-Term Goal
 
@@ -476,7 +476,8 @@ The repeated prompt is bit-exact. Evidence and hashes are recorded in
 `Source/BOARD_VALIDATION_20260812.md`. This closes the arbitrary prompt-to-text
 physical boundary for the greedy, 256-position, JTAG-loaded first version.
 
-The board-hosted Web software is now assembled and host-validated at
+The board-hosted Web software is now assembled, host-validated, and physically
+accepted at
 `FPGA_Project/software/qmap_web_demo/`. It keeps the HTTP parser, decoded
 request, generation job, response buffers, and raw-lwIP connection in static
 bounded storage; parses fragmented fixed-length HTTP/1.1 and strict JSON; runs
@@ -489,26 +490,53 @@ incomplete layer/done/error state before committing a result. The AMD echo
 template entry replacement also checks DDR status/runtime sentinels and derives
 its exact Host authorities and printed URL from the interface's actual
 DHCP/static IPv4 address. All production functions pass a 1 KiB stack-frame
-gate; the five C host executables, 55 Python XSA/workspace/asset/YT8521 gates,
-generated asset check, and real-browser mocked-API UI exercise pass.
+gate; the five C host executables, 110 Python XSA/workspace/asset/launcher/
+acceptance/YT8521 gates,
+generated asset check, and real-browser mocked-API UI exercise pass. The raw
+adapter releases its single application slot as soon as every copied response
+byte is queued into lwIP rather than waiting for the final ACK; retired PCBs use
+`TCP_PRIO_MIN`, and the explicit `ERR_MEM` path restores callbacks, state, and
+priority. The BSP has 256 TCP PCBs. The final UI polls generation every three
+seconds, serializes quiet health checks with submission, and retries one
+isolated quiet-health transport timeout without flashing offline.
 
 The network hardware and build boundaries are now closed. The fresh
 GEM3/MDIO/TTC0-enabled lineage under
 `Temp/network_board_build_20260812_v1/` passes the read-only XSA gate while
 preserving the existing one-token and PL-DDR address maps. Its final routed
 timing is WNS `+0.208 ns` and WHS `+0.010 ns`. The guarded generator then built
-an isolated `F:\vwc` platform, a custom-repository `lwip220_v1_2` with exact
+the final isolated `F:\vwk` platform, a custom-repository `lwip220_v1_2` with exact
 YT8521 support, `a_net_echo`, and the complete source/tokenizer-audited
 `a_qweb`; the manifest records build result zero for all three components and
-pins their sources and ELF hashes.
+pins their sources and ELF hashes. Its manifest SHA256 is
+`33CA1A825AFF72DD7A59C9938C0B0E838062C5C6E18EE1826432341E7A85E401`;
+the final 5,003,296-byte `a_qweb.elf` SHA256 is
+`38A772F093CE3996177640863888B6700F1AC26F7BCB82E5F2159C0EF46F89DA`.
 
-Physical Ethernet acceptance is still open. The patched echo image ran far
-enough to detect Motorcomm YT8521 at PHY address 7 with ID `0x0000011A`, but
-auto-negotiation timed out with link and AN-complete clear. Both PC wired
-adapters were disconnected during that run, so no IP, ping, or TCP echo result
-exists. The `a_qweb` ELF has not yet received physical page, health, network
-responsiveness, or prompt-to-text acceptance. These facts are a Gate 0 and
-build PASS, not a Gate 1 or Gate 2 PASS.
+Physical Ethernet Gate 1 passed on the same board and port. The immutable
+`Temp/network_echo_gate1_20260817_direct_v2/acceptance.json` proves Motorcomm
+YT8521 address 7/ID `0x0000011A`, 1000-Mb/s full duplex, board
+`192.168.1.10`, ten of ten ping replies, and an exact 75-byte port-7 echo. That
+report is deliberately described as the earlier `F:\vwc` echo oracle; it is not
+misrepresented as a hash-bound `F:\vwk` echo run. The final `F:\vwk` QWEB
+startup independently re-established the same PHY identity, link, and address.
+
+The physical QWEB acceptance tools now pin the complete Vitis XSDB execution
+chain plus the wrapper/Tcl bytes, isolate XSDB startup files and inherited
+Xilinx/RDI/Tcl paths, and require the observed UART READY bytes to arrive after
+the audited launch begins. This closes stale-banner and alternate-launcher
+false positives on the controlled single-board bench. JTAG, COM230, and PS
+Ethernet are still assumed to belong to that one board; no hardware-unique
+nonce is exposed by the current application. Gate 2 then passed under
+`Temp/qweb_board_acceptance_20260817_final_v4/`: one cold launch loaded 61/61
+runtime segments, checked all 281 QMAP headers, and reached DDR status `0x5`,
+tokenizer-ready, and `QWEB READY`. Two strict no-cooldown HTTP runs both observed
+`running` and returned exact IDs `264,26291`, Q26 scores
+`1296911292,1225544557`, `MAX_NEW`, and 14-byte ` a fascinating`. Live Edge was
+observed to complete Jobs 3 and 4 with the same result. The retained
+`browser_final.png` independently proves Job 4 exact DONE/Ready with SHA256
+`D22D9D153B52940220143A88A5029868C6BC998573386F5CCDFE8C9AF711D9FC`;
+a live console check returned zero messages.
 
 The remainder of this section records how the full datapath was assembled. The
 important early capability was PL write-back. The existing row1024 hardware
@@ -693,10 +721,13 @@ smoke and full28 persistent two-token model smoke both passed on 2026-08-08.
 The general token/text PS implementation and physical UART boundaries are now
 closed by the verified `F:\qot_boardtest_prompt_text_v13_20260812` workbench and
 its strict eight-case board PASS. The network hardware/XSA and real Vitis build
-boundaries are also closed. The immediate feature boundary is physical
-Ethernet link, ping, and TCP echo followed by board-hosted `a_qweb` HTTP
-prompt-to-text acceptance. Performance tuning remains after that
-product-facing work; it is not required to re-prove the accepted prompt chain.
+boundaries are also closed. Physical Ethernet link/ping/TCP echo and the
+board-hosted `a_qweb` HTTP/browser prompt-to-text boundary are now closed by the
+2026-08-17 Gate-1 oracle and `final_v4` evidence. This completes the requested
+JTAG-loaded first-version demo. Power-on autonomous boot/loading, production
+network lifecycle, persistent or multi-client HTTP, broader prompt coverage,
+and performance tuning are optional new productization scope; they are not
+required to re-prove the accepted prompt chain.
 
 Keep the exact next action in `Source/CURRENT_STATE.md`; keep detailed address
 planning in `Source/FPGA_MEMORY_MAP.md`.

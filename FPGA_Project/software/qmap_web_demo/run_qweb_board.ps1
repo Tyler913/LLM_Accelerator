@@ -1,7 +1,8 @@
 param(
-    [string]$Workspace = "F:\vwc",
+    [string]$Workspace = "F:\vwk",
     [string]$RuntimeWorkbench = "F:\qot_boardtest_prompt_text_v13_20260812",
     [string]$Xsdb = "",
+    [string]$EvidenceDirectory = "",
     [switch]$AuditOnly
 )
 
@@ -10,11 +11,11 @@ Set-StrictMode -Version Latest
 
 # These hashes bind the launcher to the formal clean network build and the
 # exact prompt workbench that passed the 2026-08-12 cold board acceptance.
-$ExpectedNetworkManifestSha256 = "18d5cb4d0b826d165e9f30f1d1a3e372ef2c53e48052854e610da7459a8007f2"
+$ExpectedNetworkManifestSha256 = "33ca1a825aff72dd7a59c9938c0b0e838062c5c6e18ee1826432341e7a85e401"
 $ExpectedNetworkXsaSha256 = "0af1257442a68a6beb31d94811713f2ae8e6af63e0a85dd497146405e37406cf"
 $ExpectedNetworkBitSha256 = "c926b3db8021e976e5ea6cc2f71da3c44899ea5c3df61da573475ce6d8c21239"
-$ExpectedNetworkFsblSha256 = "2b3f0568451f98dd60267468a3223ae14f100b79cd92b455c4639fb43c226882"
-$ExpectedQwebElfSha256 = "3b83026ec7647a79d6df2d9fe584a2555157e5d87a212f7adb478ebd036e8650"
+$ExpectedNetworkFsblSha256 = "a7695cd19bec264ca0ef1d951527587cc02489a82711ab63f4534c5f3579f5cb"
+$ExpectedQwebElfSha256 = "38a772f093ce3996177640863888b6700f1ac26f7bcb82e5f2159c0ef46f89da"
 $ExpectedWorkbenchManifestSha256 = "f9d523ab59926c7583f76e6faefc941d019b296ed5f51d00f49cf6627bc0eda7"
 $ExpectedRuntimeManifestSha256 = "fa8981e71101def29970135df5e863da5634274dd9fb64905666f0cf1d47d3f2"
 $ExpectedRuntimeLoaderSha256 = "0b698f28165f05efe7dbc2a8c64bfa7379cbf10cc8dcb4b1ced9660eeabbecb1"
@@ -22,6 +23,17 @@ $ExpectedRuntimeSegments = 61
 $ExpectedRuntimeBytes = 394547200L
 $ExpectedTokenizerBytes = 3629566L
 $ExpectedTokenizerSha256 = "c20242603ef4144e3f3f2ec4ba97c0e9c315aadd41f1bd2c5740e2a7ffa03a7d"
+$ExpectedXsdbSha256 = "2cd1d63586a95fbb00b2badb6652cae485bdd4cbdab612c8a5de0afd7e874f59"
+$ExpectedLoaderSha256 = "13fac52e8f0c81ea0539a0edddf8ad839d5c8a49d9fe37531abffbab8decfb38"
+$ExpectedSetupEnvSha256 = "0f8108b67a75b3957b075c3f87d094fcc63eb7251a27281e7d456024898d881f"
+$ExpectedRdiArgsSha256 = "44f7765ce290ea0546f441044a5303316f7fe6c9434136ba013e8f72c5e1f544"
+$ExpectedXsdbExeSha256 = "9ef5fe040728b508a1a0efd1dfd83dbb3df02d2d9b59310ea0e7b403cd429483"
+$ExpectedXsdbManifestSha256 = "77596430e6ea9d0a8d7b686d75f0b554564fdc0a931d1f806cf16c0e100a99e3"
+$ExpectedVitisRoot = "D:\Applications\Vivado_2025.1.1\2025.1.1\Vitis"
+
+if (-not $AuditOnly -and [string]::IsNullOrWhiteSpace($EvidenceDirectory)) {
+    throw "Physical QWEB launch requires -EvidenceDirectory from an active capture_qweb_uart.py session"
+}
 
 function Get-Sha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -100,6 +112,73 @@ function Assert-Hash {
         throw "$Label SHA-256 mismatch: got $actual expected $($Expected.ToLowerInvariant())"
     }
     return $actual
+}
+
+function Write-JsonExclusive {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)]$Payload
+    )
+    $temporary = "$Path.tmp"
+    if ((Test-Path -LiteralPath $Path) -or (Test-Path -LiteralPath $temporary)) {
+        throw "Refusing to overwrite QWEB launch evidence: $Path"
+    }
+    $json = ($Payload | ConvertTo-Json -Depth 8) + "`n"
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    $stream = $null
+    $writer = $null
+    try {
+        $stream = [System.IO.File]::Open(
+            $temporary,
+            [System.IO.FileMode]::CreateNew,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::None
+        )
+        $writer = New-Object System.IO.StreamWriter -ArgumentList $stream, $encoding
+        $writer.Write($json)
+        $writer.Flush()
+        $stream.Flush($true)
+    } finally {
+        if ($null -ne $writer) {
+            $writer.Dispose()
+        } elseif ($null -ne $stream) {
+            $stream.Dispose()
+        }
+    }
+    [System.IO.File]::Move($temporary, $Path)
+}
+
+function Write-TextExclusive {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Text
+    )
+    $temporary = "$Path.tmp"
+    if ((Test-Path -LiteralPath $Path) -or (Test-Path -LiteralPath $temporary)) {
+        throw "Refusing to overwrite QWEB launch evidence: $Path"
+    }
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    $stream = $null
+    $writer = $null
+    try {
+        $stream = [System.IO.File]::Open(
+            $temporary,
+            [System.IO.FileMode]::CreateNew,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::None
+        )
+        $writer = New-Object System.IO.StreamWriter -ArgumentList $stream, $encoding
+        $writer.Write($Text)
+        $writer.Flush()
+        $stream.Flush($true)
+    } finally {
+        if ($null -ne $writer) {
+            $writer.Dispose()
+        } elseif ($null -ne $stream) {
+            $stream.Dispose()
+        }
+    }
+    [System.IO.File]::Move($temporary, $Path)
 }
 
 function Assert-AArch64Elf {
@@ -181,6 +260,7 @@ $expectedBspConfig = @(
     "lwip220|lwip220_dhcp|true",
     "lwip220|lwip220_ipv6_enable|false",
     "lwip220|lwip220_lwip_dhcp_does_acd_check|true",
+    "lwip220|lwip220_memp_n_tcp_pcb|256",
     "lwip220|lwip220_pbuf_pool_size|2048",
     "xiltimer|XILTIMER_en_interval_timer|true"
 )
@@ -509,6 +589,28 @@ if ($AuditOnly) {
     return
 }
 
+$evidencePath = Resolve-ExistingDirectory -Path $EvidenceDirectory `
+    -Label "QWEB evidence directory"
+$evidenceRawPath = Join-Path $evidencePath "uart_raw.bin"
+$evidenceStartupPath = Join-Path $evidencePath "startup.json"
+$launchReportPath = Join-Path $evidencePath "launch.json"
+$launchClaimPath = Join-Path $evidencePath "launch.claim.json"
+$xsdbLogPath = Join-Path $evidencePath "xsdb.log"
+$xsdbProfilePath = Join-Path $evidencePath "xsdb_profile"
+if (-not (Test-Path -LiteralPath $evidenceRawPath -PathType Leaf)) {
+    throw "QWEB evidence directory is not owned by an active UART capture: missing $evidenceRawPath"
+}
+if ((Test-Path -LiteralPath $evidenceStartupPath) -or
+    (Test-Path -LiteralPath $launchReportPath) -or
+    (Test-Path -LiteralPath "$launchReportPath.tmp") -or
+    (Test-Path -LiteralPath $launchClaimPath) -or
+    (Test-Path -LiteralPath "$launchClaimPath.tmp") -or
+    (Test-Path -LiteralPath $xsdbLogPath) -or
+    (Test-Path -LiteralPath "$xsdbLogPath.tmp") -or
+    (Test-Path -LiteralPath $xsdbProfilePath)) {
+    throw "QWEB evidence directory already contains completed or prior-run evidence: $evidencePath"
+}
+
 if ([string]::IsNullOrWhiteSpace($Xsdb)) {
     if (-not [string]::IsNullOrWhiteSpace($env:XILINX_VITIS)) {
         $Xsdb = Join-Path $env:XILINX_VITIS "bin\xsdb.bat"
@@ -519,10 +621,71 @@ if ([string]::IsNullOrWhiteSpace($Xsdb)) {
 if (-not (Test-Path -LiteralPath $Xsdb -PathType Leaf)) {
     throw "XSDB was not found at '$Xsdb'. Pass -Xsdb or set XILINX_VITIS."
 }
+$xsdbPath = (Resolve-Path -LiteralPath $Xsdb).Path
+$expectedVitisRootPath = (Resolve-Path -LiteralPath $ExpectedVitisRoot).Path
+$expectedXsdbPath = Join-Path $expectedVitisRootPath "bin\xsdb.bat"
+if (-not [string]::Equals(
+        $xsdbPath,
+        $expectedXsdbPath,
+        [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Physical QWEB launch requires canonical Vitis 2025.1 xsdb.bat at '$expectedXsdbPath', not '$xsdbPath'"
+}
+Assert-Hash -Path $xsdbPath -Expected $ExpectedXsdbSha256 `
+    -Label "AMD xsdb.bat" | Out-Null
+$loaderPath = Join-Path (Split-Path -Parent $xsdbPath) "loader.bat"
+$setupEnvPath = Join-Path (Split-Path -Parent $xsdbPath) "setupEnv.bat"
+$rdiArgsPath = Join-Path (Split-Path -Parent $xsdbPath) "rdiArgs.bat"
+$xsdbExePath = Join-Path $expectedVitisRootPath "bin\unwrapped\win64.o\xsdb.exe"
+$xsdbManifestPath = "$xsdbExePath.manifest"
+$toolFiles = @(
+    [pscustomobject]@{ Path = $loaderPath; Sha = $ExpectedLoaderSha256; Label = "AMD loader.bat" },
+    [pscustomobject]@{ Path = $setupEnvPath; Sha = $ExpectedSetupEnvSha256; Label = "AMD setupEnv.bat" },
+    [pscustomobject]@{ Path = $rdiArgsPath; Sha = $ExpectedRdiArgsSha256; Label = "AMD rdiArgs.bat" },
+    [pscustomobject]@{ Path = $xsdbExePath; Sha = $ExpectedXsdbExeSha256; Label = "AMD xsdb.exe" },
+    [pscustomobject]@{ Path = $xsdbManifestPath; Sha = $ExpectedXsdbManifestSha256; Label = "AMD xsdb.exe.manifest" }
+)
+foreach ($toolFile in $toolFiles) {
+    if (-not (Test-Path -LiteralPath $toolFile.Path -PathType Leaf)) {
+        throw "$($toolFile.Label) is missing: $($toolFile.Path)"
+    }
+    Assert-Hash -Path $toolFile.Path -Expected $toolFile.Sha `
+        -Label $toolFile.Label | Out-Null
+}
+$baselinePath = Join-Path $expectedVitisRootPath "data\baseline.txt"
+if (Test-Path -LiteralPath $baselinePath) {
+    throw "Refusing Vitis baseline redirection during physical QWEB launch: $baselinePath"
+}
+$patchRoot = Join-Path $expectedVitisRootPath "patches"
+if (Test-Path -LiteralPath $patchRoot -PathType Container) {
+    $patchedXsdb = @(Get-ChildItem -LiteralPath $patchRoot -Filter "xsdb.exe" `
+        -File -Recurse -ErrorAction Stop)
+    if ($patchedXsdb.Count -ne 0) {
+        throw "Refusing patched XSDB executable during physical QWEB launch: $($patchedXsdb[0].FullName)"
+    }
+}
 
 $launcher = Join-Path $PSScriptRoot "launch_qweb_board.tcl"
 if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
     throw "QWEB XSDB launcher is missing: $launcher"
+}
+$wrapperSha256 = Get-Sha256 -Path $PSCommandPath
+$launcherSha256 = Get-Sha256 -Path $launcher
+
+$launchRunId = [System.Guid]::NewGuid().ToString("D")
+$launchStartedUtc = [System.DateTimeOffset]::UtcNow.ToString("o")
+$launchClaim = [ordered]@{
+    schema_version = 1
+    tool = "run_qweb_board.ps1"
+    state = "claimed"
+    run_id = $launchRunId
+    started_utc = $launchStartedUtc
+    evidence_directory = $evidencePath
+}
+Write-JsonExclusive -Path $launchClaimPath -Payload $launchClaim
+$launchClaimSha256 = Get-Sha256 -Path $launchClaimPath
+[void][System.IO.Directory]::CreateDirectory($xsdbProfilePath)
+if (@(Get-ChildItem -LiteralPath $xsdbProfilePath -Force).Count -ne 0) {
+    throw "Isolated XSDB profile was not empty at creation: $xsdbProfilePath"
 }
 
 $previous = @{
@@ -532,33 +695,207 @@ $previous = @{
     QWEB_NETWORK_WEB_ELF = $env:QWEB_NETWORK_WEB_ELF
     QWEB_RUNTIME_LOADER = $env:QWEB_RUNTIME_LOADER
 }
+$unsafeXsdbEnvironmentNames = @(
+    "PATH",
+    "PYTHONPATH",
+    "HOME",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "HOMESHARE",
+    "USERPROFILE",
+    "MYXILINX",
+    "MYVIVADO",
+    "XILINX",
+    "XILINX_PATH",
+    "XIL_NO_OVERRIDE",
+    "XIL_PA_NO_DEFAULT_OVERRIDE",
+    "XIL_PA_NO_XILINX_OVERRIDE",
+    "XIL_PA_NO_XILINX_SDK_OVERRIDE",
+    "XIL_PA_NO_XILINX_PATH_OVERRIDE",
+    "XILINX_VITIS",
+    "XILINX_VIVADO",
+    "XILINX_SDK",
+    "XILINX_HLS",
+    "XILINX_VCXX",
+    "XILINX_COMMON_TOOLS",
+    "XIL_TPS_ROOT",
+    "RDI_PATCHROOT",
+    "_RDI_BASELINE",
+    "_RDI_NEEDS_PYTHON",
+    "RDI_BASELINE",
+    "RDI_PREPEND_PATH",
+    "RDI_MIXED_EXT",
+    "RDI_DEPENDENCY",
+    "RDI_BYPASS_ARGS",
+    "RDI_PROG",
+    "RDI_ARGS",
+    "RDI_ARGS_FUNCTION",
+    "RDI_SETUP_ENV_FUNCTION",
+    "RDI_JAVALAUNCH",
+    "RDI_VBSLAUNCH",
+    "RDI_EXECCLASS",
+    "RDI_CLASSPATH",
+    "RDI_JAVAARGS",
+    "RDI_JAVAFXROOT",
+    "RDI_JAVACEFROOT",
+    "RDI_APPROOT",
+    "RDI_BINROOT",
+    "RDI_INSTALLROOT",
+    "RDI_PLATFORM",
+    "RDI_OPT_EXT",
+    "_RDI_SETENV_RUN",
+    "QWEB_HW_SERVER_URL",
+    "QWEB_DEVICE_FILTER",
+    "TCLLIBPATH",
+    "TCL_LIBRARY",
+    "TK_LIBRARY"
+)
+$previousXsdbEnvironment = @{}
+foreach ($name in $unsafeXsdbEnvironmentNames) {
+    $previousXsdbEnvironment[$name] = `
+        [System.Environment]::GetEnvironmentVariable($name, "Process")
+}
+$launchFailure = $null
+$xsdbExitCode = $null
+$xsdbLogSha256 = $null
+$requiredXsdbMarkers = @(
+    "PASS programmed audited network bitstream",
+    "PASS FSBL initialization",
+    "PASS PL DDR4 ready status=0x00000005",
+    "PASS all 281 QMAP packet headers",
+    "PASS a_qweb downloaded and running after audited runtime load"
+)
+$xsdbOutput = New-Object System.Collections.Generic.List[string]
+$xsdbCommand = $xsdbPath
+$xsdbArguments = @("-no-ini", $launcher)
+$locationPushed = $false
 try {
+    foreach ($name in $unsafeXsdbEnvironmentNames) {
+        [System.Environment]::SetEnvironmentVariable($name, $null, "Process")
+    }
+    $env:HOME = $xsdbProfilePath
+    $env:USERPROFILE = $xsdbProfilePath
     $env:QWEB_NETWORK_BIT = $bitPath
     $env:QWEB_NETWORK_XSA = $xsaPath
     $env:QWEB_NETWORK_FSBL = $fsblPath
     $env:QWEB_NETWORK_WEB_ELF = $qwebPath
     $env:QWEB_RUNTIME_LOADER = $runtimeLoader
 
-    $xsdbCommand = $Xsdb
-    $xsdbArguments = @($launcher)
-    if ([System.IO.Path]::GetFileName($Xsdb) -ieq "xsdb.bat") {
-        $xsdbCommand = Join-Path (Split-Path -Parent $Xsdb) "loader.bat"
-        if (-not (Test-Path -LiteralPath $xsdbCommand -PathType Leaf)) {
-            throw "AMD loader.bat was not found next to '$Xsdb'."
+    Push-Location -LiteralPath $xsdbProfilePath
+    $locationPushed = $true
+    & $xsdbCommand @xsdbArguments 2>&1 | ForEach-Object {
+        $line = [string]$_
+        [void]$xsdbOutput.Add($line)
+        Write-Host $line
+    }
+    $xsdbExitCode = $LASTEXITCODE
+    $xsdbText = ($xsdbOutput -join "`n") + "`n"
+    Write-TextExclusive -Path $xsdbLogPath -Text $xsdbText
+    $xsdbLogSha256 = Get-Sha256 -Path $xsdbLogPath
+    if ($xsdbExitCode -ne 0) {
+        throw "XSDB QWEB launcher failed with exit code $xsdbExitCode"
+    }
+    $markerPosition = -1
+    foreach ($marker in $requiredXsdbMarkers) {
+        $nextPosition = $xsdbText.IndexOf(
+            $marker,
+            $markerPosition + 1,
+            [System.StringComparison]::Ordinal
+        )
+        if ($nextPosition -lt 0) {
+            throw "XSDB QWEB launcher output lacks ordered PASS marker: $marker"
         }
-        $xsdbArguments = @("-exec", "xsdb", $launcher)
+        $markerPosition = $nextPosition
     }
-
-    & $xsdbCommand @xsdbArguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "XSDB QWEB launcher failed with exit code $LASTEXITCODE"
-    }
+} catch {
+    $launchFailure = $_.Exception.Message
 } finally {
+    if ($locationPushed) {
+        Pop-Location
+    }
     $env:QWEB_NETWORK_BIT = $previous.QWEB_NETWORK_BIT
     $env:QWEB_NETWORK_XSA = $previous.QWEB_NETWORK_XSA
     $env:QWEB_NETWORK_FSBL = $previous.QWEB_NETWORK_FSBL
     $env:QWEB_NETWORK_WEB_ELF = $previous.QWEB_NETWORK_WEB_ELF
     $env:QWEB_RUNTIME_LOADER = $previous.QWEB_RUNTIME_LOADER
+    foreach ($name in $unsafeXsdbEnvironmentNames) {
+        [System.Environment]::SetEnvironmentVariable(
+            $name,
+            $previousXsdbEnvironment[$name],
+            "Process"
+        )
+    }
+}
+
+$launchFinishedUtc = [System.DateTimeOffset]::UtcNow.ToString("o")
+$launchReport = [ordered]@{
+    schema_version = 1
+    tool = "run_qweb_board.ps1"
+    run_id = $launchRunId
+    passed = ($null -eq $launchFailure)
+    failure = $launchFailure
+    started_utc = $launchStartedUtc
+    finished_utc = $launchFinishedUtc
+    evidence_directory = $evidencePath
+    xsdb_exit_code = $xsdbExitCode
+    claim = [ordered]@{
+        path = "launch.claim.json"
+        sha256 = $launchClaimSha256
+    }
+    audited = [ordered]@{
+        network_manifest_sha256 = $ExpectedNetworkManifestSha256
+        network_bit_sha256 = $ExpectedNetworkBitSha256
+        network_xsa_sha256 = $ExpectedNetworkXsaSha256
+        network_fsbl_sha256 = $ExpectedNetworkFsblSha256
+        qweb_elf_sha256 = $ExpectedQwebElfSha256
+        workbench_manifest_sha256 = $ExpectedWorkbenchManifestSha256
+        runtime_manifest_sha256 = $ExpectedRuntimeManifestSha256
+        runtime_loader_sha256 = $ExpectedRuntimeLoaderSha256
+        runtime_segments = $ExpectedRuntimeSegments
+        runtime_bytes = $ExpectedRuntimeBytes
+        tokenizer_sha256 = $ExpectedTokenizerSha256
+        tokenizer_bytes = $ExpectedTokenizerBytes
+        xsdb_sha256 = $ExpectedXsdbSha256
+        loader_sha256 = $ExpectedLoaderSha256
+        setup_env_sha256 = $ExpectedSetupEnvSha256
+        rdi_args_sha256 = $ExpectedRdiArgsSha256
+        xsdb_exe_sha256 = $ExpectedXsdbExeSha256
+        xsdb_manifest_sha256 = $ExpectedXsdbManifestSha256
+        vitis_root = $expectedVitisRootPath
+    }
+    launcher = [ordered]@{
+        wrapper = $PSCommandPath
+        wrapper_sha256 = $wrapperSha256
+        tcl = $launcher
+        tcl_sha256 = $launcherSha256
+        xsdb = $xsdbPath
+        xsdb_sha256 = $ExpectedXsdbSha256
+        loader = $loaderPath
+        loader_sha256 = $ExpectedLoaderSha256
+        setup_env = $setupEnvPath
+        setup_env_sha256 = $ExpectedSetupEnvSha256
+        rdi_args = $rdiArgsPath
+        rdi_args_sha256 = $ExpectedRdiArgsSha256
+        xsdb_exe = $xsdbExePath
+        xsdb_exe_sha256 = $ExpectedXsdbExeSha256
+        xsdb_manifest = $xsdbManifestPath
+        xsdb_manifest_sha256 = $ExpectedXsdbManifestSha256
+        command = $xsdbCommand
+        arguments = $xsdbArguments
+        working_directory = "xsdb_profile"
+        isolated_home = "xsdb_profile"
+        profile_initially_empty = $true
+        sanitized_environment = $unsafeXsdbEnvironmentNames
+        required_output_markers = $requiredXsdbMarkers
+        output_log = "xsdb.log"
+        output_log_sha256 = $xsdbLogSha256
+    }
+}
+Write-JsonExclusive -Path $launchReportPath -Payload $launchReport
+Write-Host "QWEB launch report: $launchReportPath"
+Write-Host "QWEB launch run ID: $launchRunId"
+if ($null -ne $launchFailure) {
+    throw $launchFailure
 }
 
 Write-Host "PASS launched audited board-hosted QWEB image after runtime load"

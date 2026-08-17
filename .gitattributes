@@ -1,0 +1,4 @@
+FPGA_Project/software/qmap_web_demo/run_qweb_board.ps1 text eol=lf
+FPGA_Project/software/qmap_web_demo/launch_qweb_board.tcl text eol=lf
+FPGA_Project/software/qmap_web_demo/run_network_echo_board.ps1 text eol=lf
+FPGA_Project/software/qmap_web_demo/launch_network_echo.tcl text eol=lf

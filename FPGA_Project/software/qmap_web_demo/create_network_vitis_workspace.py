@@ -52,6 +52,11 @@ REQUIRED_BSP_CONFIG = (
     ("lwip220", "lwip220_dhcp", "true"),
     ("lwip220", "lwip220_lwip_dhcp_does_acd_check", "true"),
     ("lwip220", "lwip220_ipv6_enable", "false"),
+    # A full28 job uses roughly 50 short-lived HTTP connections while the
+    # browser polls.  The lwIP default of 32 active PCBs can therefore be
+    # exhausted by FIN/close-pending PCBs before their timers retire them.
+    # 256 covers the 120-second worst-case closing window with ample margin.
+    ("lwip220", "lwip220_memp_n_tcp_pcb", "256"),
     ("lwip220", "lwip220_pbuf_pool_size", "2048"),
     ("xiltimer", "XILTIMER_en_interval_timer", "true"),
 )

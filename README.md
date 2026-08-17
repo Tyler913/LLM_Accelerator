@@ -2,7 +2,8 @@
 
 FPGA-based LLM accelerator project inspired by Hummingbird+.
 
-Latest hardware PASS (2026-08-08): the complete Qwen3-0.6B tied-Q4 path passed
+Latest fixed-sequence full28 accelerator PASS (2026-08-08): the complete
+Qwen3-0.6B tied-Q4 path passed
 on the XCZU2EG board for the fixed two-position validation sequence. Both
 positions completed all 28 layers with `done_mask=0x0fffffff`, `error_mask=0`,
 and exact token/score results `28458/1227344433` then `64/1015661901`.
@@ -56,22 +57,33 @@ the 19,918-byte raw UART SHA256 is
 `8C2DCF4810BB53F39B6068166BDDBB15706E8B8D068760AC0FBB62076C0176D7`.
 See [Source/BOARD_VALIDATION_20260812.md](Source/BOARD_VALIDATION_20260812.md).
 
-The board-hosted Web application is implemented under
-`FPGA_Project/software/qmap_web_demo/`: bounded fragmented HTTP/1.1, strict
-prompt/token JSON, the exact tokenizer-backed generation job, raw-lwIP
-transport, cooperative network pumping during every PL token, a fail-closed
-board entry, and an offline responsive browser UI pass the five C host suites
-and 55 Python gates. A fresh GEM3/MDIO/TTC0-enabled Vivado lineage under
-`Temp/network_board_build_20260812_v1/` also passes the network-XSA audit,
-fresh synthesis/implementation/bitstream/XSA flow, full routing, and final
-timing with WNS `+0.208 ns` and WHS `+0.010 ns`. The isolated `F:\vwc`
-manifest records successful platform, patched-YT8521 `a_net_echo`, and
-source/tokenizer-audited `a_qweb` builds. On the physical board the patched
-echo application detects Motorcomm YT8521 at PHY address 7 with ID
-`0x0000011A`, but auto-negotiation times out with link down; both PC wired
-adapters were disconnected during that run. Stable link, ping/TCP echo, and
-physical `a_qweb` HTTP prompt-to-text acceptance therefore remain open. No
-Ethernet Gate 1 or Gate 2 board PASS is claimed yet.
+The preferred board-hosted Web demo is now complete under
+`FPGA_Project/software/qmap_web_demo/`. Its bounded HTTP/1.1 server, strict
+prompt/token JSON, exact PS tokenizer/detokenizer, full28 PL generation job,
+raw-lwIP transport, cooperative network pumping, fail-closed board entry, and
+self-contained responsive UI pass all five C host suites and 110 Python gates.
+The GEM3/MDIO/TTC0-enabled Vivado lineage under
+`Temp/network_board_build_20260812_v1/` remains fully routed with final WNS
+`+0.208 ns` and WHS `+0.010 ns`. The final isolated Vitis workspace is
+`F:\vwk`; its manifest SHA256 is
+`33CA1A825AFF72DD7A59C9938C0B0E838062C5C6E18EE1826432341E7A85E401`,
+all three builds return zero, and the final `a_qweb.elf` SHA256 is
+`38A772F093CE3996177640863888B6700F1AC26F7BCB82E5F2159C0EF46F89DA`.
+
+Ethernet Gate 1 passed on the same board/port with YT8521 address 7 and ID
+`0x0000011A`, 1000-Mb/s full duplex, ping `10/10`, and a byte-exact 75-byte TCP
+echo. That report is hash-bound to the earlier `F:\vwc` echo oracle, while the
+final `F:\vwk` QWEB image independently re-established the same PHY/link and
+then passed the complete Web chain. The preserved `final_v4` cold launch loaded
+all 61 runtime segments and checked all 281 QMAP headers. Two immediate strict
+HTTP runs returned IDs `264,26291`, Q26 scores `1296911292,1225544557`, and
+exact 14-byte text ` a fascinating`; live Edge was then observed to complete
+Jobs 3 and 4 through the same path. The retained screenshot independently
+proves Job 4 `Board ready / done / MAX_NEW`, and a live console check returned
+zero messages. This closes the requested JTAG-loaded first-version demo. Autonomous
+BOOT.BIN/SD/QSPI boot, automatic runtime/weight loading, production network
+lifecycle, persistent/multi-client HTTP, and performance work are optional
+productization scope rather than unfinished demo correctness.
 Start with
 [Source/CURRENT_STATE.md](Source/CURRENT_STATE.md) for the live handoff.
 

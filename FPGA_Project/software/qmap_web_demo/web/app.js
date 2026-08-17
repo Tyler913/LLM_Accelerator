@@ -8,7 +8,7 @@
     maxRequestBytes: 8192,
     maxOutputBytes: 32768,
     requestTimeoutMs: 5000,
-    pollIntervalMs: 800,
+    pollIntervalMs: 3000,
     healthIntervalMs: 5000
   });
   const ACTIVE_STATES = new Set(["queued", "running"]);
@@ -112,6 +112,16 @@
     return fallback;
   }
 
+  function healthFailureAction(quiet, connected, failureStreak, protocolError, jobActive) {
+    if (jobActive) {
+      return "stale";
+    }
+    if (quiet && connected && failureStreak === 0 && !protocolError) {
+      return "retry";
+    }
+    return "offline";
+  }
+
   const testApi = Object.freeze({
     LIMITS,
     UiInputError,
@@ -123,7 +133,8 @@
     decodeOutputBytes,
     isActiveState,
     isTerminalState,
-    errorMessage
+    errorMessage,
+    healthFailureAction
   });
   if (typeof module !== "undefined" && module.exports) {
     module.exports = testApi;
@@ -173,6 +184,7 @@
     pollTimer: null,
     healthTimer: null,
     networkFailures: 0,
+    healthFailureStreak: 0,
     expectedMaxNew: 0,
     lastOutputLength: -1
   };
@@ -207,7 +219,8 @@
 
   function refreshControls() {
     const locked = state.submitting || state.activeJobId !== null;
-    const canSubmit = state.connected && state.ready && !remoteBusy() && !locked;
+    const canSubmit = state.connected && state.ready && !remoteBusy() && !locked &&
+      !state.healthPending;
     elements.generateButton.disabled = !canSubmit;
     elements.promptInput.disabled = locked;
     elements.tokenInput.disabled = locked;
@@ -489,16 +502,19 @@
   }
 
   async function checkHealth(quiet) {
-    if (state.healthPending || state.activeJobId !== null) return;
+    if (state.healthPending || state.submitting || state.activeJobId !== null) return;
     state.healthPending = true;
+    let nextHealthDelay = LIMITS.healthIntervalMs;
     if (!quiet) setConnection("checking", "Checking board");
     refreshControls();
     try {
       const health = await apiJson("/api/health", { method: "GET" });
+      if (state.submitting || state.activeJobId !== null) return;
       if (health.service !== "qmap-web" || typeof health.ready !== "boolean" ||
           typeof health.job_state !== "string") {
         throw new ApiError(200, "invalid_health", "The board returned an invalid health response.");
       }
+      state.healthFailureStreak = 0;
       state.connected = true;
       state.ready = health.ready;
       state.remoteState = health.job_state;
@@ -513,6 +529,19 @@
         setRuntimeMessage("The HTTP service answered, but the generation runtime is not initialized.", "error");
       }
     } catch (error) {
+      const action = healthFailureAction(
+        quiet,
+        state.connected,
+        state.healthFailureStreak,
+        error instanceof ApiError,
+        state.submitting || state.activeJobId !== null
+      );
+      if (action === "stale") return;
+      state.healthFailureStreak += 1;
+      if (action === "retry") {
+        nextHealthDelay = 500;
+        return;
+      }
       state.connected = false;
       state.ready = false;
       state.remoteState = "unknown";
@@ -523,13 +552,13 @@
     } finally {
       state.healthPending = false;
       refreshControls();
-      scheduleHealth(LIMITS.healthIntervalMs);
+      scheduleHealth(nextHealthDelay);
     }
   }
 
   async function submitGeneration(event) {
     event.preventDefault();
-    if (state.submitting || state.activeJobId !== null) return;
+    if (state.submitting || state.healthPending || state.activeJobId !== null) return;
     showFormError("");
 
     let request;

@@ -1,18 +1,19 @@
 # Current State
 
-Last updated: 2026-08-12
+Last updated: 2026-08-17
 
 This file is the concise working-state handoff. For durable project context,
 read `Source/PROJECT_CONTEXT.md` first. For detailed address planning, read
 `Source/FPGA_MEMORY_MAP.md`. For descriptor-based PL DDR4 tensor staging, read
 `Source/QMAP_FORMAT.md`. For workflow rules, read `Source/AGENTS.md`.
 
-## Current Goal
+## First-Version Goal - Complete
 
-Build a first FPGA demo that can take a prompt and generate text with the local
-`Qwen/Qwen3-0.6B-Base` model.
+The first FPGA demo now takes a prompt and generates text with the local
+`Qwen/Qwen3-0.6B-Base` model through UART, PC Web Serial, or the board-hosted
+Web UI. The preferred Web path passed physical acceptance on 2026-08-17.
 
-Current first-version target:
+Accepted first-version contract:
 
 - Serial prefill and single-token cached decode
 - Greedy argmax text continuation
@@ -20,7 +21,7 @@ Current first-version target:
   and debug output
 - PL-side `next_token = run_one_token(input_token, position)` model path
 - PL owns model-side prefill and decode math
-- Initial context target: 128 or 256 tokens
+- Context capacity: 256 tokens
 - Required PL DDR4 weight path: custom Q4 weight-only format
 - PL compute blocks use hand-written Verilog/SystemVerilog by default
 
@@ -1057,7 +1058,7 @@ Previous useful checkpoint:
 - The row1024 integrated PL DDR4 design used `M_AXI_HPM0_FPD`; the BRAM smoke
   aperture moved to `0xA000_0000`.
 
-## Current Open Gaps
+## Current Completion Summary
 
 - All local release gates and the first physical full28 gate are closed. The
   UART evidence is preserved under
@@ -1068,8 +1069,8 @@ Previous useful checkpoint:
   all 61 PL-DDR segment downloads. The generator and package audit now enforce
   the cache-bypass form.
 - LUT utilization is `92.58%`, while CLB usage is `99.76%`. Treat the routed
-  implementation as a correctness-first hardware baseline and defer extra
-  parallelism or performance tuning until after the next functional slice.
+  implementation as a correctness-first hardware baseline. Add parallelism or
+  performance tuning only if a new optimization/productization phase is opened.
 - The general PS prompt/decode application now exists at
   `FPGA_Project/software/qmap_prompt_demo/`. `qot_session_step()` performs
   serial prompt prefill, feeds each observed argmax result into the next
@@ -1143,8 +1144,19 @@ Previous useful checkpoint:
   `POST /api/generate`, `GET /api/generate/<id>`, and the binary-safe
   `GET /api/generate/<id>/output`.
 - The raw-lwIP adapter now handles fragmented pbuf chains, one bounded
-  connection, exact Host checking, incremental TX/ACK, request and absolute
-  connection deadlines, asynchronous HTTP 202, and ROM static assets. The
+  connection, exact Host checking, incremental TX, request and absolute
+  connection deadlines, asynchronous HTTP 202, and ROM static assets. Every
+  response byte is written with `TCP_WRITE_FLAG_COPY`; once all bytes are
+  queued, the adapter releases its application connection slot with a graceful
+  close instead of waiting for the final ACK. Retired PCBs are demoted to
+  `TCP_PRIO_MIN`, while an explicit `ERR_MEM` restores the prior callbacks,
+  state, and priority for retry. This closes the repeated-request 30-second
+  stall observed with the earlier ACK-gated implementation. A separate stress
+  diagnostic passed 128 sequential distinct-source-port health connections.
+  Deliberately rebinding the identical client source port immediately after a
+  server-initiated close can still wait on lwIP active-close TIME_WAIT; normal
+  accepted HTTP/browser flows do not do this. Persistent HTTP/keep-alive is an
+  optional future improvement for aggressive connection churn. The
   board runner pumps `xemacif_input` plus TTC fast/slow timers every bounded
   poll interval during each full28 token and validates the complete layer mask
   and zero-error result. The AMD echo-template entry replacement checks DDR
@@ -1155,37 +1167,88 @@ Previous useful checkpoint:
 - The five strict C host executables pass: 19 HTTP/JSON cases, the exact
   tokenizer/job chain, 11 router/status cases, the raw-lwIP mock suite, and the
   final board-entry assembly. Every production C function still passes the
-  1 KiB stack-frame gate. The 55 Python tests also pass: 22 network-XSA gates,
-  16 isolated-workspace/provenance/build/ELF gates, 14 deterministic
+  1 KiB stack-frame gate. The 110 Python tests also pass: 22 network-XSA gates,
+  16 isolated-workspace/provenance/build/ELF gates, 12 one-command Ethernet
+  Gate-1/parser/evidence gates, 16 bounded QWEB-UART gates, six audited
+  board-launcher gates, 21 mock-HTTP/evidence gates, 14 deterministic
   asset/UI/Node/GCC checks, and three exact YT8521 patcher gates. The generated
   asset source-set SHA256 is
-  `D2FC8E450BEF24ABED3E44B3D05402972FF7AC33F813EC8F289ABE6725457090`.
-  A real Chromium exercise against mocked API responses completed the exact
-  `264,26291` / ` a fascinating` UI flow with no console error.
-- A clean real Vitis 2025.1.1 build at `F:\vwc` records platform, echo, and Web
-  build result `0` in `network_workspace_manifest.json`. Its private EmbeddedSW
-  repository stages an exact patched `lwip220_v1_2`; the BSP-copied PHY source
-  SHA256 is
+  `16ECE514A1489EFB3C4BC959BC983FA9229025AB412504F4349EDF9B8A2E8116`.
+  The final UI uses a 3000-ms job poll, serializes health checks and generation
+  submission, and preserves the prior ready state through one isolated quiet
+  health timeout before retrying. Browser-mocked and live-board flows both pass.
+- The final clean Vitis 2025.1.1 build is `F:\vwk`. Its
+  `network_workspace_manifest.json` is 27,264 bytes with SHA256
+  `33CA1A825AFF72DD7A59C9938C0B0E838062C5C6E18EE1826432341E7A85E401`
+  and records platform, echo, and Web build result `0`. The BSP uses RAW API,
+  `MEMP_NUM_TCP_PCB=256`, and pbuf pool 2048. The private EmbeddedSW repository
+  stages exact patched `lwip220_v1_2`; the BSP-copied PHY source SHA256 remains
   `4900358C786793496501E0A19D0970E43AD70E378D909AB2C8D7458CC1BAC930`.
-  The audited `a_net_echo.elf` SHA256 is
-  `93192F0D37741604036F1B502CC7BAE257EE8E8151103F3F09415C592FBA5C67`.
-  The 5,002,800-byte AArch64 `a_qweb.elf` contains the required Web, session,
-  tokenizer, and board-runner symbols and has SHA256
-  `3B83026EC7647A79D6DF2D9FE584A2555157E5D87A212F7ADB478EBD036E8650`.
-  These are network-XSA and build PASS results, not physical Ethernet/Web PASS.
-- Physical `a_net_echo` bring-up reached exact Motorcomm YT8521 detection at
-  PHY address 7 with ID `0x0000011A`. The patched path then timed out waiting
-  for auto-negotiation; the BMSR link and auto-negotiation-complete bits stayed
-  clear. Both Windows wired adapters were `Disconnected`, so no IP, ping, or
-  TCP echo acceptance was possible. Gate 1 remains open, and `a_qweb` has not
-  yet received physical HTTP or prompt-to-text acceptance. Evidence is under
-  `Temp/network_echo_board_acceptance_20260812_v3_yt8521/`.
+  The 1,026,704-byte `a_net_echo.elf` SHA256 is
+  `5590959D661B4ECA1AE88DF7B50537B816851FC0E14ED14FD7754371B2F7838B`;
+  the 5,003,296-byte `a_qweb.elf` SHA256 is
+  `38A772F093CE3996177640863888B6700F1AC26F7BCB82E5F2159C0EF46F89DA`;
+  exported `liblwip220.a` SHA256 is
+  `A01C6459A8F1BB7CDE252B64A30A798ADEB60889E4BF522506B453057A8C22A7`.
+- Ethernet Gate 1 is physically closed. The immutable report at
+  `Temp/network_echo_gate1_20260817_direct_v2/acceptance.json` has SHA256
+  `B7DFF37B2328B97242982A852A45EAC045C3AE3F5D90380F41F3969B040D9212`
+  and proves YT8521 address 7/ID `0x0000011A`, 1000-Mb/s full duplex, board
+  `192.168.1.10`, ping `10/10`, and an exact 75-byte port-7 echo. That oracle is
+  hash-bound to the earlier `F:\vwc` echo image, so it proves the same physical
+  hardware/port rather than claiming a hash-bound `F:\vwk` echo run. The final
+  `F:\vwk` QWEB startup independently re-proved the same PHY identity, link,
+  and address before HTTP acceptance.
+- The final physical-Web tooling is now durable source. `run_qweb_board.ps1`
+  audits the exact `F:\vwk` network lineage and the board-accepted v13 runtime,
+  including all 61 segment hashes, addresses, non-overlap, loader commands,
+  281 QMAP headers, patched PHY archive, and final Web ELF, before XSDB can run.
+  A physical launch now atomically claims an active evidence directory before
+  XSDB, pins the complete Vitis 2025.1 batch/helper/executable chain, pins the
+  wrapper and Tcl source hashes, and executes `-no-ini` from a new isolated
+  home/current directory with inherited Xilinx/RDI/Tcl/PATH overrides removed.
+  It preserves the full ordered-marker `xsdb.log` and writes one immutable
+  `launch.json` with a UUID, exact argv/environment policy, and all audited
+  build/runtime hashes.
+  `capture_qweb_uart.py` binds that launch to the ordered
+  YT8521/link/IP/DDR/tokenizer/QWEB startup record, preserves structured JSON
+  even on serial failure, records the actual UART READY byte-arrival time, and
+  rejects a READY record that predates the bound launch. It uses a 3600-second
+  cold-load budget.
+  `run_qweb_http_acceptance.py` reparses the raw UART, revalidates the launch
+  report and two-hour freshness window, verifies the exact ROM page, health,
+  HTTP 202/status/output flow, requires an actual `running` response during PL
+  inference, and checks exact tokens, Q26 scores, stop reason, and raw bytes
+  ` a fascinating`.
+- Ethernet Gate 2 is physically closed by
+  `Temp/qweb_board_acceptance_20260817_final_v4/`. Its launch UUID is
+  `aca9c471-93f1-414f-8e04-b1a431bf39ea`; `launch.json` SHA256 is
+  `FC7A183366765BA16AA9B0B6B86C3D4A086C3DCDFD92E7EA9DD775FEB943CAD1`
+  and `startup.json` SHA256 is
+  `DB8CCD18E2E9B1C72AB2B40E2834C6FF78A159814DC0112C6E5EB409A5049D1D`.
+  One cold launch loaded 61/61 runtime segments (394,547,200 bytes), checked all
+  281 QMAP headers, observed DDR status `0x5`, tokenizer metadata, YT8521
+  1000-full, and `QWEB READY http://192.168.1.10:80/`. Two strict HTTP runs with
+  no cooldown passed as Jobs 1 and 2; their report SHA256 values are
+  `7CE1716AFCD28221E38F9485804F67C94211D6B9092F084D5FEE6B0FACA5B5A1`
+  and `E8ACDCCE6AFFF467A93404F3B8F724B6A2D8E59470319C7C298D0A7F65DEECDB`.
+  Each observed `running`, finished `done / MAX_NEW`, and returned exact IDs
+  `264,26291`, scores `1296911292,1225544557`, and 14-byte output
+  ` a fascinating`. Live Edge was observed to complete Jobs 3 and 4 with the
+  same visible result. The preserved `browser_final.png` independently proves
+  Job 4 `Board ready / done / MAX_NEW` and has SHA256
+  `D22D9D153B52940220143A88A5029868C6BC998573386F5CCDFE8C9AF711D9FC`,
+  while a live console check returned zero messages.
+  Same-run provenance assumes the controlled one-board bench where JTAG,
+  COM230, and PS Ethernet attach to the same target; the application does not
+  emit a board-unique nonce.
 
 ### Historical Gap-Closure Log (through 2026-07-13)
 
 The bullets below preserve the incremental path that closed the single-token
 datapath. Present-tense statements in this historical log must not override the
-current board-candidate summary or `Immediate Next Step`.
+  current board-candidate summary or `First-Version Completion and Optional
+  Next Scope`.
 
 - PL DDR4 is accessible from PS. The PL QMAP descriptor reader, payload
   fetcher, Q4 dot64 compute chain, row1024 compute chain, and read-only AXI4
@@ -1675,27 +1738,27 @@ current board-candidate summary or `Immediate Next Step`.
   and that reduced path has now passed synthesis, implementation, bitstream
   generation, Vitis launch, and board validation.
 
-## Immediate Next Step
+## First-Version Completion and Optional Next Scope
 
-The correctness-first UART product path is closed. It already provides a usable
-demo through either the UART CLI or the PC-hosted Web Serial GUI; neither needs
-board Ethernet. The remaining preferred-interface work is the board-hosted Web
-path:
+The requested correctness-first PS work is complete for the JTAG-loaded first
+version. The project now provides all three demo surfaces: UART CLI, PC-hosted
+Web Serial, and the preferred board-hosted Web UI. The accepted Web path is:
 
-1. Connect the board's `PS_ETH` RJ45 to a router/switch or a PC wired adapter
-   that Windows reports as `Up`; do not change PHY software while the host link
-   remains physically disconnected.
-2. Rerun the patched `a_net_echo` from the audited `F:\vwc` lineage and require
-   resolved link speed, an assigned/fallback IP, repeated ping, and exact TCP
-   echo on port 7 before closing Gate 1.
-3. Load the preserved 61-segment runtime and run the already built `a_qweb`.
-   Require the page and `/api/health`, responsiveness during PL inference, and
-   two exact physical browser runs of `The future of FPGA is -> a fascinating`
-   before closing Gate 2.
-4. After the board-hosted Web PASS, decide whether the first release stops at
-   JTAG-loaded bench operation or also includes boot image, SD/QSPI storage, and
-   an autonomous PS weight loader. The latter is required for power-on product
-   autonomy, not for the already working bench demo.
+```text
+browser prompt -> PS HTTP/JSON -> PS tokenizer -> PL full28 inference
+               -> PS detokenizer -> HTTP bytes -> browser output
+```
+
+Gate 1 and Gate 2 are both closed, including two immediate strict HTTP runs and
+two live-browser jobs with the exact expected continuation. No further PS or PL
+correctness feature is required to call this bench-demo project complete.
+
+Any next work is a new productization or performance scope. Candidate items are
+BOOT.BIN creation, SD/QSPI boot, automatic runtime and weight loading, a
+production DHCP/link-recovery lifecycle, persistent or multi-client HTTP,
+board-unique JTAG/UART/Ethernet binding, longer arbitrary-prompt coverage, and
+performance tuning. These are required for a power-on autonomous product, not
+for the accepted first-version demo.
 
 Do not return to smaller row/DDR smokes unless a specific integration failure
 requires that diagnostic slice. Performance and extra parallelism remain after

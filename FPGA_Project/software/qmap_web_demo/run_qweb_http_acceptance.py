@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import http.client
 import ipaddress
@@ -19,9 +19,13 @@ import tempfile
 import time
 from typing import Any, Callable, Mapping, Protocol, Sequence
 from urllib.parse import urlsplit
+import uuid
+
+import capture_qweb_uart
 
 
 REPORT_SCHEMA_VERSION = 1
+MAX_STARTUP_AGE_SECONDS = 7200.0
 EXPECTED_PROMPT = "The future of FPGA is"
 EXPECTED_PROMPT_TOKEN_IDS = (785, 3853, 315, 89462, 374)
 EXPECTED_GENERATED_TOKEN_IDS = (264, 26291)
@@ -563,7 +567,7 @@ class AcceptanceRunner:
         deadline = self.monotonic() + self.job_timeout
         previous: dict[str, Any] | None = None
         final_status: dict[str, Any] | None = None
-        active_status_observed = False
+        running_status_observed = False
         for _ in range(MAX_STATUS_POLLS):
             if self.monotonic() > deadline:
                 raise AcceptanceFailure(
@@ -577,12 +581,12 @@ class AcceptanceRunner:
             )
             current = self._validate_status(payload, job_id, previous)
             self.status_snapshots.append(current)
-            if current["state"] in ACTIVE_STATES:
-                active_status_observed = True
+            if current["state"] == "running":
+                running_status_observed = True
             if current["state"] == "done":
-                if not active_status_observed:
+                if not running_status_observed:
                     raise AcceptanceFailure(
-                        "job reached done before any queued/running status response; "
+                        "job reached done before any running status response; "
                         "network responsiveness during inference was not observed"
                     )
                 final_status = current
@@ -625,7 +629,7 @@ class AcceptanceRunner:
         self._validate_health(final_health, expected_state="done")
         return {
             "job_id": job_id,
-            "active_status_observed": active_status_observed,
+            "running_status_observed": running_status_observed,
             "final_status": final_status,
             "output_bytes": output_response.body,
             "output_text": output_text,
@@ -707,6 +711,123 @@ def _normalize_base_url(value: str) -> tuple[str, str, int]:
     return normalized, str(address), selected_port
 
 
+def _parse_utc(value: object, label: str) -> datetime:
+    if not isinstance(value, str):
+        raise AcceptanceFailure(f"{label} is not a UTC timestamp")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise AcceptanceFailure(f"{label} is not an ISO-8601 timestamp") from error
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        raise AcceptanceFailure(f"{label} must include an explicit UTC offset")
+    return parsed
+
+
+def _load_launch_binding(
+    value: object,
+    *,
+    startup_report: Path,
+    startup_started_utc: object,
+    startup_finished_utc: object,
+    uart_ready_utc: object,
+) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise AcceptanceFailure("QWEB startup report lacks launch provenance")
+    report_value = value.get("report")
+    report_sha = value.get("report_sha256")
+    if not isinstance(report_value, str) or not isinstance(report_sha, str):
+        raise AcceptanceFailure("QWEB startup launch provenance is incomplete")
+    launch_path = Path(report_value)
+    if not launch_path.is_absolute():
+        launch_path = startup_report.parent / launch_path
+    launch_path = launch_path.resolve(strict=True)
+    expected_path = (startup_report.parent / "launch.json").resolve(strict=True)
+    if launch_path != expected_path:
+        raise AcceptanceFailure("QWEB launch report is outside the startup evidence run")
+    launch_raw = launch_path.read_bytes()
+    actual_sha = _sha256_bytes(launch_raw)
+    if actual_sha != report_sha:
+        raise AcceptanceFailure(
+            f"QWEB launch report SHA-256 mismatch: {actual_sha} != {report_sha}"
+        )
+    launch = _parse_json_bytes(launch_raw, "QWEB launch report")
+    run_id = launch.get("run_id")
+    try:
+        canonical_run_id = str(uuid.UUID(run_id)) if isinstance(run_id, str) else ""
+    except ValueError as error:
+        raise AcceptanceFailure("QWEB launch report run_id is not a UUID") from error
+    if canonical_run_id != run_id:
+        raise AcceptanceFailure("QWEB launch report run_id is not canonical")
+    launch_evidence = launch.get("evidence_directory")
+    evidence_matches = (
+        isinstance(launch_evidence, str)
+        and Path(launch_evidence).resolve() == startup_report.parent.resolve()
+    )
+    if (
+        launch.get("schema_version") != 1
+        or launch.get("tool") != "run_qweb_board.ps1"
+        or launch.get("passed") is not True
+        or launch.get("failure") is not None
+        or launch.get("xsdb_exit_code") != 0
+        or not evidence_matches
+        or launch.get("audited") != capture_qweb_uart.EXPECTED_LAUNCH_AUDIT
+    ):
+        raise AcceptanceFailure(
+            "QWEB launch report is not a passing launch of the pinned artifact lineage"
+        )
+    try:
+        revalidated = capture_qweb_uart._load_launch_binding(
+            launch_path,
+            output_dir=startup_report.parent,
+            capture_started_utc=str(startup_started_utc),
+            uart_ready_utc=uart_ready_utc,
+        )
+    except capture_qweb_uart.StartupFailure as error:
+        raise AcceptanceFailure(f"QWEB launch provenance failed revalidation: {error}") from error
+    for name in (
+        "run_id",
+        "started_utc",
+        "finished_utc",
+        "audited",
+        "claim_sha256",
+        "xsdb_log_sha256",
+    ):
+        expected_value = revalidated.get(name)
+        if value.get(name) != expected_value:
+            raise AcceptanceFailure(
+                f"QWEB startup launch binding disagrees with launch report field {name!r}"
+            )
+    startup_started = _parse_utc(startup_started_utc, "startup started_utc")
+    uart_ready = _parse_utc(uart_ready_utc, "UART READY utc")
+    launch_started = _parse_utc(launch.get("started_utc"), "launch started_utc")
+    launch_finished = _parse_utc(launch.get("finished_utc"), "launch finished_utc")
+    startup_finished = _parse_utc(startup_finished_utc, "startup finished_utc")
+    if not (
+        startup_started <= launch_started <= uart_ready <= startup_finished
+        and launch_started <= launch_finished <= startup_finished
+    ):
+        raise AcceptanceFailure(
+            "QWEB launch/startup timestamps do not describe one ordered physical run"
+        )
+    age_seconds = (datetime.now(timezone.utc) - startup_finished).total_seconds()
+    if age_seconds < -5.0 or age_seconds > MAX_STARTUP_AGE_SECONDS:
+        raise AcceptanceFailure(
+            f"QWEB startup evidence age {age_seconds:.1f}s is outside the "
+            f"0..{MAX_STARTUP_AGE_SECONDS:.0f}s acceptance window"
+        )
+    return {
+        "report": str(launch_path),
+        "report_sha256": report_sha,
+        "run_id": run_id,
+        "started_utc": launch["started_utc"],
+        "finished_utc": launch["finished_utc"],
+        "audited": launch["audited"],
+        "claim_sha256": revalidated["claim_sha256"],
+        "xsdb_log_sha256": revalidated["xsdb_log_sha256"],
+        "startup_age_seconds": age_seconds,
+    }
+
+
 def _load_startup_binding(path: Path) -> tuple[str, dict[str, object]]:
     resolved = path.resolve(strict=True)
     raw = resolved.read_bytes()
@@ -728,6 +849,60 @@ def _load_startup_binding(path: Path) -> tuple[str, dict[str, object]]:
         or not isinstance(artifacts, dict)
     ):
         raise AcceptanceFailure("QWEB startup report lacks network/PHY/artifact evidence")
+    raw_path_value = artifacts.get("uart_raw")
+    raw_sha = artifacts.get("uart_raw_sha256")
+    if not isinstance(raw_path_value, str) or not isinstance(raw_sha, str):
+        raise AcceptanceFailure("QWEB startup report lacks raw UART provenance")
+    raw_path = Path(raw_path_value)
+    if not raw_path.is_absolute():
+        raw_path = resolved.parent / raw_path
+    raw_path = raw_path.resolve(strict=True)
+    expected_raw_path = (resolved.parent / "uart_raw.bin").resolve(strict=True)
+    if raw_path != expected_raw_path:
+        raise AcceptanceFailure("startup raw UART is outside the startup evidence run")
+    raw_uart = raw_path.read_bytes()
+    actual_raw_sha = _sha256_bytes(raw_uart)
+    if actual_raw_sha != raw_sha:
+        raise AcceptanceFailure(
+            f"startup raw UART SHA-256 mismatch: {actual_raw_sha} != {raw_sha}"
+        )
+    try:
+        reparsed = capture_qweb_uart.verify_transcript_bytes(raw_uart)
+    except capture_qweb_uart.StartupFailure as error:
+        raise AcceptanceFailure(
+            f"startup raw UART transcript verification failed: {error}"
+        ) from error
+    if reparsed.get("passed") is not True:
+        failure = reparsed.get("failure")
+        raise AcceptanceFailure(
+            "startup raw UART transcript verification failed: "
+            f"{failure if isinstance(failure, str) else 'unknown parser failure'}"
+        )
+    transcript_fields = (
+        "passed",
+        "failure",
+        "missing_milestones",
+        "qot_baseaddr",
+        "ddr_status",
+        "phy",
+        "tokenizer",
+        "network",
+    )
+    for name in transcript_fields:
+        if payload.get(name) != reparsed.get(name):
+            raise AcceptanceFailure(
+                "QWEB startup report is inconsistent with reparsed raw UART "
+                f"field {name!r}"
+            )
+
+    launch_binding = _load_launch_binding(
+        payload.get("launch_binding"),
+        startup_report=resolved,
+        startup_started_utc=payload.get("started_utc"),
+        startup_finished_utc=payload.get("finished_utc"),
+        uart_ready_utc=payload.get("uart_ready_utc"),
+    )
+
     if (
         phy.get("address") != 7
         or phy.get("id1") != 0
@@ -762,25 +937,13 @@ def _load_startup_binding(path: Path) -> tuple[str, dict[str, object]]:
         or network.get("vocab") != 151936
     ):
         raise AcceptanceFailure("QWEB startup report URL is inconsistent with Board IP")
-    raw_path_value = artifacts.get("uart_raw")
-    raw_sha = artifacts.get("uart_raw_sha256")
-    if not isinstance(raw_path_value, str) or not isinstance(raw_sha, str):
-        raise AcceptanceFailure("QWEB startup report lacks raw UART provenance")
-    raw_path = Path(raw_path_value)
-    if not raw_path.is_absolute():
-        raw_path = resolved.parent / raw_path
-    raw_path = raw_path.resolve(strict=True)
-    actual_raw_sha = _sha256_file(raw_path)
-    if actual_raw_sha != raw_sha:
-        raise AcceptanceFailure(
-            f"startup raw UART SHA-256 mismatch: {actual_raw_sha} != {raw_sha}"
-        )
     binding = {
         "report": str(resolved),
         "report_sha256": _sha256_bytes(raw),
         "uart_raw": str(raw_path),
         "uart_raw_sha256": raw_sha,
         "url": normalized,
+        "launch": launch_binding,
     }
     return normalized, binding
 
@@ -813,9 +976,17 @@ def _write_json_exclusive(path: Path, payload: dict[str, object]) -> None:
     with temporary.open("x", encoding="utf-8", newline="\n") as stream:
         json.dump(payload, stream, indent=2, sort_keys=True, ensure_ascii=False)
         stream.write("\n")
-    if path.exists():
-        raise AcceptanceFailure(f"refusing to overwrite evidence artifact: {path}")
-    os.replace(temporary, path)
+        stream.flush()
+        os.fsync(stream.fileno())
+    try:
+        os.link(temporary, path)
+    except FileExistsError as error:
+        raise AcceptanceFailure(f"refusing to overwrite evidence artifact: {path}") from error
+    except OSError as error:
+        raise AcceptanceFailure(
+            f"could not atomically commit evidence artifact without overwrite: {path}: {error}"
+        ) from error
+    temporary.unlink()
 
 
 def _write_bytes_exclusive(path: Path, data: bytes) -> None:

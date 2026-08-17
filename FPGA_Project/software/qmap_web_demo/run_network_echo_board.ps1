@@ -1,6 +1,7 @@
 param(
-    [string]$Workspace = "F:\vwn",
-    [string]$Xsdb = ""
+    [string]$Workspace = "F:\vwk",
+    [string]$Xsdb = "",
+    [switch]$AuditOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,6 +45,23 @@ function Resolve-WorkspaceDirectory {
     return $resolved
 }
 
+function Get-Sha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return ([System.BitConverter]::ToString(
+                $sha256.ComputeHash($stream)
+            )).Replace("-", "").ToLowerInvariant()
+        } finally {
+            $sha256.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 $manifestPath = Join-Path $workspacePath "network_workspace_manifest.json"
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
     throw "Successful network workspace manifest is missing: $manifestPath"
@@ -68,6 +86,7 @@ $expectedBspConfig = @(
     "lwip220|lwip220_dhcp|true",
     "lwip220|lwip220_ipv6_enable|false",
     "lwip220|lwip220_lwip_dhcp_does_acd_check|true",
+    "lwip220|lwip220_memp_n_tcp_pcb|256",
     "lwip220|lwip220_pbuf_pool_size|2048",
     "xiltimer|XILTIMER_en_interval_timer|true"
 ) | Sort-Object
@@ -104,7 +123,7 @@ if ($patchedRelative -ne "src\lwip-2.2.0\contrib\ports\xilinx\netif\xemacpsif_ph
 $patchedSource = Resolve-WorkspaceFile `
     -Path (Join-Path $overrideDirectory $patchedRelative) `
     -Label "Staged YT8521 source"
-$patchedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $patchedSource).Hash.ToLowerInvariant()
+$patchedHash = Get-Sha256 -Path $patchedSource
 if ($patchedHash -ne ([string]$override.patched_sha256).ToLowerInvariant()) {
     throw "Staged YT8521 source SHA-256 mismatch"
 }
@@ -122,7 +141,7 @@ if (-not [string]::Equals(
 )) {
     throw "Manifest BSP source path does not match the selected platform"
 }
-$builtSourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $builtSource).Hash.ToLowerInvariant()
+$builtSourceHash = Get-Sha256 -Path $builtSource
 if ($builtSourceHash -ne $patchedHash -or
     $builtSourceHash -ne ([string]$override.build_outputs.bsp_copied_source.sha256).ToLowerInvariant()) {
     throw "Vitis BSP copied source does not match the staged YT8521 patch"
@@ -141,7 +160,7 @@ if (-not [string]::Equals(
 )) {
     throw "Manifest lwip220 archive path does not match the selected platform"
 }
-$archiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()
+$archiveHash = Get-Sha256 -Path $archivePath
 if ($archiveHash -ne ([string]$override.build_outputs.export_archive.sha256).ToLowerInvariant()) {
     throw "Exported lwip220 archive SHA-256 mismatch"
 }
@@ -154,7 +173,7 @@ if ($archiveBytes.Length -lt 8 -or
 $xsaPath = Resolve-WorkspaceFile `
     -Path ([string]$manifest.xsa_snapshot) `
     -Label "Network XSA snapshot"
-$xsaHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $xsaPath).Hash.ToLowerInvariant()
+$xsaHash = Get-Sha256 -Path $xsaPath
 if ($xsaHash -ne ([string]$manifest.xsa_sha256).ToLowerInvariant()) {
     throw "Network XSA snapshot SHA-256 mismatch"
 }
@@ -169,7 +188,7 @@ if ($bitCandidates.Count -ne 1) {
     throw "Expected exactly one exported network bitstream, found $($bitCandidates.Count)"
 }
 $bitPath = $bitCandidates[0].FullName
-$bitHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $bitPath).Hash.ToLowerInvariant()
+$bitHash = Get-Sha256 -Path $bitPath
 if ($bitHash -ne ([string]$manifest.bitstream_sha256).ToLowerInvariant()) {
     throw "Exported network bitstream SHA-256 mismatch"
 }
@@ -191,7 +210,7 @@ if ($manifest.echo_application.name -ne $echoName -or
     )) {
     throw "Manifest echo ELF does not match the selected application"
 }
-$echoHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $echoPath).Hash.ToLowerInvariant()
+$echoHash = Get-Sha256 -Path $echoPath
 if ($echoHash -ne ([string]$manifest.echo_application.elf.sha256).ToLowerInvariant()) {
     throw "Network echo ELF SHA-256 mismatch"
 }
@@ -210,6 +229,15 @@ foreach ($marker in $requiredEchoMarkers) {
     if (-not $echoAscii.Contains($marker)) {
         throw "Network echo ELF lacks required YT8521 marker '$marker'"
     }
+}
+
+Write-Host "PASS audited network echo launch inputs"
+Write-Host "  bitstream SHA-256: $bitHash"
+Write-Host "  XSA SHA-256: $xsaHash"
+Write-Host "  echo ELF SHA-256: $echoHash"
+if ($AuditOnly) {
+    Write-Host "PASS audit-only mode; XSDB was not invoked"
+    return
 }
 
 if ([string]::IsNullOrWhiteSpace($Xsdb)) {
@@ -241,14 +269,7 @@ try {
     $env:QWEB_NETWORK_ECHO_ELF = $echoPath
 
     $xsdbCommand = $Xsdb
-    $xsdbArguments = @($launcher)
-    if ([System.IO.Path]::GetFileName($Xsdb) -ieq "xsdb.bat") {
-        $xsdbCommand = Join-Path (Split-Path -Parent $Xsdb) "loader.bat"
-        if (-not (Test-Path -LiteralPath $xsdbCommand -PathType Leaf)) {
-            throw "AMD loader.bat was not found next to '$Xsdb'."
-        }
-        $xsdbArguments = @("-exec", "xsdb", $launcher)
-    }
+    $xsdbArguments = @("-no-ini", $launcher)
 
     & $xsdbCommand @xsdbArguments
     if ($LASTEXITCODE -ne 0) {
@@ -262,6 +283,3 @@ try {
 }
 
 Write-Host "PASS launched audited network echo image"
-Write-Host "  bitstream SHA-256: $bitHash"
-Write-Host "  XSA SHA-256: $xsaHash"
-Write-Host "  echo ELF SHA-256: $echoHash"
