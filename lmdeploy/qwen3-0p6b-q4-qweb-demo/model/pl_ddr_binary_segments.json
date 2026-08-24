@@ -1,0 +1,3688 @@
+{
+  "format_version": 1,
+  "name": "qwen3_0p6b_pl_ddr_binary_segments",
+  "source_load_plan": "pl_ddr_runtime_load_plan.json",
+  "source_load_plan_sha256": "1682370500fa3d404b58ea9024761b843bd3c544e493ff845335b4d6283182b9",
+  "source_manifest": "full_chain_manifest.json",
+  "source_manifest_sha256": "22c0be1631f62f88527719d4aa9686f5ef5784f85b05b4cb92f5ad97742ae730",
+  "segment_count": 61,
+  "total_segment_bytes": 394547200,
+  "segments": [
+    {
+      "index": 0,
+      "file": "qwen3_runtime_00.bin",
+      "address": 17180917760,
+      "address_hex": "0x0000000400100000",
+      "nbytes": 82653184,
+      "sha256": "1cd70af73f72bba2aabb1959e9ad91b645fab78d81aeb49c458fcd2f2bcdfa37",
+      "entries": [
+        {
+          "name": "tied_embedding_weight",
+          "operation": "file",
+          "address": 17180917760,
+          "nbytes": 77791232
+        },
+        {
+          "name": "tied_embedding_scale",
+          "operation": "file",
+          "address": 17258708992,
+          "nbytes": 4861952
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "file": "qwen3_runtime_01.bin",
+      "address": 17263755264,
+      "address_hex": "0x0000000405000000",
+      "nbytes": 8486912,
+      "sha256": "323d8693c40b88e355c7ef1aa7f5e39145c4810b16cbab062015ab26a34f3734",
+      "entries": [
+        {
+          "name": "layer0.qkv_qmap",
+          "operation": "file",
+          "address": 17263755264,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer0.o_proj_weight",
+          "operation": "file",
+          "address": 17266049024,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer0.o_proj_scale",
+          "operation": "file",
+          "address": 17267097600,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer0.mlp_gate_weight",
+          "operation": "file",
+          "address": 17267163136,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer0.mlp_gate_scale",
+          "operation": "file",
+          "address": 17268736000,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer0.mlp_up_weight",
+          "operation": "file",
+          "address": 17268867072,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer0.mlp_up_scale",
+          "operation": "file",
+          "address": 17270439936,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer0.mlp_down_weight",
+          "operation": "file",
+          "address": 17270571008,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer0.mlp_down_scale",
+          "operation": "file",
+          "address": 17272143872,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "file": "qwen3_runtime_02.bin",
+      "address": 17272406016,
+      "address_hex": "0x0000000405840000",
+      "nbytes": 8486912,
+      "sha256": "f51cf862354f0385cf8f9c2f0a0c32e7a7ad12b2f549694e2b6ba4b95c4ab4a6",
+      "entries": [
+        {
+          "name": "layer1.qkv_qmap",
+          "operation": "file",
+          "address": 17272406016,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer1.o_proj_weight",
+          "operation": "file",
+          "address": 17274699776,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer1.o_proj_scale",
+          "operation": "file",
+          "address": 17275748352,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer1.mlp_gate_weight",
+          "operation": "file",
+          "address": 17275813888,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer1.mlp_gate_scale",
+          "operation": "file",
+          "address": 17277386752,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer1.mlp_up_weight",
+          "operation": "file",
+          "address": 17277517824,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer1.mlp_up_scale",
+          "operation": "file",
+          "address": 17279090688,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer1.mlp_down_weight",
+          "operation": "file",
+          "address": 17279221760,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer1.mlp_down_scale",
+          "operation": "file",
+          "address": 17280794624,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "file": "qwen3_runtime_03.bin",
+      "address": 17281056768,
+      "address_hex": "0x0000000406080000",
+      "nbytes": 8486912,
+      "sha256": "7b7267c91bf0c5318b09b0b5da207a0030c3c1c0707d443880f4ab2f5afd6a13",
+      "entries": [
+        {
+          "name": "layer2.qkv_qmap",
+          "operation": "file",
+          "address": 17281056768,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer2.o_proj_weight",
+          "operation": "file",
+          "address": 17283350528,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer2.o_proj_scale",
+          "operation": "file",
+          "address": 17284399104,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer2.mlp_gate_weight",
+          "operation": "file",
+          "address": 17284464640,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer2.mlp_gate_scale",
+          "operation": "file",
+          "address": 17286037504,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer2.mlp_up_weight",
+          "operation": "file",
+          "address": 17286168576,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer2.mlp_up_scale",
+          "operation": "file",
+          "address": 17287741440,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer2.mlp_down_weight",
+          "operation": "file",
+          "address": 17287872512,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer2.mlp_down_scale",
+          "operation": "file",
+          "address": 17289445376,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "file": "qwen3_runtime_04.bin",
+      "address": 17289707520,
+      "address_hex": "0x00000004068C0000",
+      "nbytes": 8486912,
+      "sha256": "5a82eccbd0d9221090cd9f3d4892be4011490868ade7b4ea5435ab11f2d2d5b0",
+      "entries": [
+        {
+          "name": "layer3.qkv_qmap",
+          "operation": "file",
+          "address": 17289707520,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer3.o_proj_weight",
+          "operation": "file",
+          "address": 17292001280,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer3.o_proj_scale",
+          "operation": "file",
+          "address": 17293049856,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer3.mlp_gate_weight",
+          "operation": "file",
+          "address": 17293115392,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer3.mlp_gate_scale",
+          "operation": "file",
+          "address": 17294688256,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer3.mlp_up_weight",
+          "operation": "file",
+          "address": 17294819328,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer3.mlp_up_scale",
+          "operation": "file",
+          "address": 17296392192,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer3.mlp_down_weight",
+          "operation": "file",
+          "address": 17296523264,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer3.mlp_down_scale",
+          "operation": "file",
+          "address": 17298096128,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "file": "qwen3_runtime_05.bin",
+      "address": 17298358272,
+      "address_hex": "0x0000000407100000",
+      "nbytes": 8486912,
+      "sha256": "a3525f4ec23320b61223ca74d72e280e4bfc7e59e44f07fed4ed70f2383da77a",
+      "entries": [
+        {
+          "name": "layer4.qkv_qmap",
+          "operation": "file",
+          "address": 17298358272,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer4.o_proj_weight",
+          "operation": "file",
+          "address": 17300652032,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer4.o_proj_scale",
+          "operation": "file",
+          "address": 17301700608,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer4.mlp_gate_weight",
+          "operation": "file",
+          "address": 17301766144,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer4.mlp_gate_scale",
+          "operation": "file",
+          "address": 17303339008,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer4.mlp_up_weight",
+          "operation": "file",
+          "address": 17303470080,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer4.mlp_up_scale",
+          "operation": "file",
+          "address": 17305042944,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer4.mlp_down_weight",
+          "operation": "file",
+          "address": 17305174016,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer4.mlp_down_scale",
+          "operation": "file",
+          "address": 17306746880,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "file": "qwen3_runtime_06.bin",
+      "address": 17307009024,
+      "address_hex": "0x0000000407940000",
+      "nbytes": 8486912,
+      "sha256": "d20e2416ce8914ae8893c369b229d80fc7de42f5828f2dd661cc9303fb574d41",
+      "entries": [
+        {
+          "name": "layer5.qkv_qmap",
+          "operation": "file",
+          "address": 17307009024,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer5.o_proj_weight",
+          "operation": "file",
+          "address": 17309302784,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer5.o_proj_scale",
+          "operation": "file",
+          "address": 17310351360,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer5.mlp_gate_weight",
+          "operation": "file",
+          "address": 17310416896,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer5.mlp_gate_scale",
+          "operation": "file",
+          "address": 17311989760,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer5.mlp_up_weight",
+          "operation": "file",
+          "address": 17312120832,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer5.mlp_up_scale",
+          "operation": "file",
+          "address": 17313693696,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer5.mlp_down_weight",
+          "operation": "file",
+          "address": 17313824768,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer5.mlp_down_scale",
+          "operation": "file",
+          "address": 17315397632,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "file": "qwen3_runtime_07.bin",
+      "address": 17315659776,
+      "address_hex": "0x0000000408180000",
+      "nbytes": 8486912,
+      "sha256": "3287ff9e9709e8eb62c62f036178befc07f57304df0ca2a2c691e359772cedcc",
+      "entries": [
+        {
+          "name": "layer6.qkv_qmap",
+          "operation": "file",
+          "address": 17315659776,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer6.o_proj_weight",
+          "operation": "file",
+          "address": 17317953536,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer6.o_proj_scale",
+          "operation": "file",
+          "address": 17319002112,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer6.mlp_gate_weight",
+          "operation": "file",
+          "address": 17319067648,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer6.mlp_gate_scale",
+          "operation": "file",
+          "address": 17320640512,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer6.mlp_up_weight",
+          "operation": "file",
+          "address": 17320771584,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer6.mlp_up_scale",
+          "operation": "file",
+          "address": 17322344448,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer6.mlp_down_weight",
+          "operation": "file",
+          "address": 17322475520,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer6.mlp_down_scale",
+          "operation": "file",
+          "address": 17324048384,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "file": "qwen3_runtime_08.bin",
+      "address": 17324310528,
+      "address_hex": "0x00000004089C0000",
+      "nbytes": 8486912,
+      "sha256": "719fd5df611301d6a0588528b33bf86cdb69fe5e241e33b6aebc5e69fc9026c0",
+      "entries": [
+        {
+          "name": "layer7.qkv_qmap",
+          "operation": "file",
+          "address": 17324310528,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer7.o_proj_weight",
+          "operation": "file",
+          "address": 17326604288,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer7.o_proj_scale",
+          "operation": "file",
+          "address": 17327652864,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer7.mlp_gate_weight",
+          "operation": "file",
+          "address": 17327718400,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer7.mlp_gate_scale",
+          "operation": "file",
+          "address": 17329291264,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer7.mlp_up_weight",
+          "operation": "file",
+          "address": 17329422336,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer7.mlp_up_scale",
+          "operation": "file",
+          "address": 17330995200,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer7.mlp_down_weight",
+          "operation": "file",
+          "address": 17331126272,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer7.mlp_down_scale",
+          "operation": "file",
+          "address": 17332699136,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "file": "qwen3_runtime_09.bin",
+      "address": 17332961280,
+      "address_hex": "0x0000000409200000",
+      "nbytes": 8486912,
+      "sha256": "1fd4624e85a01733ae87cacfb889668af1628b41cb9720a41f1856356158eac9",
+      "entries": [
+        {
+          "name": "layer8.qkv_qmap",
+          "operation": "file",
+          "address": 17332961280,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer8.o_proj_weight",
+          "operation": "file",
+          "address": 17335255040,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer8.o_proj_scale",
+          "operation": "file",
+          "address": 17336303616,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer8.mlp_gate_weight",
+          "operation": "file",
+          "address": 17336369152,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer8.mlp_gate_scale",
+          "operation": "file",
+          "address": 17337942016,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer8.mlp_up_weight",
+          "operation": "file",
+          "address": 17338073088,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer8.mlp_up_scale",
+          "operation": "file",
+          "address": 17339645952,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer8.mlp_down_weight",
+          "operation": "file",
+          "address": 17339777024,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer8.mlp_down_scale",
+          "operation": "file",
+          "address": 17341349888,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 10,
+      "file": "qwen3_runtime_10.bin",
+      "address": 17341612032,
+      "address_hex": "0x0000000409A40000",
+      "nbytes": 8486912,
+      "sha256": "238cef2782056a24e97314da78021f733343e976ba8d0b55ab34a7624ec520de",
+      "entries": [
+        {
+          "name": "layer9.qkv_qmap",
+          "operation": "file",
+          "address": 17341612032,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer9.o_proj_weight",
+          "operation": "file",
+          "address": 17343905792,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer9.o_proj_scale",
+          "operation": "file",
+          "address": 17344954368,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer9.mlp_gate_weight",
+          "operation": "file",
+          "address": 17345019904,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer9.mlp_gate_scale",
+          "operation": "file",
+          "address": 17346592768,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer9.mlp_up_weight",
+          "operation": "file",
+          "address": 17346723840,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer9.mlp_up_scale",
+          "operation": "file",
+          "address": 17348296704,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer9.mlp_down_weight",
+          "operation": "file",
+          "address": 17348427776,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer9.mlp_down_scale",
+          "operation": "file",
+          "address": 17350000640,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 11,
+      "file": "qwen3_runtime_11.bin",
+      "address": 17350262784,
+      "address_hex": "0x000000040A280000",
+      "nbytes": 8486912,
+      "sha256": "323a92b8793fecf6472bd0435f4abf10e01ef6002f2cf6fbe6f26fcd642de8c9",
+      "entries": [
+        {
+          "name": "layer10.qkv_qmap",
+          "operation": "file",
+          "address": 17350262784,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer10.o_proj_weight",
+          "operation": "file",
+          "address": 17352556544,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer10.o_proj_scale",
+          "operation": "file",
+          "address": 17353605120,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer10.mlp_gate_weight",
+          "operation": "file",
+          "address": 17353670656,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer10.mlp_gate_scale",
+          "operation": "file",
+          "address": 17355243520,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer10.mlp_up_weight",
+          "operation": "file",
+          "address": 17355374592,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer10.mlp_up_scale",
+          "operation": "file",
+          "address": 17356947456,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer10.mlp_down_weight",
+          "operation": "file",
+          "address": 17357078528,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer10.mlp_down_scale",
+          "operation": "file",
+          "address": 17358651392,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 12,
+      "file": "qwen3_runtime_12.bin",
+      "address": 17358913536,
+      "address_hex": "0x000000040AAC0000",
+      "nbytes": 8486912,
+      "sha256": "e93497f7a0d0680526634dc050e7a122aa0950b2d1d20c612d283fbd5a7535d9",
+      "entries": [
+        {
+          "name": "layer11.qkv_qmap",
+          "operation": "file",
+          "address": 17358913536,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer11.o_proj_weight",
+          "operation": "file",
+          "address": 17361207296,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer11.o_proj_scale",
+          "operation": "file",
+          "address": 17362255872,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer11.mlp_gate_weight",
+          "operation": "file",
+          "address": 17362321408,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer11.mlp_gate_scale",
+          "operation": "file",
+          "address": 17363894272,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer11.mlp_up_weight",
+          "operation": "file",
+          "address": 17364025344,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer11.mlp_up_scale",
+          "operation": "file",
+          "address": 17365598208,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer11.mlp_down_weight",
+          "operation": "file",
+          "address": 17365729280,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer11.mlp_down_scale",
+          "operation": "file",
+          "address": 17367302144,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 13,
+      "file": "qwen3_runtime_13.bin",
+      "address": 17367564288,
+      "address_hex": "0x000000040B300000",
+      "nbytes": 8486912,
+      "sha256": "c2d5f72725fa7122c5ae3e33504f22c3ae145ac10a70346dde6712ff5b57a7cc",
+      "entries": [
+        {
+          "name": "layer12.qkv_qmap",
+          "operation": "file",
+          "address": 17367564288,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer12.o_proj_weight",
+          "operation": "file",
+          "address": 17369858048,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer12.o_proj_scale",
+          "operation": "file",
+          "address": 17370906624,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer12.mlp_gate_weight",
+          "operation": "file",
+          "address": 17370972160,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer12.mlp_gate_scale",
+          "operation": "file",
+          "address": 17372545024,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer12.mlp_up_weight",
+          "operation": "file",
+          "address": 17372676096,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer12.mlp_up_scale",
+          "operation": "file",
+          "address": 17374248960,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer12.mlp_down_weight",
+          "operation": "file",
+          "address": 17374380032,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer12.mlp_down_scale",
+          "operation": "file",
+          "address": 17375952896,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 14,
+      "file": "qwen3_runtime_14.bin",
+      "address": 17376215040,
+      "address_hex": "0x000000040BB40000",
+      "nbytes": 8486912,
+      "sha256": "6510e67a0ebc02fc137cd550a2ee494693bf1e106706648d31c51cda90010d07",
+      "entries": [
+        {
+          "name": "layer13.qkv_qmap",
+          "operation": "file",
+          "address": 17376215040,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer13.o_proj_weight",
+          "operation": "file",
+          "address": 17378508800,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer13.o_proj_scale",
+          "operation": "file",
+          "address": 17379557376,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer13.mlp_gate_weight",
+          "operation": "file",
+          "address": 17379622912,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer13.mlp_gate_scale",
+          "operation": "file",
+          "address": 17381195776,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer13.mlp_up_weight",
+          "operation": "file",
+          "address": 17381326848,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer13.mlp_up_scale",
+          "operation": "file",
+          "address": 17382899712,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer13.mlp_down_weight",
+          "operation": "file",
+          "address": 17383030784,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer13.mlp_down_scale",
+          "operation": "file",
+          "address": 17384603648,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 15,
+      "file": "qwen3_runtime_15.bin",
+      "address": 17384865792,
+      "address_hex": "0x000000040C380000",
+      "nbytes": 8486912,
+      "sha256": "ec60ca6407a7bf2d72a702c53dae3842629f25f023bbe2b6fc276aee854aa9fb",
+      "entries": [
+        {
+          "name": "layer14.qkv_qmap",
+          "operation": "file",
+          "address": 17384865792,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer14.o_proj_weight",
+          "operation": "file",
+          "address": 17387159552,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer14.o_proj_scale",
+          "operation": "file",
+          "address": 17388208128,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer14.mlp_gate_weight",
+          "operation": "file",
+          "address": 17388273664,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer14.mlp_gate_scale",
+          "operation": "file",
+          "address": 17389846528,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer14.mlp_up_weight",
+          "operation": "file",
+          "address": 17389977600,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer14.mlp_up_scale",
+          "operation": "file",
+          "address": 17391550464,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer14.mlp_down_weight",
+          "operation": "file",
+          "address": 17391681536,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer14.mlp_down_scale",
+          "operation": "file",
+          "address": 17393254400,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 16,
+      "file": "qwen3_runtime_16.bin",
+      "address": 17393516544,
+      "address_hex": "0x000000040CBC0000",
+      "nbytes": 8486912,
+      "sha256": "55a5acc0a2aab6b08edd672ae6d08dfbdc49c89770f26fd6351c7cc56b00ac79",
+      "entries": [
+        {
+          "name": "layer15.qkv_qmap",
+          "operation": "file",
+          "address": 17393516544,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer15.o_proj_weight",
+          "operation": "file",
+          "address": 17395810304,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer15.o_proj_scale",
+          "operation": "file",
+          "address": 17396858880,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer15.mlp_gate_weight",
+          "operation": "file",
+          "address": 17396924416,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer15.mlp_gate_scale",
+          "operation": "file",
+          "address": 17398497280,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer15.mlp_up_weight",
+          "operation": "file",
+          "address": 17398628352,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer15.mlp_up_scale",
+          "operation": "file",
+          "address": 17400201216,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer15.mlp_down_weight",
+          "operation": "file",
+          "address": 17400332288,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer15.mlp_down_scale",
+          "operation": "file",
+          "address": 17401905152,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 17,
+      "file": "qwen3_runtime_17.bin",
+      "address": 17402167296,
+      "address_hex": "0x000000040D400000",
+      "nbytes": 8486912,
+      "sha256": "0cf3fd8bc8ba08b685689616ec056b90a08039aaab31580917f39312c1d5dbac",
+      "entries": [
+        {
+          "name": "layer16.qkv_qmap",
+          "operation": "file",
+          "address": 17402167296,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer16.o_proj_weight",
+          "operation": "file",
+          "address": 17404461056,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer16.o_proj_scale",
+          "operation": "file",
+          "address": 17405509632,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer16.mlp_gate_weight",
+          "operation": "file",
+          "address": 17405575168,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer16.mlp_gate_scale",
+          "operation": "file",
+          "address": 17407148032,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer16.mlp_up_weight",
+          "operation": "file",
+          "address": 17407279104,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer16.mlp_up_scale",
+          "operation": "file",
+          "address": 17408851968,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer16.mlp_down_weight",
+          "operation": "file",
+          "address": 17408983040,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer16.mlp_down_scale",
+          "operation": "file",
+          "address": 17410555904,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 18,
+      "file": "qwen3_runtime_18.bin",
+      "address": 17410818048,
+      "address_hex": "0x000000040DC40000",
+      "nbytes": 8486912,
+      "sha256": "e9cc3fbf867b13c914fdc70ba52e8ad31b9b13418060446e7f6b3f507b25a99c",
+      "entries": [
+        {
+          "name": "layer17.qkv_qmap",
+          "operation": "file",
+          "address": 17410818048,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer17.o_proj_weight",
+          "operation": "file",
+          "address": 17413111808,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer17.o_proj_scale",
+          "operation": "file",
+          "address": 17414160384,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer17.mlp_gate_weight",
+          "operation": "file",
+          "address": 17414225920,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer17.mlp_gate_scale",
+          "operation": "file",
+          "address": 17415798784,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer17.mlp_up_weight",
+          "operation": "file",
+          "address": 17415929856,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer17.mlp_up_scale",
+          "operation": "file",
+          "address": 17417502720,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer17.mlp_down_weight",
+          "operation": "file",
+          "address": 17417633792,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer17.mlp_down_scale",
+          "operation": "file",
+          "address": 17419206656,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 19,
+      "file": "qwen3_runtime_19.bin",
+      "address": 17419468800,
+      "address_hex": "0x000000040E480000",
+      "nbytes": 8486912,
+      "sha256": "ad82c615a0687b652aec28fa6ee73e18354177c16867c1a9639d2d781867b91b",
+      "entries": [
+        {
+          "name": "layer18.qkv_qmap",
+          "operation": "file",
+          "address": 17419468800,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer18.o_proj_weight",
+          "operation": "file",
+          "address": 17421762560,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer18.o_proj_scale",
+          "operation": "file",
+          "address": 17422811136,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer18.mlp_gate_weight",
+          "operation": "file",
+          "address": 17422876672,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer18.mlp_gate_scale",
+          "operation": "file",
+          "address": 17424449536,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer18.mlp_up_weight",
+          "operation": "file",
+          "address": 17424580608,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer18.mlp_up_scale",
+          "operation": "file",
+          "address": 17426153472,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer18.mlp_down_weight",
+          "operation": "file",
+          "address": 17426284544,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer18.mlp_down_scale",
+          "operation": "file",
+          "address": 17427857408,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 20,
+      "file": "qwen3_runtime_20.bin",
+      "address": 17428119552,
+      "address_hex": "0x000000040ECC0000",
+      "nbytes": 8486912,
+      "sha256": "8f2a35d91553da7da567a85571984df66b795abe7e8d227f4be3e5e8af2d9646",
+      "entries": [
+        {
+          "name": "layer19.qkv_qmap",
+          "operation": "file",
+          "address": 17428119552,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer19.o_proj_weight",
+          "operation": "file",
+          "address": 17430413312,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer19.o_proj_scale",
+          "operation": "file",
+          "address": 17431461888,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer19.mlp_gate_weight",
+          "operation": "file",
+          "address": 17431527424,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer19.mlp_gate_scale",
+          "operation": "file",
+          "address": 17433100288,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer19.mlp_up_weight",
+          "operation": "file",
+          "address": 17433231360,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer19.mlp_up_scale",
+          "operation": "file",
+          "address": 17434804224,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer19.mlp_down_weight",
+          "operation": "file",
+          "address": 17434935296,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer19.mlp_down_scale",
+          "operation": "file",
+          "address": 17436508160,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 21,
+      "file": "qwen3_runtime_21.bin",
+      "address": 17436770304,
+      "address_hex": "0x000000040F500000",
+      "nbytes": 8486912,
+      "sha256": "a6c134697c03191adf8b19208396d24808053e121c94f238d6fecd40b672ace2",
+      "entries": [
+        {
+          "name": "layer20.qkv_qmap",
+          "operation": "file",
+          "address": 17436770304,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer20.o_proj_weight",
+          "operation": "file",
+          "address": 17439064064,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer20.o_proj_scale",
+          "operation": "file",
+          "address": 17440112640,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer20.mlp_gate_weight",
+          "operation": "file",
+          "address": 17440178176,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer20.mlp_gate_scale",
+          "operation": "file",
+          "address": 17441751040,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer20.mlp_up_weight",
+          "operation": "file",
+          "address": 17441882112,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer20.mlp_up_scale",
+          "operation": "file",
+          "address": 17443454976,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer20.mlp_down_weight",
+          "operation": "file",
+          "address": 17443586048,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer20.mlp_down_scale",
+          "operation": "file",
+          "address": 17445158912,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 22,
+      "file": "qwen3_runtime_22.bin",
+      "address": 17445421056,
+      "address_hex": "0x000000040FD40000",
+      "nbytes": 8486912,
+      "sha256": "a09fba279b46416c38a528e183996f06a5de2945546c41ba524d6bd067f2b9be",
+      "entries": [
+        {
+          "name": "layer21.qkv_qmap",
+          "operation": "file",
+          "address": 17445421056,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer21.o_proj_weight",
+          "operation": "file",
+          "address": 17447714816,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer21.o_proj_scale",
+          "operation": "file",
+          "address": 17448763392,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer21.mlp_gate_weight",
+          "operation": "file",
+          "address": 17448828928,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer21.mlp_gate_scale",
+          "operation": "file",
+          "address": 17450401792,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer21.mlp_up_weight",
+          "operation": "file",
+          "address": 17450532864,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer21.mlp_up_scale",
+          "operation": "file",
+          "address": 17452105728,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer21.mlp_down_weight",
+          "operation": "file",
+          "address": 17452236800,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer21.mlp_down_scale",
+          "operation": "file",
+          "address": 17453809664,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 23,
+      "file": "qwen3_runtime_23.bin",
+      "address": 17454071808,
+      "address_hex": "0x0000000410580000",
+      "nbytes": 8486912,
+      "sha256": "ecef949d43a7d52d59f6769a1b4065a04e8d05b4dc5e0569180a43d6e0213eab",
+      "entries": [
+        {
+          "name": "layer22.qkv_qmap",
+          "operation": "file",
+          "address": 17454071808,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer22.o_proj_weight",
+          "operation": "file",
+          "address": 17456365568,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer22.o_proj_scale",
+          "operation": "file",
+          "address": 17457414144,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer22.mlp_gate_weight",
+          "operation": "file",
+          "address": 17457479680,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer22.mlp_gate_scale",
+          "operation": "file",
+          "address": 17459052544,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer22.mlp_up_weight",
+          "operation": "file",
+          "address": 17459183616,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer22.mlp_up_scale",
+          "operation": "file",
+          "address": 17460756480,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer22.mlp_down_weight",
+          "operation": "file",
+          "address": 17460887552,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer22.mlp_down_scale",
+          "operation": "file",
+          "address": 17462460416,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 24,
+      "file": "qwen3_runtime_24.bin",
+      "address": 17462722560,
+      "address_hex": "0x0000000410DC0000",
+      "nbytes": 8486912,
+      "sha256": "05fd0b5bb25093b80030b0f8cae9861844c94e31741b6ac23a8008bd0b599ded",
+      "entries": [
+        {
+          "name": "layer23.qkv_qmap",
+          "operation": "file",
+          "address": 17462722560,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer23.o_proj_weight",
+          "operation": "file",
+          "address": 17465016320,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer23.o_proj_scale",
+          "operation": "file",
+          "address": 17466064896,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer23.mlp_gate_weight",
+          "operation": "file",
+          "address": 17466130432,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer23.mlp_gate_scale",
+          "operation": "file",
+          "address": 17467703296,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer23.mlp_up_weight",
+          "operation": "file",
+          "address": 17467834368,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer23.mlp_up_scale",
+          "operation": "file",
+          "address": 17469407232,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer23.mlp_down_weight",
+          "operation": "file",
+          "address": 17469538304,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer23.mlp_down_scale",
+          "operation": "file",
+          "address": 17471111168,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 25,
+      "file": "qwen3_runtime_25.bin",
+      "address": 17471373312,
+      "address_hex": "0x0000000411600000",
+      "nbytes": 8486912,
+      "sha256": "09baee16770b39d3b3e8a0a76cf95d4a74916da4b48d3cb8880fdbbb14442b36",
+      "entries": [
+        {
+          "name": "layer24.qkv_qmap",
+          "operation": "file",
+          "address": 17471373312,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer24.o_proj_weight",
+          "operation": "file",
+          "address": 17473667072,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer24.o_proj_scale",
+          "operation": "file",
+          "address": 17474715648,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer24.mlp_gate_weight",
+          "operation": "file",
+          "address": 17474781184,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer24.mlp_gate_scale",
+          "operation": "file",
+          "address": 17476354048,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer24.mlp_up_weight",
+          "operation": "file",
+          "address": 17476485120,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer24.mlp_up_scale",
+          "operation": "file",
+          "address": 17478057984,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer24.mlp_down_weight",
+          "operation": "file",
+          "address": 17478189056,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer24.mlp_down_scale",
+          "operation": "file",
+          "address": 17479761920,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 26,
+      "file": "qwen3_runtime_26.bin",
+      "address": 17480024064,
+      "address_hex": "0x0000000411E40000",
+      "nbytes": 8486912,
+      "sha256": "7618b8adde24fe8ce6180c9449484690fb4cd8396df5f8dfeab4b6ac386c0626",
+      "entries": [
+        {
+          "name": "layer25.qkv_qmap",
+          "operation": "file",
+          "address": 17480024064,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer25.o_proj_weight",
+          "operation": "file",
+          "address": 17482317824,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer25.o_proj_scale",
+          "operation": "file",
+          "address": 17483366400,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer25.mlp_gate_weight",
+          "operation": "file",
+          "address": 17483431936,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer25.mlp_gate_scale",
+          "operation": "file",
+          "address": 17485004800,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer25.mlp_up_weight",
+          "operation": "file",
+          "address": 17485135872,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer25.mlp_up_scale",
+          "operation": "file",
+          "address": 17486708736,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer25.mlp_down_weight",
+          "operation": "file",
+          "address": 17486839808,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer25.mlp_down_scale",
+          "operation": "file",
+          "address": 17488412672,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 27,
+      "file": "qwen3_runtime_27.bin",
+      "address": 17488674816,
+      "address_hex": "0x0000000412680000",
+      "nbytes": 8486912,
+      "sha256": "02726257496d2cfb6b361612c4967920fb08b686a89a58958cd6548b176bfa29",
+      "entries": [
+        {
+          "name": "layer26.qkv_qmap",
+          "operation": "file",
+          "address": 17488674816,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer26.o_proj_weight",
+          "operation": "file",
+          "address": 17490968576,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer26.o_proj_scale",
+          "operation": "file",
+          "address": 17492017152,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer26.mlp_gate_weight",
+          "operation": "file",
+          "address": 17492082688,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer26.mlp_gate_scale",
+          "operation": "file",
+          "address": 17493655552,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer26.mlp_up_weight",
+          "operation": "file",
+          "address": 17493786624,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer26.mlp_up_scale",
+          "operation": "file",
+          "address": 17495359488,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer26.mlp_down_weight",
+          "operation": "file",
+          "address": 17495490560,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer26.mlp_down_scale",
+          "operation": "file",
+          "address": 17497063424,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 28,
+      "file": "qwen3_runtime_28.bin",
+      "address": 17497325568,
+      "address_hex": "0x0000000412EC0000",
+      "nbytes": 8486912,
+      "sha256": "5f0d385d96cee3f63164803016bf481655aef564fcdc0cf4e73c5ffd5ca71e7b",
+      "entries": [
+        {
+          "name": "layer27.qkv_qmap",
+          "operation": "file",
+          "address": 17497325568,
+          "nbytes": 2273280
+        },
+        {
+          "name": "layer27.o_proj_weight",
+          "operation": "file",
+          "address": 17499619328,
+          "nbytes": 1048576
+        },
+        {
+          "name": "layer27.o_proj_scale",
+          "operation": "file",
+          "address": 17500667904,
+          "nbytes": 65536
+        },
+        {
+          "name": "layer27.mlp_gate_weight",
+          "operation": "file",
+          "address": 17500733440,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer27.mlp_gate_scale",
+          "operation": "file",
+          "address": 17502306304,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer27.mlp_up_weight",
+          "operation": "file",
+          "address": 17502437376,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer27.mlp_up_scale",
+          "operation": "file",
+          "address": 17504010240,
+          "nbytes": 98304
+        },
+        {
+          "name": "layer27.mlp_down_weight",
+          "operation": "file",
+          "address": 17504141312,
+          "nbytes": 1572864
+        },
+        {
+          "name": "layer27.mlp_down_scale",
+          "operation": "file",
+          "address": 17505714176,
+          "nbytes": 98304
+        }
+      ]
+    },
+    {
+      "index": 29,
+      "file": "qwen3_runtime_29.bin",
+      "address": 17516462080,
+      "address_hex": "0x0000000414100000",
+      "nbytes": 58720256,
+      "sha256": "8afcb7e7189ce4d112fd245eaa60c3cfcf5a5d5e1d6bf4eb85941d73ef8cfbd5",
+      "entries": [
+        {
+          "name": "kv_cache",
+          "operation": "zero",
+          "address": 17516462080,
+          "nbytes": 58720256
+        }
+      ]
+    },
+    {
+      "index": 30,
+      "file": "qwen3_runtime_30.bin",
+      "address": 17575313408,
+      "address_hex": "0x0000000417920000",
+      "nbytes": 544768,
+      "sha256": "0956ed90fe27772acaf8717ba80b772d3f7b8aa7f67f2320ffc102ff0f95c8e2",
+      "entries": [
+        {
+          "name": "layer0.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17575313408,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer0.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17575378944,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer0.o_proj_qmap",
+          "operation": "file",
+          "address": 17575444480,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer0.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17575510016,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer0.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17575575552,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer0.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17575641088,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer0.mlp_down_qmap",
+          "operation": "file",
+          "address": 17575706624,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer0.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17575772160,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer0.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17575837696,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 31,
+      "file": "qwen3_runtime_31.bin",
+      "address": 17576361984,
+      "address_hex": "0x0000000417A20000",
+      "nbytes": 544768,
+      "sha256": "6342816d040f06b08bcff3e5b7ce2a4b866f9a671e02671fc0adf52e01176b76",
+      "entries": [
+        {
+          "name": "layer1.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17576361984,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer1.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17576427520,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer1.o_proj_qmap",
+          "operation": "file",
+          "address": 17576493056,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer1.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17576558592,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer1.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17576624128,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer1.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17576689664,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer1.mlp_down_qmap",
+          "operation": "file",
+          "address": 17576755200,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer1.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17576820736,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer1.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17576886272,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 32,
+      "file": "qwen3_runtime_32.bin",
+      "address": 17577410560,
+      "address_hex": "0x0000000417B20000",
+      "nbytes": 544768,
+      "sha256": "0b84b9bd51aadbcb9866c144b0c1ff93d89c7351b1bc649d740a0e6c6fdc4c08",
+      "entries": [
+        {
+          "name": "layer2.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17577410560,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer2.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17577476096,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer2.o_proj_qmap",
+          "operation": "file",
+          "address": 17577541632,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer2.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17577607168,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer2.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17577672704,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer2.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17577738240,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer2.mlp_down_qmap",
+          "operation": "file",
+          "address": 17577803776,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer2.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17577869312,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer2.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17577934848,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 33,
+      "file": "qwen3_runtime_33.bin",
+      "address": 17578459136,
+      "address_hex": "0x0000000417C20000",
+      "nbytes": 544768,
+      "sha256": "ddcb072abd2ab49bf7c18f94361710bf9ebd6c8516e80571171ab301017a285e",
+      "entries": [
+        {
+          "name": "layer3.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17578459136,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer3.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17578524672,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer3.o_proj_qmap",
+          "operation": "file",
+          "address": 17578590208,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer3.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17578655744,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer3.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17578721280,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer3.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17578786816,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer3.mlp_down_qmap",
+          "operation": "file",
+          "address": 17578852352,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer3.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17578917888,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer3.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17578983424,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 34,
+      "file": "qwen3_runtime_34.bin",
+      "address": 17579507712,
+      "address_hex": "0x0000000417D20000",
+      "nbytes": 544768,
+      "sha256": "ee81a3fe3f397059288c7e1b36c05bab7c43b2265c3146438c8d3d4b716e8c63",
+      "entries": [
+        {
+          "name": "layer4.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17579507712,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer4.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17579573248,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer4.o_proj_qmap",
+          "operation": "file",
+          "address": 17579638784,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer4.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17579704320,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer4.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17579769856,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer4.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17579835392,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer4.mlp_down_qmap",
+          "operation": "file",
+          "address": 17579900928,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer4.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17579966464,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer4.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17580032000,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 35,
+      "file": "qwen3_runtime_35.bin",
+      "address": 17580556288,
+      "address_hex": "0x0000000417E20000",
+      "nbytes": 544768,
+      "sha256": "d4295ef359135902ec6accefa6a3d106782cfe763fa0d824b994beea94310729",
+      "entries": [
+        {
+          "name": "layer5.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17580556288,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer5.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17580621824,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer5.o_proj_qmap",
+          "operation": "file",
+          "address": 17580687360,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer5.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17580752896,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer5.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17580818432,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer5.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17580883968,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer5.mlp_down_qmap",
+          "operation": "file",
+          "address": 17580949504,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer5.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17581015040,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer5.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17581080576,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 36,
+      "file": "qwen3_runtime_36.bin",
+      "address": 17581604864,
+      "address_hex": "0x0000000417F20000",
+      "nbytes": 544768,
+      "sha256": "56f426ae338516d3b69fb3c989bcc415b15f671ae75229f002d046a580d1faa8",
+      "entries": [
+        {
+          "name": "layer6.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17581604864,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer6.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17581670400,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer6.o_proj_qmap",
+          "operation": "file",
+          "address": 17581735936,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer6.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17581801472,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer6.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17581867008,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer6.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17581932544,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer6.mlp_down_qmap",
+          "operation": "file",
+          "address": 17581998080,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer6.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17582063616,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer6.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17582129152,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 37,
+      "file": "qwen3_runtime_37.bin",
+      "address": 17582653440,
+      "address_hex": "0x0000000418020000",
+      "nbytes": 544768,
+      "sha256": "bb6ec2cc6cd611dd1210d71c9116f58f0dc65093f1952558dba02792e6eb7bfa",
+      "entries": [
+        {
+          "name": "layer7.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17582653440,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer7.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17582718976,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer7.o_proj_qmap",
+          "operation": "file",
+          "address": 17582784512,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer7.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17582850048,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer7.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17582915584,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer7.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17582981120,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer7.mlp_down_qmap",
+          "operation": "file",
+          "address": 17583046656,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer7.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17583112192,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer7.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17583177728,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 38,
+      "file": "qwen3_runtime_38.bin",
+      "address": 17583702016,
+      "address_hex": "0x0000000418120000",
+      "nbytes": 544768,
+      "sha256": "ea4a5fe813f132875045f4d0e7aa6d77481a1bdbee7e10076b47bb24153a0a5c",
+      "entries": [
+        {
+          "name": "layer8.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17583702016,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer8.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17583767552,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer8.o_proj_qmap",
+          "operation": "file",
+          "address": 17583833088,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer8.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17583898624,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer8.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17583964160,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer8.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17584029696,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer8.mlp_down_qmap",
+          "operation": "file",
+          "address": 17584095232,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer8.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17584160768,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer8.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17584226304,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 39,
+      "file": "qwen3_runtime_39.bin",
+      "address": 17584750592,
+      "address_hex": "0x0000000418220000",
+      "nbytes": 544768,
+      "sha256": "639dd9eeb6dd9fe7416570a2894ffaeccd04bab2070c3f13aff080c227cebd3a",
+      "entries": [
+        {
+          "name": "layer9.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17584750592,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer9.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17584816128,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer9.o_proj_qmap",
+          "operation": "file",
+          "address": 17584881664,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer9.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17584947200,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer9.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17585012736,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer9.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17585078272,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer9.mlp_down_qmap",
+          "operation": "file",
+          "address": 17585143808,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer9.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17585209344,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer9.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17585274880,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 40,
+      "file": "qwen3_runtime_40.bin",
+      "address": 17585799168,
+      "address_hex": "0x0000000418320000",
+      "nbytes": 544768,
+      "sha256": "50f6280214230ac9875fdd49a7ae042868454005544224b7f92d3a1870fb578b",
+      "entries": [
+        {
+          "name": "layer10.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17585799168,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer10.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17585864704,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer10.o_proj_qmap",
+          "operation": "file",
+          "address": 17585930240,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer10.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17585995776,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer10.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17586061312,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer10.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17586126848,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer10.mlp_down_qmap",
+          "operation": "file",
+          "address": 17586192384,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer10.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17586257920,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer10.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17586323456,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 41,
+      "file": "qwen3_runtime_41.bin",
+      "address": 17586847744,
+      "address_hex": "0x0000000418420000",
+      "nbytes": 544768,
+      "sha256": "1bff10bf59ec6b1621aa939e6b74498b4c66a4809985db134a05862c91d8a8eb",
+      "entries": [
+        {
+          "name": "layer11.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17586847744,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer11.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17586913280,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer11.o_proj_qmap",
+          "operation": "file",
+          "address": 17586978816,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer11.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17587044352,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer11.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17587109888,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer11.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17587175424,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer11.mlp_down_qmap",
+          "operation": "file",
+          "address": 17587240960,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer11.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17587306496,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer11.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17587372032,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 42,
+      "file": "qwen3_runtime_42.bin",
+      "address": 17587896320,
+      "address_hex": "0x0000000418520000",
+      "nbytes": 544768,
+      "sha256": "4e77ec8a360125ca59f09d998f9dd95b51f137f51c8e7a2c63f6cf90cf44602f",
+      "entries": [
+        {
+          "name": "layer12.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17587896320,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer12.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17587961856,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer12.o_proj_qmap",
+          "operation": "file",
+          "address": 17588027392,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer12.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17588092928,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer12.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17588158464,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer12.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17588224000,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer12.mlp_down_qmap",
+          "operation": "file",
+          "address": 17588289536,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer12.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17588355072,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer12.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17588420608,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 43,
+      "file": "qwen3_runtime_43.bin",
+      "address": 17588944896,
+      "address_hex": "0x0000000418620000",
+      "nbytes": 544768,
+      "sha256": "711fb28ab63aca30ddeb370300f2ee9f3c12b6bad443c7d6132e66300f081a06",
+      "entries": [
+        {
+          "name": "layer13.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17588944896,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer13.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17589010432,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer13.o_proj_qmap",
+          "operation": "file",
+          "address": 17589075968,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer13.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17589141504,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer13.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17589207040,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer13.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17589272576,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer13.mlp_down_qmap",
+          "operation": "file",
+          "address": 17589338112,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer13.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17589403648,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer13.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17589469184,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 44,
+      "file": "qwen3_runtime_44.bin",
+      "address": 17589993472,
+      "address_hex": "0x0000000418720000",
+      "nbytes": 544768,
+      "sha256": "422a34c1092970b1f7585e1573bcd8a484756f41e68e42d5d61cc7e87912fa36",
+      "entries": [
+        {
+          "name": "layer14.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17589993472,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer14.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17590059008,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer14.o_proj_qmap",
+          "operation": "file",
+          "address": 17590124544,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer14.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17590190080,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer14.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17590255616,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer14.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17590321152,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer14.mlp_down_qmap",
+          "operation": "file",
+          "address": 17590386688,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer14.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17590452224,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer14.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17590517760,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 45,
+      "file": "qwen3_runtime_45.bin",
+      "address": 17591042048,
+      "address_hex": "0x0000000418820000",
+      "nbytes": 544768,
+      "sha256": "038c08ec15c9bd79c12f1457f335fbd28d0eb4a1030033c2e67b87f26530e7f6",
+      "entries": [
+        {
+          "name": "layer15.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17591042048,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer15.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17591107584,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer15.o_proj_qmap",
+          "operation": "file",
+          "address": 17591173120,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer15.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17591238656,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer15.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17591304192,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer15.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17591369728,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer15.mlp_down_qmap",
+          "operation": "file",
+          "address": 17591435264,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer15.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17591500800,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer15.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17591566336,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 46,
+      "file": "qwen3_runtime_46.bin",
+      "address": 17592090624,
+      "address_hex": "0x0000000418920000",
+      "nbytes": 544768,
+      "sha256": "8873021d8cee884ceb0fa20826a7d4088ce5d588d7ba002e464b159f25c935f0",
+      "entries": [
+        {
+          "name": "layer16.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17592090624,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer16.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17592156160,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer16.o_proj_qmap",
+          "operation": "file",
+          "address": 17592221696,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer16.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17592287232,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer16.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17592352768,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer16.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17592418304,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer16.mlp_down_qmap",
+          "operation": "file",
+          "address": 17592483840,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer16.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17592549376,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer16.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17592614912,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 47,
+      "file": "qwen3_runtime_47.bin",
+      "address": 17593139200,
+      "address_hex": "0x0000000418A20000",
+      "nbytes": 544768,
+      "sha256": "159f07c734d8f2e4c3f177876c20fb252275a624eebd204e20562eef983b4d59",
+      "entries": [
+        {
+          "name": "layer17.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17593139200,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer17.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17593204736,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer17.o_proj_qmap",
+          "operation": "file",
+          "address": 17593270272,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer17.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17593335808,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer17.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17593401344,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer17.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17593466880,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer17.mlp_down_qmap",
+          "operation": "file",
+          "address": 17593532416,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer17.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17593597952,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer17.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17593663488,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 48,
+      "file": "qwen3_runtime_48.bin",
+      "address": 17594187776,
+      "address_hex": "0x0000000418B20000",
+      "nbytes": 544768,
+      "sha256": "17b826c9f0d61eda00c879e7f3f0dc7d0f4f87e9608bbd31955ff5eb8cbc6aa2",
+      "entries": [
+        {
+          "name": "layer18.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17594187776,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer18.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17594253312,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer18.o_proj_qmap",
+          "operation": "file",
+          "address": 17594318848,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer18.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17594384384,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer18.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17594449920,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer18.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17594515456,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer18.mlp_down_qmap",
+          "operation": "file",
+          "address": 17594580992,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer18.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17594646528,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer18.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17594712064,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 49,
+      "file": "qwen3_runtime_49.bin",
+      "address": 17595236352,
+      "address_hex": "0x0000000418C20000",
+      "nbytes": 544768,
+      "sha256": "b2f1d44d2d39fa507e02d12f4a9a4612ac406af3ec468e8499b3942ea88454ec",
+      "entries": [
+        {
+          "name": "layer19.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17595236352,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer19.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17595301888,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer19.o_proj_qmap",
+          "operation": "file",
+          "address": 17595367424,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer19.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17595432960,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer19.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17595498496,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer19.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17595564032,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer19.mlp_down_qmap",
+          "operation": "file",
+          "address": 17595629568,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer19.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17595695104,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer19.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17595760640,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 50,
+      "file": "qwen3_runtime_50.bin",
+      "address": 17596284928,
+      "address_hex": "0x0000000418D20000",
+      "nbytes": 544768,
+      "sha256": "b497a9b0d02f0d6128ccf29a14dbe3d95bb0d084b03b27aeff9ed2fc522a792a",
+      "entries": [
+        {
+          "name": "layer20.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17596284928,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer20.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17596350464,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer20.o_proj_qmap",
+          "operation": "file",
+          "address": 17596416000,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer20.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17596481536,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer20.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17596547072,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer20.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17596612608,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer20.mlp_down_qmap",
+          "operation": "file",
+          "address": 17596678144,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer20.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17596743680,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer20.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17596809216,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 51,
+      "file": "qwen3_runtime_51.bin",
+      "address": 17597333504,
+      "address_hex": "0x0000000418E20000",
+      "nbytes": 544768,
+      "sha256": "e5e641fdbcd83429ee4fd796d91b7a8e2f86cd3d74ae4f967a9a974be5569af7",
+      "entries": [
+        {
+          "name": "layer21.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17597333504,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer21.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17597399040,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer21.o_proj_qmap",
+          "operation": "file",
+          "address": 17597464576,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer21.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17597530112,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer21.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17597595648,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer21.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17597661184,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer21.mlp_down_qmap",
+          "operation": "file",
+          "address": 17597726720,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer21.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17597792256,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer21.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17597857792,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 52,
+      "file": "qwen3_runtime_52.bin",
+      "address": 17598382080,
+      "address_hex": "0x0000000418F20000",
+      "nbytes": 544768,
+      "sha256": "d086ee1e0636cbae5aea42e53b1b7281a2b8a509ef9128b43cbfbccc9ef24e13",
+      "entries": [
+        {
+          "name": "layer22.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17598382080,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer22.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17598447616,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer22.o_proj_qmap",
+          "operation": "file",
+          "address": 17598513152,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer22.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17598578688,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer22.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17598644224,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer22.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17598709760,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer22.mlp_down_qmap",
+          "operation": "file",
+          "address": 17598775296,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer22.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17598840832,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer22.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17598906368,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 53,
+      "file": "qwen3_runtime_53.bin",
+      "address": 17599430656,
+      "address_hex": "0x0000000419020000",
+      "nbytes": 544768,
+      "sha256": "c9b4f887e89344054d8f95068e1a07b0ed8a549b98f081620742bc7aed2926d9",
+      "entries": [
+        {
+          "name": "layer23.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17599430656,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer23.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17599496192,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer23.o_proj_qmap",
+          "operation": "file",
+          "address": 17599561728,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer23.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17599627264,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer23.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17599692800,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer23.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17599758336,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer23.mlp_down_qmap",
+          "operation": "file",
+          "address": 17599823872,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer23.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17599889408,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer23.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17599954944,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 54,
+      "file": "qwen3_runtime_54.bin",
+      "address": 17600479232,
+      "address_hex": "0x0000000419120000",
+      "nbytes": 544768,
+      "sha256": "e9c110998ffceeb86d07ffcc45ac62a4e16b6b0b9de50bc36edb4933f3bb6174",
+      "entries": [
+        {
+          "name": "layer24.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17600479232,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer24.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17600544768,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer24.o_proj_qmap",
+          "operation": "file",
+          "address": 17600610304,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer24.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17600675840,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer24.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17600741376,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer24.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17600806912,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer24.mlp_down_qmap",
+          "operation": "file",
+          "address": 17600872448,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer24.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17600937984,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer24.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17601003520,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 55,
+      "file": "qwen3_runtime_55.bin",
+      "address": 17601527808,
+      "address_hex": "0x0000000419220000",
+      "nbytes": 544768,
+      "sha256": "3e474cf34e89b2be4efd15dbbdd36622d0ff38daf42e7db3055c7fb280d277e9",
+      "entries": [
+        {
+          "name": "layer25.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17601527808,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer25.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17601593344,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer25.o_proj_qmap",
+          "operation": "file",
+          "address": 17601658880,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer25.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17601724416,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer25.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17601789952,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer25.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17601855488,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer25.mlp_down_qmap",
+          "operation": "file",
+          "address": 17601921024,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer25.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17601986560,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer25.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17602052096,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 56,
+      "file": "qwen3_runtime_56.bin",
+      "address": 17602576384,
+      "address_hex": "0x0000000419320000",
+      "nbytes": 544768,
+      "sha256": "5b1bfadd3eb12aeb1e0d43b0fd8702fa0b1091575a36829eaa7718b9883e56a1",
+      "entries": [
+        {
+          "name": "layer26.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17602576384,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer26.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17602641920,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer26.o_proj_qmap",
+          "operation": "file",
+          "address": 17602707456,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer26.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17602772992,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer26.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17602838528,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer26.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17602904064,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer26.mlp_down_qmap",
+          "operation": "file",
+          "address": 17602969600,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer26.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17603035136,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer26.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17603100672,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 57,
+      "file": "qwen3_runtime_57.bin",
+      "address": 17603624960,
+      "address_hex": "0x0000000419420000",
+      "nbytes": 544768,
+      "sha256": "763ee0e668044eea8c31e15ff912f50a5aa75b23671b83c32511957c4d72c75c",
+      "entries": [
+        {
+          "name": "layer27.attn_frontend_qmap",
+          "operation": "file",
+          "address": 17603624960,
+          "nbytes": 28672
+        },
+        {
+          "name": "layer27.attn_score_value_qmap",
+          "operation": "file",
+          "address": 17603690496,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer27.o_proj_qmap",
+          "operation": "file",
+          "address": 17603756032,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer27.post_attn_norm_qmap",
+          "operation": "file",
+          "address": 17603821568,
+          "nbytes": 32768
+        },
+        {
+          "name": "layer27.mlp_gate_up_qmap",
+          "operation": "file",
+          "address": 17603887104,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer27.mlp_silu_mul_qmap",
+          "operation": "file",
+          "address": 17603952640,
+          "nbytes": 57344
+        },
+        {
+          "name": "layer27.mlp_down_qmap",
+          "operation": "file",
+          "address": 17604018176,
+          "nbytes": 24576
+        },
+        {
+          "name": "layer27.mlp_residual_add_qmap",
+          "operation": "file",
+          "address": 17604083712,
+          "nbytes": 20480
+        },
+        {
+          "name": "layer27.input_rmsnorm_qmap",
+          "operation": "file",
+          "address": 17604149248,
+          "nbytes": 20480
+        }
+      ]
+    },
+    {
+      "index": 58,
+      "file": "qwen3_runtime_58.bin",
+      "address": 17604542464,
+      "address_hex": "0x0000000419500000",
+      "nbytes": 16384,
+      "sha256": "67b2b80361912c289d282164892cc18f9f1d84027d4523eeac247a6ac182652c",
+      "entries": [
+        {
+          "name": "final_tail_qmap",
+          "operation": "file",
+          "address": 17604542464,
+          "nbytes": 16384
+        }
+      ]
+    },
+    {
+      "index": 59,
+      "file": "qwen3_runtime_59.bin",
+      "address": 17605591040,
+      "address_hex": "0x0000000419600000",
+      "nbytes": 8192,
+      "sha256": "9f1dcbc35c350d6027f98be0f5c8b43b42ca52b7604459c0c42be3aa88913d47",
+      "entries": [
+        {
+          "name": "runtime_hidden_a",
+          "operation": "zero",
+          "address": 17605591040,
+          "nbytes": 4096
+        },
+        {
+          "name": "runtime_hidden_b",
+          "operation": "zero",
+          "address": 17605595136,
+          "nbytes": 4096
+        }
+      ]
+    },
+    {
+      "index": 60,
+      "file": "qwen3_runtime_60.bin",
+      "address": 17617125376,
+      "address_hex": "0x000000041A100000",
+      "nbytes": 262144,
+      "sha256": "8f0b2e2386575be06903b79caf01dd23f71643e582cca08dc307b678fb90613c",
+      "entries": [
+        {
+          "name": "runtime_rope_table",
+          "operation": "file",
+          "address": 17617125376,
+          "nbytes": 262144
+        }
+      ]
+    }
+  ]
+}

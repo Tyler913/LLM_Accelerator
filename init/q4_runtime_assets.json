@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "description": "Restore the board-accepted Qwen3-0.6B custom Q4 FPGA runtime without storing its 61 binary segments in GitHub.",
+  "artifact": {
+    "repo_id": "Tyler01/qwen3-0p6b-fpga-q4-runtime",
+    "repo_type": "model",
+    "revision": "d55b8befce4130c4ae55b2f7c02c9bf9c6a0845e",
+    "revision_policy": "Replace main with the exact Hugging Face commit SHA immediately after the first upload.",
+    "source_model": "Qwen/Qwen3-0.6B-Base",
+    "format": "custom_qmap_groupwise_symmetric_q4",
+    "group_size": 64,
+    "local_dir": "lmdeploy/qwen3-0p6b-q4-qweb-demo/model",
+    "segment_manifest": "lmdeploy/qwen3-0p6b-q4-qweb-demo/model/pl_ddr_binary_segments.json",
+    "segment_manifest_sha256": "fa8981e71101def29970135df5e863da5634274dd9fb64905666f0cf1d47d3f2",
+    "expected_segment_count": 61,
+    "expected_total_bytes": 394547200,
+    "pl_ddr_aperture": {
+      "start": "0x0000000400000000",
+      "end_exclusive": "0x0000000420000000",
+      "alignment_bytes": 4
+    }
+  }
+}

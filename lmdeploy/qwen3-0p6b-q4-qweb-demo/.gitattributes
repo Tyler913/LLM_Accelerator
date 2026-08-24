@@ -1,0 +1,16 @@
+# Keep hashed scripts/manifests byte-stable across Windows, macOS, and Linux.
+* text=auto eol=lf
+
+# Prebuilt demo artifacts and restored runtime segments are binary.
+*.bit binary
+*.xsa binary
+*.elf binary
+*.qtk binary
+*.bin binary
+
+# These accepted runtime-control files are hash-pinned with their original
+# CRLF bytes. Treat them as opaque so Git archives and every checkout preserve
+# those exact accepted bytes.
+model/load_pl_ddr_runtime.tcl -text
+model/pl_ddr_binary_segments.json -text
+model/full_chain_manifest.json -text

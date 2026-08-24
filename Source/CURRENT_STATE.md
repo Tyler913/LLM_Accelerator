@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-08-17
+Last updated: 2026-08-24
 
 This file is the concise working-state handoff. For durable project context,
 read `Source/PROJECT_CONTEXT.md` first. For detailed address planning, read
@@ -24,6 +24,44 @@ Accepted first-version contract:
 - Context capacity: 256 tokens
 - Required PL DDR4 weight path: custom Q4 weight-only format
 - PL compute blocks use hand-written Verilog/SystemVerilog by default
+
+## Portable Demo Packaging
+
+The formal repository-contained release is
+`lmdeploy/qwen3-0p6b-q4-qweb-demo/`. Canonical PS/PL source remains under
+`FPGA_Project/`; the release directory also carries a clean copyable source
+snapshot, its release/provenance manifests, relative-path launch scripts, and
+selected final board artifacts:
+
+```text
+lmdeploy/qwen3-0p6b-q4-qweb-demo/
+  board/       bitstream, XSA, FSBL, and a_qweb ELF
+  model/       tracked runtime metadata plus downloaded Q4 segment files
+  scripts/     board-launch and UART-capture support
+  source/      final PS/PL source snapshot without tests or workspaces
+  release_manifest.json
+  run_demo.ps1
+```
+
+The 61 large `model/qwen3_runtime_*.bin` files remain outside Git and are
+restored from Hugging Face repo `Tyler01/qwen3-0p6b-fpga-q4-runtime`. They total
+`394,547,200` bytes. From the repository root, restore, verify, and audit the
+portable package with:
+
+```powershell
+conda run -n llm_fpga python init/download_q4_runtime.py
+conda run -n llm_fpga python init/verify_q4_runtime.py
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  .\lmdeploy\qwen3-0p6b-q4-qweb-demo\run_demo.ps1 -AuditOnly
+```
+
+The old `F:\qot_boardtest_prompt_text_v13_20260812` and `F:\vwk` locations
+below are retained as the original physical-acceptance provenance, not as live
+portable dependencies. The repository-contained copy currently has local
+`-AuditOnly` evidence only. Its hash-identical accepted inputs preserve artifact
+lineage, but relocating those files does not itself physically revalidate the
+new wrapper/path; one new board run is required before claiming physical PASS
+from `lmdeploy/`.
 
 ## Current Board-Validated Candidate
 
@@ -1087,11 +1125,12 @@ Previous useful checkpoint:
   Hugging-Face text cases, seven invalid-UTF8 cases, and the complete
   `The future of FPGA is -> [785,3853,315,89462,374] -> [264,26291] ->
   " a fascinating"` PS chain with actual result feedback.
-- A clean Vitis 2025.1.1 workspace at `F:\vwi` built `a_qctl`, `a_qmdl`, and
+- The original clean Vitis 2025.1.1 workspace at `F:\vwi` built `a_qctl`,
+  `a_qmdl`, and
   the tokenizer-bearing `a_qgen`. The last ELF is `4,050,704` bytes with SHA256
   `F37EB88D4E1B75FEC815D01306EE85678C1E8555D02E5B42D3EFCA22FD337BBE`;
   its launch keeps `runPsuInit=false` and `stopAtEntry=true`. The verified
-  current hardware-validated bench package is
+  original hardware-validated bench package was
   `F:\qot_boardtest_prompt_text_v13_20260812` (format v5, `88` files,
   `412,241,806` bytes, 61 runtime segments, four Web UI files, and three strict
   UART-acceptance files). Its verifier reports `trusted_provenance=True` after
@@ -1177,7 +1216,7 @@ Previous useful checkpoint:
   The final UI uses a 3000-ms job poll, serializes health checks and generation
   submission, and preserves the prior ready state through one isolated quiet
   health timeout before retrying. Browser-mocked and live-board flows both pass.
-- The final clean Vitis 2025.1.1 build is `F:\vwk`. Its
+- The original final clean Vitis 2025.1.1 build was `F:\vwk`. Its
   `network_workspace_manifest.json` is 27,264 bytes with SHA256
   `33CA1A825AFF72DD7A59C9938C0B0E838062C5C6E18EE1826432341E7A85E401`
   and records platform, echo, and Web build result `0`. The BSP uses RAW API,
@@ -1199,8 +1238,9 @@ Previous useful checkpoint:
   hardware/port rather than claiming a hash-bound `F:\vwk` echo run. The final
   `F:\vwk` QWEB startup independently re-proved the same PHY identity, link,
   and address before HTTP acceptance.
-- The final physical-Web tooling is now durable source. `run_qweb_board.ps1`
-  audits the exact `F:\vwk` network lineage and the board-accepted v13 runtime,
+- The accepted 2026-08-17 physical-Web tooling is durable source.
+  `run_qweb_board.ps1` audited the exact `F:\vwk` network lineage and the
+  board-accepted v13 runtime,
   including all 61 segment hashes, addresses, non-overlap, loader commands,
   281 QMAP headers, patched PHY archive, and final Web ELF, before XSDB can run.
   A physical launch now atomically claims an active evidence directory before
@@ -1768,7 +1808,9 @@ the product-facing correctness path because the routed design already uses
 ## Practical Notes
 
 - Always use `conda run -n llm_fpga ...` for Python commands.
-- Keep large model weights and generated artifacts out of Git history.
+- Keep the 61 large Q4 runtime segments and other model weights out of Git
+  history. Track the portable release's source, manifests, and explicitly
+  selected final board artifacts under `lmdeploy/qwen3-0p6b-q4-qweb-demo/`.
 - Treat BF16/FP32 model data as software reference and validation input only.
   The first PL DDR4 weight layout and GEMV datapaths must assume custom Q4
   weight-only storage for large weights.

@@ -97,6 +97,16 @@ xsim.dir/
 modelsim.ini
 transcript
 
+# Portable QWEB release: GitHub keeps the final board package, while the
+# 61 custom Q4 runtime segments are restored from Hugging Face.
+lmdeploy/qwen3-0p6b-q4-qweb-demo/model/qwen3_runtime_*.bin
+lmdeploy/qwen3-0p6b-q4-qweb-demo/model/.cache/
+
+# The global FPGA rules above intentionally ignore generated bitstreams and
+# XSAs. These two exceptions keep only the pinned final-demo board artifacts.
+!lmdeploy/qwen3-0p6b-q4-qweb-demo/board/*.bit
+!lmdeploy/qwen3-0p6b-q4-qweb-demo/board/*.xsa
+
 # Keep source/config files tracked explicitly; large artifacts are restored via init/.
 # Vivado source-bearing files that should remain visible include:
 # *.xpr, *.bd, *.xci, *.xdc, source .tcl, HDL, .coe, .mem, and .mif.

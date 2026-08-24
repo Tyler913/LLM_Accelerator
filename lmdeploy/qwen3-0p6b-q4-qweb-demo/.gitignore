@@ -1,0 +1,3 @@
+# Restored by init/download_q4_runtime.py from Hugging Face.
+model/qwen3_runtime_*.bin
+model/.cache/

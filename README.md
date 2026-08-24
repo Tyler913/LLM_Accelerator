@@ -2,6 +2,32 @@
 
 FPGA-based LLM accelerator project inspired by Hummingbird+.
 
+## Portable QWEB Demo Release
+
+The formal repository-contained demo is
+`lmdeploy/qwen3-0p6b-q4-qweb-demo/`. GitHub stores the canonical project source
+under `FPGA_Project/`, plus a clean final-demo source snapshot, release
+manifests, relative-path launch wrapper, and selected final board artifacts
+under `lmdeploy/`; after the first publication, Hugging Face repo
+`Tyler01/qwen3-0p6b-fpga-q4-runtime` will store only the 61 large
+`qwen3_runtime_*.bin` Q4 runtime segments (`394,547,200` bytes total). Restore
+and verify those ignored model files from the repository root with:
+
+```powershell
+conda run -n llm_fpga python init/download_q4_runtime.py
+conda run -n llm_fpga python init/verify_q4_runtime.py
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  .\lmdeploy\qwen3-0p6b-q4-qweb-demo\run_demo.ps1 -AuditOnly
+```
+
+The release wrapper resolves `board/`, `model/`, and `scripts/` relative to its
+own directory, so the repository no longer needs `F:\vwk` or
+`F:\qot_boardtest_prompt_text_v13_20260812` as live launch locations. Those
+absolute paths are retained below only as the original 2026-08-12/2026-08-17
+physical-acceptance provenance. The portable copy currently passes local
+`-AuditOnly`; copying the same hash-accepted artifacts proves file identity but
+does not constitute a new physical board acceptance from the portable path.
+
 Latest fixed-sequence full28 accelerator PASS (2026-08-08): the complete
 Qwen3-0.6B tied-Q4 path passed
 on the XCZU2EG board for the fixed two-position validation sequence. Both
@@ -44,8 +70,9 @@ bounded arbitrary token-ID prefill, actual argmax feedback, EOS/IM_END/max/conte
 stops, and exact PS-native Qwen Unicode/ByteLevel-BPE tokenization plus raw-byte
 detokenization. Its 79-case Hugging-Face differential suite and the host chain
 `The future of FPGA is -> 785,3853,315,89462,374 -> 264,26291 ->
-" a fascinating"` now pass on physical hardware as well. The verified format-v5
-workbench is `F:\qot_boardtest_prompt_text_v13_20260812`: 88 hash-audited files,
+" a fascinating"` now pass on physical hardware as well. The original verified
+format-v5 workbench was `F:\qot_boardtest_prompt_text_v13_20260812`: 88
+hash-audited files,
 the preserved 61-segment runtime, `a_qgen`, the PC Web Serial GUI, and a strict
 eight-transaction pyserial oracle. One cold run loaded all 394,547,200 bytes,
 checked all 281 QMAP headers, observed `READY vocab=151936 context=256`, and
@@ -64,7 +91,7 @@ raw-lwIP transport, cooperative network pumping, fail-closed board entry, and
 self-contained responsive UI pass all five C host suites and 110 Python gates.
 The GEM3/MDIO/TTC0-enabled Vivado lineage under
 `Temp/network_board_build_20260812_v1/` remains fully routed with final WNS
-`+0.208 ns` and WHS `+0.010 ns`. The final isolated Vitis workspace is
+`+0.208 ns` and WHS `+0.010 ns`. The original final isolated Vitis workspace was
 `F:\vwk`; its manifest SHA256 is
 `33CA1A825AFF72DD7A59C9938C0B0E838062C5C6E18EE1826432341E7A85E401`,
 all three builds return zero, and the final `a_qweb.elf` SHA256 is
@@ -286,4 +313,8 @@ For cross-platform setup and model asset restoration, start here:
 
 Large model weights are intentionally not stored in normal Git history. Use the
 `init/` runbook and scripts to restore `Qwen3-0.6B-Base/model.safetensors` on a
-fresh macOS, Linux, or Windows machine.
+fresh macOS, Linux, or Windows machine. The same bootstrap layer restores the
+portable demo's 61 Q4 runtime segments into
+`lmdeploy/qwen3-0p6b-q4-qweb-demo/model/` with
+`init/download_q4_runtime.py`; `init/verify_q4_runtime.py` verifies the complete
+download before `run_demo.ps1` is used.

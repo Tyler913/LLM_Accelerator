@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "name": "qwen3-0p6b-q4-qweb-demo",
+  "package_state": "PORTABLE_PACKAGE_REQUIRES_PHYSICAL_RERUN",
+  "historical_board_acceptance": {
+    "runtime_date": "2026-08-12",
+    "qweb_date": "2026-08-17",
+    "note": "The v13 runtime passed on 2026-08-12 and the final QWEB flow passed from its original F:\\vwk location on 2026-08-17; the relative-path wrapper requires one new physical run."
+  },
+  "hugging_face": {
+    "repo_id": "Tyler01/qwen3-0p6b-fpga-q4-runtime",
+    "repo_type": "model",
+    "revision_source": "../../init/q4_runtime_assets.json"
+  },
+  "artifacts": [
+    {
+      "id": "network_bit",
+      "path": "board/llm_system_qwen3_one_token_boardready.bit",
+      "bytes": 4592850,
+      "sha256": "c926b3db8021e976e5ea6cc2f71da3c44899ea5c3df61da573475ce6d8c21239"
+    },
+    {
+      "id": "network_xsa",
+      "path": "board/network_input_0af1257442a68a6beb31d94811713f2ae8e6af63e0a85dd497146405e37406cf.xsa",
+      "bytes": 2626815,
+      "sha256": "0af1257442a68a6beb31d94811713f2ae8e6af63e0a85dd497146405e37406cf"
+    },
+    {
+      "id": "fsbl",
+      "path": "board/fsbl.elf",
+      "bytes": 548176,
+      "sha256": "a7695cd19bec264ca0ef1d951527587cc02489a82711ab63f4534c5f3579f5cb"
+    },
+    {
+      "id": "qweb_elf",
+      "path": "board/a_qweb.elf",
+      "bytes": 5003296,
+      "sha256": "38a772f093ce3996177640863888b6700f1ac26f7bcb82e5f2159c0ef46f89da"
+    },
+    {
+      "id": "tokenizer",
+      "path": "assets/qwen3_tokenizer.qtk",
+      "bytes": 3629566,
+      "sha256": "c20242603ef4144e3f3f2ec4ba97c0e9c315aadd41f1bd2c5740e2a7ffa03a7d"
+    },
+    {
+      "id": "runtime_loader",
+      "path": "model/load_pl_ddr_runtime.tcl",
+      "bytes": 12217,
+      "sha256": "0b698f28165f05efe7dbc2a8c64bfa7379cbf10cc8dcb4b1ced9660eeabbecb1"
+    },
+    {
+      "id": "segment_manifest",
+      "path": "model/pl_ddr_binary_segments.json",
+      "bytes": 101340,
+      "sha256": "fa8981e71101def29970135df5e863da5634274dd9fb64905666f0cf1d47d3f2"
+    },
+    {
+      "id": "full_chain_manifest",
+      "path": "model/full_chain_manifest.json",
+      "bytes": 221923,
+      "sha256": "22c0be1631f62f88527719d4aa9686f5ef5784f85b05b4cb92f5ad97742ae730"
+    },
+    {
+      "id": "runtime_load_plan",
+      "path": "model/pl_ddr_runtime_load_plan.json",
+      "bytes": 178449,
+      "sha256": "1682370500fa3d404b58ea9024761b843bd3c544e493ff845335b4d6283182b9"
+    },
+    {
+      "id": "launcher",
+      "path": "scripts/launch_qweb_board.tcl",
+      "bytes": 7044,
+      "sha256": "3ef8fb39f94204bc5bf4645df853665e0d11d3059ab96f6b0e508f10bae01931"
+    },
+    {
+      "id": "portable_wrapper",
+      "path": "run_demo.ps1",
+      "bytes": 20026,
+      "sha256": "9484e74abc24b87443492d12633627744dd0abed6aea96c417107af40871b8a4"
+    },
+    {
+      "id": "uart_capture",
+      "path": "scripts/capture_qweb_uart.py",
+      "bytes": 11966,
+      "sha256": "7965bfb6c0a2471e41bc346cba69b094e842688d513e5e0ed9f3ebbf7494632b"
+    }
+  ],
+  "runtime": {
+    "segment_manifest_id": "segment_manifest",
+    "expected_segment_count": 61,
+    "expected_total_bytes": 394547200,
+    "aperture_start": "0x0000000400000000",
+    "aperture_end_exclusive": "0x0000000420000000",
+    "alignment_bytes": 4
+  },
+  "toolchain": {
+    "product": "AMD Vitis 2025.1.1",
+    "default_xsdb": "D:/Applications/Vivado_2025.1.1/2025.1.1/Vitis/bin/xsdb.bat",
+    "files": [
+      {
+        "path": "bin/xsdb.bat",
+        "sha256": "2cd1d63586a95fbb00b2badb6652cae485bdd4cbdab612c8a5de0afd7e874f59"
+      },
+      {
+        "path": "bin/loader.bat",
+        "sha256": "13fac52e8f0c81ea0539a0edddf8ad839d5c8a49d9fe37531abffbab8decfb38"
+      },
+      {
+        "path": "bin/setupEnv.bat",
+        "sha256": "0f8108b67a75b3957b075c3f87d094fcc63eb7251a27281e7d456024898d881f"
+      },
+      {
+        "path": "bin/rdiArgs.bat",
+        "sha256": "44f7765ce290ea0546f441044a5303316f7fe6c9434136ba013e8f72c5e1f544"
+      },
+      {
+        "path": "bin/unwrapped/win64.o/xsdb.exe",
+        "sha256": "9ef5fe040728b508a1a0efd1dfd83dbb3df02d2d9b59310ea0e7b403cd429483"
+      },
+      {
+        "path": "bin/unwrapped/win64.o/xsdb.exe.manifest",
+        "sha256": "77596430e6ea9d0a8d7b686d75f0b554564fdc0a931d1f806cf16c0e100a99e3"
+      }
+    ]
+  },
+  "source_snapshot": {
+    "path": "source",
+    "policy": "Final PS and PL demo sources only; host tests, traces, generated workspaces, and temporary files are excluded.",
+    "canonical_roots": [
+      "../../FPGA_Project/rtl",
+      "../../FPGA_Project/Vivado_Project",
+      "../../FPGA_Project/software/qmap_one_token_runtime",
+      "../../FPGA_Project/software/qmap_prompt_demo",
+      "../../FPGA_Project/software/qmap_web_demo"
+    ]
+  }
+}

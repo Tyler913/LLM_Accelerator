@@ -49,6 +49,16 @@ The source model remains `Qwen/Qwen3-0.6B-Base`; project validation scripts in
 `Qwen3-0.6B-Base/pc_testing/` and `Qwen3-0.6B-Base/python_each_module/` are
 tracked in GitHub, not in the Hugging Face model mirror.
 
+The deployable custom-Q4 PL-DDR runtime is distributed separately from that
+BF16 baseline mirror. Its Hugging Face repo is
+`Tyler01/qwen3-0p6b-fpga-q4-runtime`, containing exactly 61
+`qwen3_runtime_*.bin` segments totaling `394,547,200` bytes. The formal local
+release root is `lmdeploy/qwen3-0p6b-q4-qweb-demo/`. GitHub tracks canonical
+source under `FPGA_Project/` and a clean final-demo source snapshot, release
+manifests, launch support, and selected final board artifacts under `lmdeploy/`,
+while the ignored Q4 segments are restored into the release's `model/` directory by
+`init/download_q4_runtime.py` and checked by `init/verify_q4_runtime.py`.
+
 Important model facts:
 
 - Parameters: 596,049,920
@@ -453,7 +463,7 @@ the ELF SHA256 is
 This source/host/Vitis-build chain is now also physically accepted as described
 below.
 
-The hardware-validated format-v5 workbench is
+The original hardware-validated format-v5 workbench was
 `F:\qot_boardtest_prompt_text_v13_20260812`. It preserves the board-tested
 full28 hardware and 61-segment runtime, and adds four hash-audited PC Web Serial
 GUI files plus a strict pyserial acceptance tool. The latter binds to the exact
@@ -505,7 +515,8 @@ GEM3/MDIO/TTC0-enabled lineage under
 `Temp/network_board_build_20260812_v1/` passes the read-only XSA gate while
 preserving the existing one-token and PL-DDR address maps. Its final routed
 timing is WNS `+0.208 ns` and WHS `+0.010 ns`. The guarded generator then built
-the final isolated `F:\vwk` platform, a custom-repository `lwip220_v1_2` with exact
+the original final isolated `F:\vwk` platform, a custom-repository
+`lwip220_v1_2` with exact
 YT8521 support, `a_net_echo`, and the complete source/tokenizer-audited
 `a_qweb`; the manifest records build result zero for all three components and
 pins their sources and ELF hashes. Its manifest SHA256 is
@@ -518,8 +529,9 @@ Physical Ethernet Gate 1 passed on the same board and port. The immutable
 YT8521 address 7/ID `0x0000011A`, 1000-Mb/s full duplex, board
 `192.168.1.10`, ten of ten ping replies, and an exact 75-byte port-7 echo. That
 report is deliberately described as the earlier `F:\vwc` echo oracle; it is not
-misrepresented as a hash-bound `F:\vwk` echo run. The final `F:\vwk` QWEB
-startup independently re-established the same PHY identity, link, and address.
+misrepresented as a hash-bound `F:\vwk` echo run. The original final `F:\vwk`
+QWEB startup independently re-established the same PHY identity, link, and
+address.
 
 The physical QWEB acceptance tools now pin the complete Vitis XSDB execution
 chain plus the wrapper/Tcl bytes, isolate XSDB startup files and inherited
@@ -537,6 +549,17 @@ observed to complete Jobs 3 and 4 with the same result. The retained
 `browser_final.png` independently proves Job 4 exact DONE/Ready with SHA256
 `D22D9D153B52940220143A88A5029868C6BC998573386F5CCDFE8C9AF711D9FC`;
 a live console check returned zero messages.
+
+On 2026-08-24, the accepted board artifacts, launch support, and runtime
+metadata were copied into the portable release root
+`lmdeploy/qwen3-0p6b-q4-qweb-demo/`. Its `run_demo.ps1` resolves `board/`,
+`model/`, and `scripts/` relative to the release directory, eliminating the two
+old absolute paths as live dependencies. The release copy currently passes only
+the local `-AuditOnly` flow after the Q4 segments are downloaded and verified.
+Matching the hashes of the physically accepted artifacts preserves provenance;
+it does not turn a path relocation into a new physical board run. The
+2026-08-12/2026-08-17 `F:\...` locations in this document therefore remain
+historical acceptance evidence until the portable wrapper is physically rerun.
 
 The remainder of this section records how the full datapath was assembled. The
 important early capability was PL write-back. The existing row1024 hardware
@@ -719,7 +742,8 @@ directory.
 The fixed-input physical-validation boundary is closed: the packaged control
 smoke and full28 persistent two-token model smoke both passed on 2026-08-08.
 The general token/text PS implementation and physical UART boundaries are now
-closed by the verified `F:\qot_boardtest_prompt_text_v13_20260812` workbench and
+closed by the original verified `F:\qot_boardtest_prompt_text_v13_20260812`
+workbench and
 its strict eight-case board PASS. The network hardware/XSA and real Vitis build
 boundaries are also closed. Physical Ethernet link/ping/TCP echo and the
 board-hosted `a_qweb` HTTP/browser prompt-to-text boundary are now closed by the
@@ -749,8 +773,9 @@ user explicitly changes the rule.
   remove them.
 - Core project handoff Markdown files live under `Source/`; the root
   `README.md` remains the entry point.
-- Keep large model weights and generated FPGA/model artifacts out of normal Git
-  history.
+- Keep large model weights, including the 61 Q4 runtime segments, out of normal
+  Git history. Track the portable bundle's source, manifests, and intentionally
+  selected final board artifacts under `lmdeploy/qwen3-0p6b-q4-qweb-demo/`.
 - Use `init/CROSS_PLATFORM_SYNC.md` and `init/` scripts to restore assets on
   new machines.
 - Keep the local Git safety hook installed with

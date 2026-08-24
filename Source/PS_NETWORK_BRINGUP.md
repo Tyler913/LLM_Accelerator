@@ -1,6 +1,6 @@
 # PS Ethernet and Bare-Metal Web Bring-Up
 
-Last updated: 2026-08-17
+Last updated: 2026-08-24
 
 This runbook stages the user-facing path without changing the PL model math:
 
@@ -38,7 +38,8 @@ Current checkpoint:
 - The network-XSA audit passes GEM3 RGMII MIO 64..75, MDIO MIO 76..77, TTC0,
   the 125 MHz IOPLL source, embedded-bitstream lineage, and all preserved
   QMAP/status/PL-DDR address checks.
-- The final clean `F:\vwk` Vitis workspace builds the platform, patched-YT8521
+- The original final clean `F:\vwk` Vitis workspace built the platform,
+  patched-YT8521
   `a_net_echo`, and `a_qweb`; manifest SHA256
   `33CA1A825AFF72DD7A59C9938C0B0E838062C5C6E18EE1826432341E7A85E401`
   records build result zero for all three components.
@@ -47,10 +48,54 @@ Current checkpoint:
   75-byte port-7 echo. Its formal echo oracle is bound to the earlier `F:\vwc`
   build; the final `F:\vwk` QWEB startup independently re-proved the same PHY,
   link, and address.
-- Gate 2 is closed by the `F:\vwk` `final_v4` cold launch, two immediate strict
+- Gate 2 was closed by the original `F:\vwk` `final_v4` cold launch, two
+  immediate strict
   HTTP jobs, and two live-browser jobs. Every accepted generation returns IDs
   `264,26291`, scores `1296911292,1225544557`, `MAX_NEW`, and exact 14-byte
   text ` a fascinating`; the final page remains `Board ready`.
+
+## Portable Release Layout and Validation Boundary
+
+The formal repository-contained board-hosted Web demo is
+`lmdeploy/qwen3-0p6b-q4-qweb-demo/`:
+
+```text
+board/       network bitstream, XSA, FSBL, and a_qweb ELF
+model/       runtime metadata and 61 downloaded Q4 binary segments
+scripts/     relative-path Tcl launch and UART capture support
+source/      final PS/PL source snapshot without tests or workspaces
+run_demo.ps1
+release_manifest.json
+```
+
+GitHub stores canonical source under `FPGA_Project/` and a clean source
+snapshot, release manifests, wrapper, and selected final board artifacts under
+`lmdeploy/`. Hugging Face repo
+`Tyler01/qwen3-0p6b-fpga-q4-runtime` stores the 61
+ignored `model/qwen3_runtime_*.bin` files (`394,547,200` bytes total). Restore
+and audit a clone from its repository root before connecting to the board:
+
+```powershell
+conda run -n llm_fpga python init/download_q4_runtime.py
+conda run -n llm_fpga python init/verify_q4_runtime.py
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  .\lmdeploy\qwen3-0p6b-q4-qweb-demo\run_demo.ps1 -AuditOnly
+```
+
+`run_demo.ps1` resolves every release input relative to `$PSScriptRoot`; it does
+not require `F:\vwk` or `F:\qot_boardtest_prompt_text_v13_20260812`. Those
+paths below record the original 2026-08-12/2026-08-17 physical acceptance and
+are deliberately retained as provenance. The portable wrapper/copy currently
+has local `-AuditOnly` evidence only. Hash equality proves that its board/model
+inputs are the accepted bytes, but it does not prove that the new path and
+wrapper have completed a physical launch. Use the following command for that
+future revalidation after starting UART capture:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  .\lmdeploy\qwen3-0p6b-q4-qweb-demo\run_demo.ps1 `
+  -EvidenceDirectory $qwebEvidence
+```
 
 Board-vendor references:
 
@@ -119,7 +164,7 @@ GEM3/TTC0 disabled.
 
 ## Gate 1: `a_net_echo` - PASS
 
-The current audited reference build is the short-path `F:\vwk` workspace with
+The original audited reference build is the short-path `F:\vwk` workspace with
 components `p_net`, `a_net_echo`, and `a_qweb`; it does not mutate the proven
 `F:\vwi` workspace. Use a different new short path for any reproduction because
 the generator correctly rejects an existing output directory.
@@ -199,7 +244,8 @@ Get-NetAdapter -Physical |
   Select-Object Name, InterfaceDescription, Status, LinkSpeed
 ```
 
-The preferred flow is now one command. Its output directory must not exist. It
+The original Gate-1 acceptance flow remains one command. Its output directory
+must not exist. It
 opens and clears UART before it starts PowerShell/XSDB, pins the formal
 workspace, launch scripts, network bit/XSA/FSBL/echo ELF, and Vitis 2025.1
 execution files, then requires the ordered YT8521/link/IP/READY transcript,
@@ -246,7 +292,7 @@ accepted under `FPGA_Project/software/qmap_web_demo/`. It keeps lwIP in RAW mode
 and uses an application-owned TCP adapter; the installed `lwip220_v1_2`
 library does not link the optional application HTTPD implementation.
 
-The clean reference Web build already exists in `F:\vwk`. To reproduce it,
+The original clean reference Web build exists in `F:\vwk`. To reproduce it,
 create a different fresh workspace from the same audited XSA and explicitly
 request the Web build:
 
@@ -265,7 +311,7 @@ vitis -s F:/LLM_Accelerator/FPGA_Project/software/qmap_web_demo/create_network_v
 The builder creates `p_net`, keeps `a_net_echo` as an independent reference,
 then stages the exact audited Web/session/tokenizer sources into `a_qweb`, sets
 64 KiB stack and heap defaults, requires successful platform/application build
-codes, audits the AArch64 ELF, and writes a provenance manifest. The real
+codes, audits the AArch64 ELF, and writes a provenance manifest. The original
 `F:\vwk` manifest records platform, echo, and Web build result zero. Its
 5,003,296-byte AArch64 `a_qweb.elf` has SHA256
 `38A772F093CE3996177640863888B6700F1AC26F7BCB82E5F2159C0EF46F89DA`
@@ -279,8 +325,8 @@ server's active close can still wait on lwIP TIME_WAIT; this did not occur in
 the accepted browser flow. Persistent HTTP/keep-alive is optional future work
 if a product must sustain aggressive connection churn.
 
-Before any physical run, the complete current lineage can be re-audited without
-touching XSDB or the board:
+The original accepted input lineage can still be audited directly without
+touching XSDB or the board; this command is retained as historical provenance:
 
 ```powershell
 & .\FPGA_Project\software\qmap_web_demo\run_qweb_board.ps1 `
@@ -292,10 +338,18 @@ touching XSDB or the board:
 The accepted audit prints the pinned network manifest, bitstream, XSA, FSBL,
 Web-ELF, and runtime-manifest hashes plus `61 segments / 394547200 bytes`.
 
+For the formal portable release, use the download, verification, and
+`run_demo.ps1 -AuditOnly` sequence under **Portable Release Layout and
+Validation Boundary** instead of supplying `-Workspace` and
+`-RuntimeWorkbench` paths.
+
 ### Gate 2 executable acceptance
 
-The following accepted sequence is retained for a fresh reproduction. Start the
-UART capture first; the output directory must not exist:
+#### Historical strict acceptance (canonical workspace)
+
+The following pairing is the canonical flow used by the 2026-08-17 accepted
+evidence. Start its canonical UART capture first; the output directory must not
+exist:
 
 ```powershell
 cd F:\LLM_Accelerator
@@ -308,24 +362,21 @@ conda run -n llm_fpga python `
   --timeout 3600
 ```
 
-In terminal B, reprogram the audited network image, run FSBL, load all 61
-runtime segments, check all 281 QMAP headers, and start `a_qweb`:
+In terminal B, use the matching canonical launcher to reprogram the audited
+network image, run FSBL, load all 61 runtime segments, check all 281 QMAP
+headers, and start `a_qweb`:
 
 ```powershell
 cd F:\LLM_Accelerator
 $qwebEvidence = 'F:\LLM_Accelerator\Temp\qweb_board_rerun_01'
-$deadline = (Get-Date).AddSeconds(10)
-while (-not (Test-Path -LiteralPath "$qwebEvidence\uart_raw.bin")) {
-  if ((Get-Date) -ge $deadline) { throw 'UART capture did not create uart_raw.bin' }
-  Start-Sleep -Milliseconds 200
-}
 & .\FPGA_Project\software\qmap_web_demo\run_qweb_board.ps1 `
   -Workspace F:\vwk `
   -RuntimeWorkbench F:\qot_boardtest_prompt_text_v13_20260812 `
   -EvidenceDirectory $qwebEvidence
 ```
 
-After terminal A reports `PASS QWEB UART startup`, run the strict HTTP oracle
+After terminal A reports `PASS QWEB UART startup`, the canonical
+`run_qweb_http_acceptance.py` can consume that canonical `startup.json`. Run it
 twice against the same live application. This proves an immediate repeated job
 does not retain stale position, KV, token, score, or output state:
 
@@ -368,6 +419,7 @@ headers, observed DDR status `0x5`, tokenizer metadata, YT8521 1000-full, and
 `7CE1716AFCD28221E38F9485804F67C94211D6B9092F084D5FEE6B0FACA5B5A1`
 and `http_pair_2/acceptance.json` SHA256
 `E8ACDCCE6AFFF467A93404F3B8F724B6A2D8E59470319C7C298D0A7F65DEECDB`.
+
 Both observed an actual `running` response and finished with the exact values
 above. Live Edge was observed to complete Jobs 3 and 4. The retained
 `browser_final.png` independently proves Job 4 `Board ready / done / MAX_NEW`
@@ -428,6 +480,22 @@ Accepted Gate-2 observations and retained defensive gates:
 - Invalid input and injected PL-error behavior remain bounded by the host C and
   Python suites; those fault cases were not separately injected into the
   accepted `final_v4` physical run.
+
+#### Portable release revalidation (new path, pending physical run)
+
+The release under `lmdeploy/qwen3-0p6b-q4-qweb-demo/` deliberately has its own
+relative-path launcher and UART capture schema. Follow that package's
+`README.md`: run `scripts/capture_qweb_uart.py` in terminal A, then
+`run_demo.ps1 -EvidenceDirectory ...` in terminal B. The two reports bind one
+capture ID, capture PID/live heartbeat, launch UUID, timestamps, toolchain,
+artifacts, all 61 runtime segments, and the observed READY URL.
+
+Do **not** pass the portable `startup.json` to the canonical
+`run_qweb_http_acceptance.py`: that strict oracle validates the older canonical
+launcher/capture schema and will correctly reject the portable schema. The
+portable package currently has local `-AuditOnly` evidence only; its physical
+launcher/UART revalidation and any new-path HTTP evidence remain pending. This
+does not change the accepted 2026-08-17 canonical Gate 2 result above.
 
 ## Product Boundary After Gate 2
 
