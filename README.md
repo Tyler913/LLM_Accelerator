@@ -78,7 +78,6 @@ artifact store only together with a pinned fetch-and-verify workflow.
 - [Q4 numerical contract](Source/Q4_FORMAT.md)
 - [QMAP descriptor contract](Source/QMAP_FORMAT.md)
 - [PL DDR4 memory map](Source/FPGA_MEMORY_MAP.md)
-- [Contributor rules](Source/AGENTS.md)
 
 ## Before Public Release
 

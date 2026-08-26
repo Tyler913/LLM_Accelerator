@@ -137,16 +137,6 @@ Then run the serial decode reference:
 conda run -n llm_fpga python Qwen3-0.6B-Base/pc_testing/02_serial_decode.py
 ```
 
-7. Install the local Git safety hook.
-
-```bash
-bash init/install_git_safety_hooks.sh
-```
-
-This hook blocks commits that accidentally stage large model weights or common
-generated artifact extensions. It is a local safety net; it does not replace
-`.gitignore`.
-
 ## Expected Local Layout
 
 After setup, the local tree should include:

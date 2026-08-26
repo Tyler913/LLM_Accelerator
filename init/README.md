@@ -22,9 +22,6 @@ Start here:
   values against the tracked runtime manifest.
 - `pin_q4_runtime_revision.py`: replaces the temporary `main` revision with
   the exact Hugging Face commit SHA returned after upload.
-- `install_git_safety_hooks.sh`: installs local Git hooks that block accidental
-  commits of model weights and other large generated artifacts.
-- `git-hooks/pre-commit`: the tracked source for the local pre-commit hook.
 
 Repository policy:
 
@@ -37,12 +34,6 @@ Repository policy:
 - Never upload Hugging Face tokens, `.env` files, Hugging Face caches, or local
   Vitis workspaces.
 - Run Python commands through `conda run -n llm_fpga ...`.
-- Install the Git safety hook on each clone:
-
-```bash
-bash init/install_git_safety_hooks.sh
-```
-
 On a fresh clone, restore and verify the final Q4 QWEB runtime with:
 
 ```bash
