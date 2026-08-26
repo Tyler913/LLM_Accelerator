@@ -1,20 +1,21 @@
 # QMAP Format
 
-Current status (2026-08-08): QMAP v1 is the deployed descriptor contract in
-the board-validated full28 design. Its runtime has 281 packets, is packed into
-61 verified PL-DDR segments, and is checked for provenance, aperture safety,
+Current status: QMAP v1 is the deployed descriptor contract in the
+board-validated full28 design. Its runtime has 281 packets, is packed into 61
+verified PL-DDR segments, and is checked for provenance, aperture safety,
 non-overlap, and zero initialization of all 397 accelerator-writable regions.
-On 2026-08-08 the physical board launcher loaded all `61/61` segments, checked
-all `281/281` QMAP headers, and the UART reported the exact fixed two-token
-full28 result `374 -> 28458 -> 64`, with expected Q26 scores, all 28 layers
-complete on both steps, and no reported layer error.
+The 2026-08-08 physical board launcher loaded all `61/61` segments, checked all
+`281/281` QMAP headers, and reported the exact fixed two-token full28 result
+`374 -> 28458 -> 64`, with expected Q26 scores, all 28 layers complete on both
+steps, and no reported layer error. Subsequent UART and QWEB prompt-to-text
+acceptance is recorded in `Source/CURRENT_STATE.md`.
 
 The preserved 2026-08-01 self-contained package still records release state
 `BOARD_TEST_READY_NOT_YET_HARDWARE_VALIDATED`. That value is intentionally
 retained as the package's pre-board readiness state; it is not the current
-project hardware-validation status. The 2026-08-08 result is a board PASS for
-the packaged fixed token-ID smoke, not proof of arbitrary text prompt-to-text
-generation.
+project hardware-validation status. The 2026-08-08 result by itself was a
+board PASS for the packaged fixed token-ID smoke; later prompt-to-text evidence
+is a separate, stronger validation gate.
 
 Historical progression through 2026-07-13: the dot64 image and the full
 row1024 image both passed PS load/readback and PL AXI-master read/compute

@@ -114,6 +114,11 @@ lmdeploy/qwen3-0p6b-q4-qweb-demo/model/.cache/
 # Vitis local workspaces
 # Recreate these from the Vivado project/XSA and checked-in application sources.
 Vitis_Workspace/
+**/Debug/
+**/Release/
+*.xpfm
+*.xo
+*.hdf
 
 # Temporary local document extraction inputs
 tmp_pdf_inputs/
@@ -121,6 +126,17 @@ tmp_pdf_inputs/
 # One-token scheduler/top local traces and large generated full-vocab vectors
 FPGA_Project/sim/qmap_one_token*_trace.csv
 FPGA_Project/sim/qmap_input_rmsnorm*_trace.csv
+FPGA_Project/sim/*_trace.csv
 FPGA_Project/sim/vectors/lm_head_argmax_layer*_chained_full_vocab_real_meta.json
 FPGA_Project/sim/vectors/lm_head_argmax_layer*_chained_full_vocab_real_*.hex
 FPGA_Project/sim/vectors/qmap_final_token_tail_layer*_chained_full_vocab_*.hex
+
+# Generated Vivado IP support files. The canonical .xci files are tracked;
+# build_one_token_board.tcl regenerates these outputs with generate_target all.
+FPGA_Project/Vivado_Project/board_build/
+FPGA_Project/Vivado_Project/LLM_FPGA.srcs/utils_1/
+FPGA_Project/Vivado_Project/LLM_FPGA.srcs/sources_1/bd/llm_system/ipshared/
+FPGA_Project/Vivado_Project/LLM_FPGA.srcs/sources_1/bd/llm_system/ip/*/sim/
+FPGA_Project/Vivado_Project/LLM_FPGA.srcs/sources_1/bd/llm_system/ip/*/synth/
+FPGA_Project/Vivado_Project/LLM_FPGA.srcs/sources_1/bd/llm_system/ip/*/sysc/
+FPGA_Project/Vivado_Project/LLM_FPGA.srcs/sources_1/bd/llm_system/ip/*/*.xml

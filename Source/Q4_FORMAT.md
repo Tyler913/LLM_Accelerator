@@ -1,14 +1,19 @@
 # Q4 Format And Bring-Up Vectors
 
-Status: Q4 v0 is defined for the first Verilog-facing Layer 0 Q/K/V GEMV
-bring-up. It is not yet a full-model quantization artifact.
+Status: this document defines the low-level signed-int4/group-64/Q2.14
+semantics originally validated with the Layer 0 Q/K/V bring-up vectors. The
+same weight-only Q4 contract is used by the accepted 61-segment full28 runtime;
+the Layer 0 material below is historical vector evidence, not a limit on the
+deployed runtime. Runtime tensor placement and segment integrity are specified
+by `Source/QMAP_FORMAT.md` and the release manifests under
+`lmdeploy/qwen3-0p6b-q4-qweb-demo/model/`.
 
 For overall project state, read `Source/PROJECT_CONTEXT.md` and
 `Source/CURRENT_STATE.md`. For physical memory placement, read
 `Source/FPGA_MEMORY_MAP.md`. For descriptor-based PL DDR4 tensor staging, read
 `Source/QMAP_FORMAT.md`.
 
-## Scope
+## Historical Bring-Up Scope
 
 The current Q4 artifact quantizes only these Layer 0 matrices:
 

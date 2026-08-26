@@ -123,16 +123,5 @@
         "sha256": "77596430e6ea9d0a8d7b686d75f0b554564fdc0a931d1f806cf16c0e100a99e3"
       }
     ]
-  },
-  "source_snapshot": {
-    "path": "source",
-    "policy": "Final PS and PL demo sources only; host tests, traces, generated workspaces, and temporary files are excluded.",
-    "canonical_roots": [
-      "../../FPGA_Project/rtl",
-      "../../FPGA_Project/Vivado_Project",
-      "../../FPGA_Project/software/qmap_one_token_runtime",
-      "../../FPGA_Project/software/qmap_prompt_demo",
-      "../../FPGA_Project/software/qmap_web_demo"
-    ]
   }
 }

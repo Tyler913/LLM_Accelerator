@@ -39,8 +39,6 @@ lmdeploy/qwen3-0p6b-q4-qweb-demo/
 |   `-- capture_qweb_uart.py
 |-- assets/
 |   `-- qwen3_tokenizer.qtk
-|-- source/
-|   `-- FPGA_Project/               # canonical RTL/Vivado/software source layout
 `-- model/
     |-- README.md
     |-- LICENSE
@@ -55,13 +53,12 @@ The 61 `qwen3_runtime_*.bin` files appear only after the Hugging Face download.
 The loader stays beside them because it resolves every segment relative to its
 own script location.
 
-The canonical development sources remain in the normal `FPGA_Project/` tree.
-The `source/FPGA_Project/` directory is a clean final-demo snapshot in the same
-relative layout as the development tree. It includes PS/PL implementation and
-the non-test builder dependencies, while omitting host tests, traces, temporary
-outputs, and regenerated Vitis workspaces. The checked-in bitstream, XSA, FSBL,
-and application ELF are the run-ready path. Asset restore still uses the
-repository-level `init/` scripts, and source rebuilds still require AMD tools.
+The canonical development sources are in the repository-root `FPGA_Project/`
+tree. This release deliberately does not maintain a second source copy: create
+a source archive from the matching Git tag when an independent handoff is
+needed. The checked-in bitstream, XSA, FSBL, and application ELF are the
+run-ready path. Asset restore still uses the repository-level `init/` scripts,
+and source rebuilds still require AMD tools.
 
 ## GitHub and Hugging Face split
 

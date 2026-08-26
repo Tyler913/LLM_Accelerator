@@ -6,7 +6,7 @@ Before making changes in this repository, read `Source/PROJECT_CONTEXT.md` and
 Hard rules:
 
 - This project is an FPGA-based LLM accelerator effort inspired by the
-  Hummingbird+ paper in `paper/3748173.3779189.pdf`.
+  Hummingbird+ paper in `Source/3748173.3779189.pdf`.
 - Use the conda environment `llm_fpga` for every Python-related command:
   `conda run -n llm_fpga ...`.
 - Do not use system Python, base conda Python, or another environment unless

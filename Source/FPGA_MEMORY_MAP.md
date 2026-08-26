@@ -1,17 +1,17 @@
 # FPGA Memory Map
 
-Status: current physical apertures and full28 runtime layout, updated
-2026-08-08. The latest hardware PASS is the complete resource-reduced full28
-persistent two-token board smoke. The physical run loaded all `61/61` runtime
-segments, checked all `281/281` QMAP headers, and produced the exact expected
-token/score results through all 28 layers at both tested positions with
-`error_mask=0`.
+Status: current physical apertures and full28 runtime layout. The 2026-08-08
+hardware gate loaded all `61/61` runtime segments, checked all `281/281` QMAP
+headers, and produced the exact expected token/score results through all 28
+layers at both tested positions with `error_mask=0`. Later UART and QWEB
+prompt-to-text acceptance is summarized in `Source/CURRENT_STATE.md`.
 
 This document defines the FPGA-visible memory layout for Qwen3-0.6B bring-up.
 It distinguishes the historical row1024 aperture checkpoint, the address map
 in the current routed full28 BD, and the runtime subregions now exercised by the
-2026-08-08 fixed token-id full28 board PASS. That PASS does not establish an
-arbitrary text prompt, tokenizer/detokenizer, or general prompt-to-text flow.
+2026-08-08 fixed token-id full28 board PASS. That gate alone did not establish
+an arbitrary text prompt, tokenizer/detokenizer, or general prompt-to-text
+flow; those later acceptance gates are outside this memory-map document.
 
 The descriptor-based tensor staging format for PL DDR4 is
 `Source/QMAP_FORMAT.md`. Q4 quantization and packing semantics remain in

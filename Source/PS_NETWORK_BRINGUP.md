@@ -63,7 +63,6 @@ The formal repository-contained board-hosted Web demo is
 board/       network bitstream, XSA, FSBL, and a_qweb ELF
 model/       runtime metadata and 61 downloaded Q4 binary segments
 scripts/     relative-path Tcl launch and UART capture support
-source/      final PS/PL source snapshot without tests or workspaces
 run_demo.ps1
 release_manifest.json
 ```

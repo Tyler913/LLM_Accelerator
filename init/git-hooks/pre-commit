@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Prevent accidental commits of model weights, generated FPGA artifacts, and
-# other large files. This hook checks only staged files.
+# other large files. This hook checks only staged files. A deliberate update to
+# a hash-pinned release binary must use the explicit override below.
 
 if [[ "${ALLOW_LARGE_GIT_FILES:-}" == "1" ]]; then
   echo "Large-file Git safety hook bypassed because ALLOW_LARGE_GIT_FILES=1."
@@ -10,7 +11,8 @@ if [[ "${ALLOW_LARGE_GIT_FILES:-}" == "1" ]]; then
 fi
 
 max_size_bytes=$((50 * 1024 * 1024))
-blocked_ext_regex='(\.safetensors|\.gguf|\.pt|\.pth|\.ckpt|\.onnx|\.npy|\.npz|\.bin|\.dat)$'
+blocked_ext_regex='(\.safetensors|\.gguf|\.pt|\.pth|\.ckpt|\.onnx|\.npy|\.npz|\.bin|\.dat|\.bit|\.xsa|\.elf|\.qtk|\.xpfm|\.xo|\.hdf|\.pdi|\.mcs|\.dcp|\.rpt|\.rpx|\.pb|\.ltx|\.vcd|\.fst|\.ghw|\.vvp|\.wdb)$'
+blocked_path_regex='(^|/)(Temp|artifacts|Vitis_Workspace|build|generated|weights|fpga_artifacts)(/|$)|^FPGA_Project/sim/.*_trace\.csv$'
 
 failed=0
 
@@ -25,6 +27,12 @@ while IFS= read -r -d '' path; do
 
   if [[ "$lower_path" =~ $blocked_ext_regex ]]; then
     echo "Blocked staged artifact by extension: $path (${size_bytes} bytes)" >&2
+    failed=1
+    continue
+  fi
+
+  if [[ "$path" =~ $blocked_path_regex ]]; then
+    echo "Blocked staged generated path: $path (${size_bytes} bytes)" >&2
     failed=1
     continue
   fi
