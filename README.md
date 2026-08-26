@@ -55,22 +55,6 @@ The full board prerequisites, UART capture, and Web UI procedure are in the
 `FPGA_Project/` is the only canonical implementation tree. Do not modify a
 generated release archive or build directory as if it were canonical source.
 
-## What Is and Is Not Versioned
-
-Tracked in Git:
-
-- source code, Vivado source/configuration, scripts, manifests, and docs;
-- Qwen tokenizer/configuration metadata and reproducible Python tools;
-- selected hash-pinned board artifacts needed by the current portable demo; and
-- golden simulation vectors required by existing testbenches.
-
-Never commit model weights, the 61 Q4 runtime segments, caches, temporary
-exports, Vivado/Vitis workspaces, implementation outputs, or simulator traces.
-The model and Q4 segments are restored and checked with `init/`; see
-[init/README.md](init/README.md). Golden vectors remain temporarily tracked
-because current testbenches read them directly. They should move to a separate
-artifact store only together with a pinned fetch-and-verify workflow.
-
 ## Development References
 
 - [Current status](Source/CURRENT_STATE.md)
@@ -78,11 +62,3 @@ artifact store only together with a pinned fetch-and-verify workflow.
 - [Q4 numerical contract](Source/Q4_FORMAT.md)
 - [QMAP descriptor contract](Source/QMAP_FORMAT.md)
 - [PL DDR4 memory map](Source/FPGA_MEMORY_MAP.md)
-
-## Before Public Release
-
-This repository still needs an explicit root license and third-party notices.
-In particular, verify the redistribution rights for the included paper PDF and
-the attribution requirements for Qwen-derived assets. Also decide whether the
-model restore workflow should use a public pinned upstream revision or remain
-an authenticated/private workflow.
